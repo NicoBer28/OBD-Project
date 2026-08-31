@@ -1,0 +1,22 @@
+{
+  "name": "ESP32 Lab",
+  "image": "espressif/idf:latest",
+  "runArgs": [
+    "--network=host",
+    "--privileged"
+  ],
+  "workspaceFolder": "/workspaces/OBD-Project/hardware",
+  "mounts": [
+    "source=/dev,target=/dev,type=bind"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools-extension-pack",
+		"usernamehw.errorlens",
+		"google.google-antigravity"
+      ]
+    }
+  },
+  "postCreateCommand": "echo 'source /opt/esp/idf/export.sh' >> ~/.bashrc"
+}
