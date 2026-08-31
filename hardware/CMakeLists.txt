@@ -10,5 +10,5 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 # Define el nombre de nuestro proyecto. 
 # Esto determinará el nombre del archivo binario final (por ejemplo, bt_basico.bin).
-project(bt_basico)
+project(obdc)
 
