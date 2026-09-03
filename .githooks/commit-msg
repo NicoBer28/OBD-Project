@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+commit_msg_file="$1"
+commit_msg=$(head -n1 "$commit_msg_file")
+
+# Use conventional commits
+pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9\-]+\))?!?: .+$'
+
+# In case of not matching
+if ! echo "$commit_msg" | grep -qE "$pattern"; then
+  echo "❌ Invalid commit message format."
+  echo ""
+  echo "Commit message must follow Conventional Commits:"
+  echo "  <type>(<scope>): <subject>"
+  echo ""
+  echo "Valid types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+  echo ""
+  echo "Examples:"
+  echo "  feat(auth): add login endpoint"
+  echo "  fix: correct null pointer in parser"
+  exit 1
+fi
+
+exit 0
