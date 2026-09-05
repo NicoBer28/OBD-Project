@@ -16,3 +16,5 @@ circuito/*.bck
 circuito/*.kicad_pcb-bak
 circuito/*.kicad_sch-bak
 circuito/*.fp-info-cache
+
+.devcontainer/
