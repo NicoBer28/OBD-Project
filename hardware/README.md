@@ -23,7 +23,34 @@ code ./OBD-Project/
 code .
 ```
 
-### 5. Presionar F1, escribir Dev Containers: Reopen in Container y presionar Enter (o usar el botón inferior derecho).
+### 5. Crear una carpeta llamada `.devcontainer` y adentro crear el archivo `devcontainer.json` con el siguiente contenido
+```json
+{
+  "name": "ESP32 Lab",
+  "image": "espressif/idf:latest",
+  "runArgs": [
+    "--network=host",
+    "--privileged"
+  ],
+  "workspaceFolder": "/workspaces/OBD-Project/hardware",
+  "mounts": [
+    "source=/dev,target=/dev,type=bind"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools-extension-pack",
+		"usernamehw.errorlens",
+		"google.google-antigravity"
+      ]
+    }
+  },
+  "postCreateCommand": "echo 'source /opt/esp/idf/export.sh' >> ~/.bashrc"
+}
+
+```
+
+### 6. Presionar F1, escribir Dev Containers: Reopen in Container y presionar Enter (o usar el botón inferior derecho).
 - Se va a abrir dentro de la carpeta hardware, esto es para facilitar el workflow
 ## 🛠️ Build & Flash
 ### 1. Con el contenedor ya cargado, abrir una nueva terminal integrada en VS Code
