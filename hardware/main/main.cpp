@@ -4,6 +4,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include <string>
+#include <time.h>
 
 // definiciones BT
 #define SERVICE_UUID           "6E400001-B5A3-F393-E0A9-E50E24DCCA9E" // identificador del servicio principal
@@ -13,6 +14,24 @@
 static const char *TAG = "BLE_APP";
 
 
+// estructuras para testear funcionalidades en la app
+enum PacketType {
+    ID_SPEED_RPM = 0x01,
+    ID_ENGINE_STATUS = 0x02
+};
+
+
+struct __attribute__((packed)) SpeedRpmPacket {
+    uint8_t id = ID_SPEED_RPM;
+    uint8_t speed;
+    uint16_t rpm;
+};
+
+struct __attribute__((packed)) EngTempFuelPacket {
+    uint8_t id = ID_ENGINE_STATUS;
+    uint8_t temp;
+    uint8_t fuel_level;
+};
 
 bool deviceConnected = false;
 
@@ -57,6 +76,10 @@ class MyRxCallbacks: public NimBLECharacteristicCallbacks {
 
 
 extern "C" void app_main(void){
+
+    // random init, para demostraciones sin auto
+    srand(time(NULL));
+
 
     // init bt
     NimBLEDevice::init("OBD-C");
@@ -109,32 +132,37 @@ extern "C" void app_main(void){
 
     ESP_LOGI(TAG, "> BT iniciado");
 
+    SpeedRpmPacket currentSpeedRpm;
+    EngTempFuelPacket currentEngTempFuel;
 
-    int tickCount = 0;
     while (true){
 
         vTaskDelay(1000 / portTICK_PERIOD_MS); 
 
-        if (deviceConnected) {
-            tickCount++;
-            
-            // 5 segs
-            if (tickCount >= 5) {
-                std::string mensaje = "01045020";
-                
 
-                // el mensaje se pone en la caracteristica y se notifica a la app que esa ahi
-                pTxCharacteristic->setValue(mensaje);
+        if (deviceConnected) {
             
-                pTxCharacteristic->notify();
-                                
-                // Reiniciamos el contador
-                tickCount = 0; 
-            }
-        }
-        // no hay app conectada 
-        else {
-            tickCount = 0; 
+            // velocidad random entre 40  y 60 km/h
+            int random_speed = (rand() % (60 - 50 + 1)) + 50;
+            int random_rpm = (rand() %(2500 - 2000 + 1) + 2000);
+            int random_temp = (rand() %(105 - 100 + 1) + 100);
+
+            currentSpeedRpm.speed = random_speed;
+            currentSpeedRpm.rpm = random_rpm;
+
+            currentEngTempFuel.temp = random_temp;
+            currentEngTempFuel.fuel_level = 90;
+
+            // el mensaje se pone en la caracteristica y se notifica a la app que esa ahi
+            pTxCharacteristic->setValue((uint8_t*)&currentSpeedRpm, sizeof(currentSpeedRpm));
+        
+            pTxCharacteristic->notify();
+
+            vTaskDelay(20 / portTICK_PERIOD_MS);
+                            
+            pTxCharacteristic->setValue((uint8_t*)&currentEngTempFuel, sizeof(currentEngTempFuel));
+        
+            pTxCharacteristic->notify();
         }
     }
 }
