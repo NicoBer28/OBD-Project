@@ -21,7 +21,7 @@ target/
 .env
 .env.local
 *.env
-.env.example
+!.env.example
 
 ### NetBeans ###
 /nbproject/private/
