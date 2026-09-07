@@ -4,6 +4,9 @@ import './register_screen.dart';
 import './bluetooth_scanner_screen.dart';
 import './main_screen.dart';
 
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
 // Login: valida las credenciales localmente y conserva el nombre de usuario.
 // Actualmente no existe una autenticación contra un servidor.
 class LoginScreen extends StatefulWidget {
@@ -18,49 +21,95 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
 
   // Los controllers permiten leer el contenido de los campos de texto.
-  final _userController = TextEditingController();
+  final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
 
   // Los controllers deben liberarse cuando el State deja de existir.
   @override
   void dispose() {
-    _userController.dispose();
+    _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
-  void _ingresar() {
+  void _ingresar() async {
     // Si la validación local es correcta, se inicia el flujo BLE.
     if (_formKey.currentState!.validate()) {
-      final nombreUsuario = _userController.text.trim();
+      final userEmail = _emailController.text.trim();
+      final userPassword = _passwordController.text;
+      
       final navigator = Navigator.of(context);
+      final scaffoldMessenger = ScaffoldMessenger.of(context);
 
-      // Primero se busca el dispositivo OBD antes de mostrar el panel.
-      navigator.pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => BluetoothScannerScreen(
-            nombreUsuario: nombreUsuario,
-            onConnected: (device) {
-              // Reemplazar la ruta evita volver al login con el botón Atrás.
-              navigator.pushReplacement(
-                MaterialPageRoute(
-                  builder: (context) =>
-                      MainScreen(nombreUsuario: nombreUsuario, device: device),
-                ),
-              );
-            },
-            onContinueWithoutConnection: () {
-              // Este camino conserva el simulador para pruebas sin hardware.
-              navigator.pushReplacement(
-                MaterialPageRoute(
-                  builder: (context) =>
-                      MainScreen(nombreUsuario: nombreUsuario),
-                ),
-              );
-            },
+      final url = Uri.parse('http://192.168.0.15:8080/api/v1/auth/login');
+
+      try {
+        // Disparamos la petición a la API
+        final response = await http.post(
+          url,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'userMail': userEmail,
+            'userPassword': userPassword,
+          }),
+        );
+
+        // Si las credenciales coinciden en la base de datos, el 200 es que salio todo bien
+        if (response.statusCode == 200) {
+          print('Login exitoso! Tokens: ${response.body}');
+
+          // Primero se busca el dispositivo OBD antes de mostrar el panel.
+          navigator.pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => BluetoothScannerScreen(
+                nombreUsuario: userEmail,
+                onConnected: (device) {
+                  // Reemplazar la ruta evita volver al login con el botón Atrás.
+                  navigator.pushReplacement(
+                    MaterialPageRoute(
+                      builder: (context) =>
+                          MainScreen(nombreUsuario: userEmail, device: device),
+                    ),
+                  );
+                },
+                onContinueWithoutConnection: () {
+                  // Este camino conserva el simulador para pruebas sin hardware.
+                  navigator.pushReplacement(
+                    MaterialPageRoute(
+                      builder: (context) =>
+                          MainScreen(nombreUsuario: userEmail),
+                    ),
+                  );
+                },
+              ),
+            ),
+          );
+        } else if (response.statusCode == 401) {
+          // 401 Unauthorized: email o contraseña incorrectos
+          scaffoldMessenger.showSnackBar(
+            const SnackBar(
+              content: Text('Correo o contraseña incorrectos'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        } else {
+          // eror del servidor
+          scaffoldMessenger.showSnackBar(
+            SnackBar(
+              content: Text('Error del servidor (${response.statusCode})'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      } catch (error) {
+        // problema de wifi o servidor apagado
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(
+            content: Text('No se pudo conectar. Revisá tu conexión Wi-Fi.'),
+            backgroundColor: Colors.red,
           ),
-        ),
-      );
+        );
+      }
     }
   }
 
@@ -87,39 +136,44 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 32),
 
-                // Input de Usuario
+                // Input de Email
                 TextFormField(
-                  controller: _userController,
+                  controller: _emailController,
                   decoration: const InputDecoration(
-                    labelText: 'Usuario',
+                    labelText: 'Correo electronico',
                     border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.person),
+                    prefixIcon: Icon(Icons.email),
                   ),
                   validator: (value) {
                     if (value == null || value.isEmpty) {
-                      return 'Por favor, ingresá un nombre';
+                      return 'Por favor, ingresá un correo';
+                    }
+                    if (!value.contains('@')) {
+                      return 'El formato del correo no es válido';
                     }
                     return null;
                   },
                 ),
                 const SizedBox(height: 16),
 
-                // Input de Contraseña
+                // Campo: Contraseña (userPassword)
                 TextFormField(
                   controller: _passwordController,
-                  obscureText: true, // Oculta los caracteres
+                  obscureText: true, // Oculta la contraseña con puntitos
                   decoration: const InputDecoration(
                     labelText: 'Contraseña',
                     border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.lock),
                   ),
                   validator: (value) {
-                    if (value == null || value.length < 4) {
-                      return 'La contraseña debe tener al menos 4 caracteres';
+                    // La API exige entre 8 y 72 caracteres
+                    if (value == null || value.length < 8) {
+                      return 'La contraseña debe tener al menos 8 caracteres';
                     }
                     return null;
                   },
                 ),
+                const SizedBox(height: 32),
                 
                 const SizedBox(height: 32),
                 // Botón de Ingreso
