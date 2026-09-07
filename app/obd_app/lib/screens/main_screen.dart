@@ -25,6 +25,8 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
+  int _selectedTab = 1;
+
   // Valor inicial usado por el simulador cuando no hay ESP32 conectada.
   double _nivelNafta = 75.0;
 
@@ -198,146 +200,398 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final pages = [
+      _buildTripsPage(context),
+      _buildCarPage(context),
+      _buildSettingsPage(context),
+    ];
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Panel de Control'),
-        // Botón para cerrar sesión
+        title: Text(
+          _selectedTab == 0
+              ? 'Tus viajes'
+              : _selectedTab == 1
+              ? 'Mi coche'
+              : 'Ajustes',
+        ),
+        centerTitle: false,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () {
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (context) => const LoginScreen()),
-              );
-            },
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Center(
+              child: Text(
+                widget.nombreUsuario,
+                style: TextStyle(color: Colors.grey.shade400),
+              ),
+            ),
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Saludo personalizado con el usuario recibido desde el login.
-            Text(
-              'Hola, ${widget.nombreUsuario} 👋',
-              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 40),
+      body: SafeArea(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          child: pages[_selectedTab],
+        ),
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _selectedTab,
+        onDestinationSelected: (index) => setState(() => _selectedTab = index),
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.route_outlined),
+            selectedIcon: Icon(Icons.route),
+            label: 'Viajes',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.directions_car_outlined),
+            selectedIcon: Icon(Icons.directions_car),
+            label: 'Coche',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.tune_outlined),
+            selectedIcon: Icon(Icons.tune),
+            label: 'Ajustes',
+          ),
+        ],
+      ),
+    );
+  }
 
-            // Indicador central de nafta. Hoy se actualiza con el simulador;
-            // luego puede alimentarse parseando mensajes recibidos de la ESP32.
-            Center(
-              child: Column(
+  Widget _buildCarPage(BuildContext context) {
+    final connected =
+        widget.device != null &&
+        _connectionStatus.toLowerCase().contains('conectado');
+    return ListView(
+      key: const ValueKey('car'),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      children: [
+        Text(
+          'Hola, ${widget.nombreUsuario}',
+          style: Theme.of(context).textTheme.headlineMedium
+              ?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          connected ? 'Telemetría en directo' : 'Resumen del vehículo',
+          style: TextStyle(color: Colors.grey.shade400),
+        ),
+        const SizedBox(height: 20),
+        Container(
+          padding: const EdgeInsets.all(22),
+          decoration: BoxDecoration(
+            color: Colors.blue.shade900.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Icon(
-                    Icons.local_gas_station,
-                    size: 60,
-                    color: Colors.green,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    '${_nivelNafta.toInt()}%',
-                    style: const TextStyle(
-                      fontSize: 72,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const Text(
-                    'Nivel de Nafta actual',
-                    style: TextStyle(fontSize: 16, color: Colors.grey),
-                  ),
-                ],
-              ),
-            ),
-
-            const Spacer(),
-
-            // Panel de diagnóstico BLE y simulador de datos modificable.
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white10,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                children: [
-                  // Estado actual de la sesión GATT.
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      _connectionStatus,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  // Último payload recibido por READ o NOTIFY.
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('Recibido: $_receivedData'),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
+                  const Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _sendController,
-                          enabled: _writeCharacteristic != null,
-                          decoration: const InputDecoration(
-                            labelText: 'Dato para enviar',
-                            border: OutlineInputBorder(),
-                            isDense: true,
-                          ),
-                          onSubmitted: (_) => _sendData(),
+                      Text('OBD-C · Demo'),
+                      SizedBox(height: 6),
+                      Text(
+                        'Volkswagen Golf GTI',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
                         ),
-                      ),
-                      // Avión de papel: app -> ESP32 mediante WRITE.
-                      IconButton(
-                        tooltip: 'Enviar dato',
-                        onPressed: _writeCharacteristic == null
-                            ? null
-                            : _sendData,
-                        icon: const Icon(Icons.send),
-                      ),
-                      // Descarga: lectura explícita app <- ESP32 mediante READ.
-                      IconButton(
-                        tooltip: 'Leer dato de la ESP32',
-                        onPressed: _readCharacteristic?.properties.read == true
-                            ? _readData
-                            : null,
-                        icon: const Icon(Icons.download),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  // Este slider es solo de prueba mientras no se conecte la ESP32.
-                  const Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('Simulador de nafta'),
-                  ),
-                  Slider(
-                    value: _nivelNafta,
-                    min: 0,
-                    max: 100,
-                    divisions: 100,
-                    activeColor: _nivelNafta < 20
-                        ? Colors.red
-                        : Colors.blueAccent,
-                    onChanged: (nuevoValor) {
-                      // El setState obliga a Flutter a redibujar el widget con el nuevo valor
-                      setState(() {
-                        _nivelNafta = nuevoValor;
-                      });
-                    },
+                  Icon(
+                    Icons.directions_car,
+                    size: 48,
+                    color: Colors.lightBlue.shade200,
                   ),
                 ],
+              ),
+              const SizedBox(height: 28),
+              Row(
+                children: [
+                  Expanded(
+                    child: _metric(
+                      'Nafta',
+                      '${_nivelNafta.toInt()}%',
+                      Icons.local_gas_station,
+                    ),
+                  ),
+                  Expanded(
+                    child: _metric('Kilometraje', '48.320 km', Icons.speed),
+                  ),
+                  Expanded(child: _metric('Estado', 'Bueno', Icons.favorite)),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: _infoTile('Último viaje', '12,4 km', Icons.flag_outlined),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _infoTile(
+                'Consumo medio',
+                '7,8 L/100',
+                Icons.eco_outlined,
               ),
             ),
           ],
         ),
+        const SizedBox(height: 20),
+        _buildBlePanel(),
+      ],
+    );
+  }
+
+  Widget _buildTripsPage(BuildContext context) {
+    return ListView(
+      key: const ValueKey('trips'),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      children: [
+        Text(
+          'Tu año al volante',
+          style: Theme.of(context).textTheme.headlineMedium
+              ?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Una mirada rápida a tus rutas recientes',
+          style: TextStyle(color: Colors.grey.shade400),
+        ),
+        const SizedBox(height: 22),
+        Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.teal.shade900.withValues(alpha: 0.6),
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Tu número estrella'),
+              SizedBox(height: 8),
+              Text(
+                '1.284 km',
+                style: TextStyle(fontSize: 42, fontWeight: FontWeight.w900),
+              ),
+              SizedBox(height: 4),
+              Text('recorridos en 37 viajes'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: _infoTile(
+                'Viaje más largo',
+                '86 km',
+                Icons.wb_sunny_outlined,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _infoTile('Tiempo conduciendo', '28 h', Icons.schedule),
+            ),
+          ],
+        ),
+        const SizedBox(height: 24),
+        Text(
+          'Últimos viajes',
+          style: Theme.of(context).textTheme.titleLarge
+              ?.copyWith(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        _tripRow('Casa → Trabajo', 'Hoy · 12,4 km', '18 min'),
+        _tripRow('Ruta costera', 'Ayer · 42,8 km', '51 min'),
+        _tripRow('Centro → Norte', 'Dom, 31 ago · 8,6 km', '16 min'),
+      ],
+    );
+  }
+
+  Widget _buildSettingsPage(BuildContext context) {
+    return ListView(
+      key: const ValueKey('settings'),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      children: [
+        Text(
+          'Ajustes',
+          style: Theme.of(context).textTheme.headlineMedium
+              ?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 20),
+        ListTile(
+          leading: const Icon(Icons.bluetooth),
+          title: const Text('Conexión OBD'),
+          subtitle: Text(_connectionStatus),
+          trailing: const Icon(Icons.chevron_right),
+        ),
+        const Divider(),
+        const ListTile(
+          leading: Icon(Icons.directions_car_outlined),
+          title: Text('Vehículo'),
+          subtitle: Text('Volkswagen Golf GTI'),
+          trailing: Icon(Icons.chevron_right),
+        ),
+        const Divider(),
+        const ListTile(
+          leading: Icon(Icons.notifications_outlined),
+          title: Text('Notificaciones'),
+          subtitle: Text('Alertas de mantenimiento'),
+          trailing: Icon(Icons.chevron_right),
+        ),
+        const SizedBox(height: 24),
+        FilledButton.tonalIcon(
+          onPressed: () => Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+          ),
+          icon: const Icon(Icons.logout),
+          label: const Text('Cerrar sesión'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBlePanel() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white10,
+        borderRadius: BorderRadius.circular(18),
       ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.circle,
+                size: 10,
+                color: _connectionStatus.startsWith('Conectado')
+                    ? Colors.greenAccent
+                    : Colors.orangeAccent,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _connectionStatus,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Último dato: $_receivedData',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _sendController,
+                  enabled: _writeCharacteristic != null,
+                  decoration: const InputDecoration(
+                    labelText: 'Enviar comando',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  onSubmitted: (_) => _sendData(),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Enviar dato',
+                onPressed: _writeCharacteristic == null ? null : _sendData,
+                icon: const Icon(Icons.send),
+              ),
+              IconButton(
+                tooltip: 'Leer dato',
+                onPressed: _readCharacteristic?.properties.read == true
+                    ? _readData
+                    : null,
+                icon: const Icon(Icons.download),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Simulador de nafta',
+            style: TextStyle(color: Colors.grey.shade400),
+          ),
+          Slider(
+            value: _nivelNafta,
+            min: 0,
+            max: 100,
+            divisions: 100,
+            activeColor: _nivelNafta < 20 ? Colors.red : Colors.blueAccent,
+            onChanged: (value) => setState(() => _nivelNafta = value),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _metric(String label, String value, IconData icon) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: Colors.lightBlue.shade200),
+        const SizedBox(height: 8),
+        Text(
+          value,
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade300),
+        ),
+      ],
+    );
+  }
+
+  Widget _infoTile(String label, String value, IconData icon) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white10,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: Colors.amber.shade300),
+          const SizedBox(height: 12),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 4),
+          Text(label, style: TextStyle(color: Colors.grey.shade400)),
+        ],
+      ),
+    );
+  }
+
+  Widget _tripRow(String title, String subtitle, String duration) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const CircleAvatar(child: Icon(Icons.route)),
+      title: Text(title),
+      subtitle: Text(subtitle),
+      trailing: Text(duration, style: TextStyle(color: Colors.grey.shade400)),
     );
   }
 }
