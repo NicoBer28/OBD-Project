@@ -20,7 +20,7 @@ public class AppUserDetailsService implements UserDetailsService {
     @Override
     @Transactional
     public UserPrincipal loadUserByUsername(@NotNull String email){
-        return userRepository.findByEmail(email.trim().toLowerCase()).map(UserPrincipal::from).orElseThrow(()-> new UsernameNotFoundException("Bad credentials"));
+        return userRepository.findByUserEmail(email.trim().toLowerCase()).map(UserPrincipal::from).orElseThrow(()-> new UsernameNotFoundException("Bad credentials"));
     }
 
     public UserPrincipal loadById(UUID id){

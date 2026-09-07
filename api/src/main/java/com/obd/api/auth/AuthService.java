@@ -35,12 +35,16 @@ public class AuthService {
     @Transactional
     public TokenPair register(UserDTO.Create userDto){
         User user = userMapper.mapNewUser(userDto);
+        User saved;
         try{
-            userRepository.saveAndFlush(user);
+            // saveAndFlush (not save): the INSERT has to hit the DB inside this
+            // try block so the unique-email violation surfaces here rather than
+            // at commit time, outside the catch.
+            saved = userRepository.saveAndFlush(user);
         } catch (DataIntegrityViolationException e){
             throw new EmailAlreadyInUseException(user.getUserEmail());
         }
-        return pairFor(UserPrincipal.from(user), true);
+        return pairFor(UserPrincipal.from(saved), true);
 
     }
 

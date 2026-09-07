@@ -39,24 +39,34 @@ public class RefreshTokenService {
         return persist(userId, UUID.randomUUID());
     }
 
+    /**
+     * Deliberately not @Transactional. The reuse branch revokes the family and
+     * then throws; wrapping the whole method in one transaction would roll that
+     * revocation straight back and leave a compromised family alive. Each
+     * repository call commits on its own instead. The cost is that a crash
+     * between revoking the old token and persisting the new one loses the
+     * session - a fail-closed outcome, so the user just logs in again.
+     */
     public Rotation rotate(String rawToken) {
         String hash = sha256(rawToken);
         Instant now = Instant.now();
 
-        RefreshTokenDTO token = repository.findByHash(hash)
+        RefreshToken token = repository.findByTokenHash(hash)
                 .orElseThrow(() -> new BadCredentialsException("Invalid refresh token"));
 
         if (token.isExpired()) {
             throw new BadCredentialsException("Refresh token expired");
         }
 
-        if (!repository.revoke(token.id(), now)) {
-            repository.revokeFamily(token.familyId(), now);
+        // 0 rows updated means the token was already revoked, i.e. this is a
+        // replay of a token that was rotated out - burn the whole family.
+        if (repository.revoke(token.getId(), now) == 0) {
+            repository.revokeFamily(token.getFamilyId(), now);
             throw new BadCredentialsException("Refresh token reuse detected");
         }
 
-        String next = persist(token.userId(), token.familyId());   // same family
-        return new Rotation(token.userId(), next);
+        String next = persist(token.getUserId(), token.getFamilyId());   // same family
+        return new Rotation(token.getUserId(), next);
     }
     public void revokeAllForUser(UUID userId) {
         repository.revokeAllForUser(userId, Instant.now());
@@ -75,9 +85,8 @@ public class RefreshTokenService {
         random.nextBytes(bytes);
         String raw = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
 
-        repository.save(new RefreshTokenDTO(
-                UUID.randomUUID(), userId, familyId, sha256(raw),
-                Instant.now().plus(ttl()), null));
+        repository.save(RefreshToken.issue(
+                userId, familyId, sha256(raw), Instant.now().plus(ttl())));
 
         return raw;
     }

@@ -4,6 +4,29 @@ Spring Boot backend for OBD. Authentication is JWT-based: a short-lived access
 token returned in the response body, and a long-lived refresh token delivered
 as an `httpOnly` cookie.
 
+## Database
+
+Postgres is required — the app will not start without it. Create the database
+once; the tables are created for you by Flyway on first startup:
+
+```bash
+createdb obd
+```
+
+Or with Docker:
+
+```bash
+docker run -d --name obd-pg -e POSTGRES_DB=obd \
+  -e POSTGRES_USER=obd -e POSTGRES_PASSWORD=obd \
+  -p 5432:5432 postgres:16-alpine
+```
+
+The schema lives in `src/main/resources/db/migration`. Flyway applies any
+pending migrations at startup and Hibernate then validates the entities
+against the result (`ddl-auto=validate`) — Hibernate never creates or alters a
+table itself, in any environment. To change the schema, add a new
+`V2__description.sql`; never edit a migration that has already run.
+
 ## Running
 
 Copy `.env.example` to `.env` and fill in real values, then load it into your
@@ -31,7 +54,8 @@ Required environment variables (see `.env.example` / `application.properties`):
 
 | Variable | Purpose |
 |---|---|
-| `DB_USER` / `DB_PASSWORD` | Postgres credentials (unused while `UserRepository` is still the in-memory mock) |
+| `DB_USER` / `DB_PASSWORD` | Postgres credentials |
+| `DB_URL` | JDBC URL; optional, defaults to `jdbc:postgresql://localhost:5432/obd` |
 | `JWT_SECRET` | Base64-encoded HMAC signing key for access tokens |
 | `CORS_ORIGINS` | Comma-separated frontend origin(s) allowed via CORS (defaults to `http://localhost:5173`) |
 
@@ -138,9 +162,8 @@ refresh tokens for the current user and clears the `refreshToken` cookie.
 
 ## Known limitations
 
-- `UserRepository` is an in-memory mock (`HashMap`), not yet backed by
-  Postgres — data does not survive a restart. `spring.autoconfigure.exclude`
-  in `application.properties` disables JPA/DataSource autoconfiguration for
-  this reason; re-enable it once `UserRepository` is a real Spring Data
-  repository backed by a running Postgres instance.
-- `RefreshTokenRepository` is likewise in-memory.
+- The `car` package (`Car`, `Model`, `CarRepository`, `CarService`,
+  `CarController`) is still empty scaffolding — no entity mapping and no
+  migration yet.
+- `ApiApplicationTests.contextLoads` is a full `@SpringBootTest`, so it needs a
+  reachable Postgres. Use `./mvnw -DskipTests package` without one.

@@ -1,58 +1,58 @@
 package com.obd.api.auth.refresh;
 
-import org.springframework.stereotype.Repository;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Predicate;
 
-@Repository
-public class RefreshTokenRepository {
+/**
+ * Every mutating method carries its own @Transactional so it commits on its
+ * own. RefreshTokenService relies on that: when it detects token reuse it
+ * revokes the family and then throws, and the revocation must survive the
+ * exception rather than roll back with it.
+ */
+public interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID> {
 
-    private final Map<UUID, RefreshTokenDTO> byId = new ConcurrentHashMap<>();
-    private final Map<String, UUID> hashIndex = new ConcurrentHashMap<>();
+    Optional<RefreshToken> findByTokenHash(String tokenHash);
 
-    public void save(RefreshTokenDTO token) {
-        byId.put(token.id(), token);
-        hashIndex.put(token.tokenHash(), token.id());
-    }
+    /**
+     * Conditional update - the {@code revokedAt is null} predicate makes this a
+     * compare-and-set in the database, so out of N concurrent callers exactly
+     * one gets 1 back and the rest get 0. That is what reuse detection hangs on.
+     *
+     * @return 1 if this call revoked the token, 0 if it was already revoked
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("""
+            update RefreshToken t set t.revokedAt = :at
+            where t.id = :id and t.revokedAt is null
+            """)
+    int revoke(@Param("id") UUID id, @Param("at") Instant at);
 
-    public Optional<RefreshTokenDTO> findByHash(String tokenHash) {
-        return Optional.ofNullable(hashIndex.get(tokenHash)).map(byId::get);
-    }
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("""
+            update RefreshToken t set t.revokedAt = :at
+            where t.familyId = :familyId and t.revokedAt is null
+            """)
+    int revokeFamily(@Param("familyId") UUID familyId, @Param("at") Instant at);
 
-    public boolean revoke(UUID tokenId, Instant at) {
-        var flipped = new boolean[1];
-        byId.computeIfPresent(tokenId, (id, existing) -> {
-            if (existing.isRevoked()) return existing;
-            flipped[0] = true;
-            return existing.revoked(at);
-        });
-        return flipped[0];
-    }
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("""
+            update RefreshToken t set t.revokedAt = :at
+            where t.userId = :userId and t.revokedAt is null
+            """)
+    int revokeAllForUser(@Param("userId") UUID userId, @Param("at") Instant at);
 
-    public void revokeFamily(UUID familyId, Instant at) {
-        revokeMatching(t -> t.familyId().equals(familyId), at);
-    }
-
-    public void revokeAllForUser(UUID userId, Instant at) {
-        revokeMatching(t -> t.userId().equals(userId), at);
-    }
-
-    public int deleteExpiredBefore(Instant cutoff) {
-        var doomed = byId.values().stream()
-                .filter(t -> t.expiresAt().isBefore(cutoff)).toList();
-        doomed.forEach(t -> { byId.remove(t.id()); hashIndex.remove(t.tokenHash()); });
-        return doomed.size();
-    }
-
-    private void revokeMatching(Predicate<RefreshTokenDTO> match, Instant at) {
-        byId.values().stream()
-                .filter(match).filter(t -> !t.isRevoked()).map(RefreshTokenDTO::id).toList()
-                .forEach(id -> revoke(id, at));
-    }
-
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("delete from RefreshToken t where t.expiresAt < :cutoff")
+    int deleteExpiredBefore(@Param("cutoff") Instant cutoff);
 }
