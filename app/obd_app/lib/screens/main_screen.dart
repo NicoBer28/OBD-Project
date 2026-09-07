@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -29,6 +30,8 @@ class _MainScreenState extends State<MainScreen> {
 
   // Valor inicial usado por el simulador cuando no hay ESP32 conectada.
   double _nivelNafta = 75.0;
+  int _velocidad = 0;
+  int _rpm = 0;
 
   // Característica 6E400002: canal de escritura app -> ESP32.
   BluetoothCharacteristic? _writeCharacteristic;
@@ -117,9 +120,25 @@ class _MainScreenState extends State<MainScreen> {
         _receiveSubscription = receiveCharacteristic.onValueReceived.listen((
           value,
         ) {
-          if (!mounted) return;
+          if (!mounted|| value.isEmpty) return;
+
+          final bytes = Uint8List.fromList(value);
+          final byteData = ByteData.sublistView(bytes);
+          final id = byteData.getUint8(0);
+
           setState(() {
-            _receivedData = utf8.decode(value, allowMalformed: true);
+            if (id == 0x01 && bytes.length >= 4) {
+              // Struct SpeedRpmPacket: id (1 byte), speed (1 byte), rpm (2 bytes)
+              _velocidad = byteData.getUint8(1);
+              _rpm = byteData.getUint16(2, Endian.little); // ESP32 usa Little Endian
+              _receivedData = 'Paquete 0x01 - Vel: $_velocidad km/h | RPM: $_rpm';
+            } 
+            else if (id == 0x02 && bytes.length >= 3) {
+              // Struct EngTempFuelPacket: id (1 byte), temp (1 byte), fuel (1 byte)
+              final temp = byteData.getUint8(1);
+              _nivelNafta = byteData.getUint8(2).toDouble();
+              _receivedData = 'Paquete 0x02 - Temp: $temp°C | Nafta: ${_nivelNafta.toInt()}%';
+            }
           });
         });
       }
@@ -333,14 +352,14 @@ class _MainScreenState extends State<MainScreen> {
         Row(
           children: [
             Expanded(
-              child: _infoTile('Último viaje', '12,4 km', Icons.flag_outlined),
+              child: _infoTile('Velocidad', '$_velocidad km/h', Icons.speed),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: _infoTile(
-                'Consumo medio',
-                '7,8 L/100',
-                Icons.eco_outlined,
+                'RPM',
+                '$_rpm',
+                Icons.rotate_right,
               ),
             ),
           ],

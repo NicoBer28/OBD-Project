@@ -50,7 +50,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final scaffoldMessenger = ScaffoldMessenger.of(context);
 
       // Armamos la URL
-      final url = Uri.parse('http://192.168.0.15:8080/api/v1/auth/register');
+      final url = Uri.parse('http://192.168.1.19:8080/api/v1/auth/register');
       
       try {
         // 2. Disparamos la petición HTTP POST

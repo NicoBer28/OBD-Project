@@ -41,7 +41,7 @@ class _LoginScreenState extends State<LoginScreen> {
       final navigator = Navigator.of(context);
       final scaffoldMessenger = ScaffoldMessenger.of(context);
 
-      final url = Uri.parse('http://192.168.0.15:8080/api/v1/auth/login');
+      final url = Uri.parse('http://192.168.1.19:8080/api/v1/auth/login');
 
       try {
         // Disparamos la petición a la API
