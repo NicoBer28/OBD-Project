@@ -1,0 +1,349 @@
+{
+  "configuration" : {
+    "scope" : "SoftwareSystem"
+  },
+  "description" : "Estructura central del funcionamiento del OBD-C",
+  "documentation" : { },
+  "id" : 1,
+  "lastModifiedAgent" : "structurizr/diagrams/30a1714a-d219-49a1-b85a-58c41adda382",
+  "lastModifiedDate" : "2026-09-08T00:54:45Z",
+  "lastModifiedUser" : "1606071079",
+  "model" : {
+    "customElements" : [ {
+      "description" : "Gestiona y enruta notificaciones móviles",
+      "id" : "2",
+      "metadata" : "Firebase Cloud Messaging",
+      "name" : "Servicio de Notificaciones Push",
+      "properties" : {
+        "structurizr.dsl.identifier" : "ns"
+      },
+      "relationships" : [ {
+        "description" : "Entrega notificación push",
+        "destinationId" : "4",
+        "id" : "13",
+        "sourceId" : "2",
+        "tags" : "Relationship",
+        "technology" : "TCP/IP"
+      }, {
+        "description" : "Entrega notificación push",
+        "destinationId" : "3",
+        "id" : "14",
+        "linkedRelationshipId" : "13",
+        "sourceId" : "2",
+        "technology" : "TCP/IP"
+      } ],
+      "tags" : "Element"
+    } ],
+    "people" : [ {
+      "description" : "Monitorea el estado actual y el historial",
+      "id" : "1",
+      "name" : "Usuario",
+      "properties" : {
+        "structurizr.dsl.identifier" : "u"
+      },
+      "relationships" : [ {
+        "description" : "Visualiza datos y estadisticas",
+        "destinationId" : "4",
+        "id" : "17",
+        "sourceId" : "1",
+        "tags" : "Relationship",
+        "technology" : "UI / UX"
+      }, {
+        "description" : "Visualiza datos y estadisticas",
+        "destinationId" : "3",
+        "id" : "18",
+        "linkedRelationshipId" : "17",
+        "sourceId" : "1",
+        "technology" : "UI / UX"
+      } ],
+      "tags" : "Element,Person"
+    } ],
+    "softwareSystems" : [ {
+      "containers" : [ {
+        "description" : "Recibe y muestra el estado del vehiculo",
+        "documentation" : { },
+        "id" : "4",
+        "name" : "App Mòvil",
+        "properties" : {
+          "structurizr.dsl.identifier" : "ss.app"
+        },
+        "relationships" : [ {
+          "description" : "Sincroniza y envia lotes de telemetria",
+          "destinationId" : "6",
+          "id" : "9",
+          "sourceId" : "4",
+          "tags" : "Relationship",
+          "technology" : "HTTPS"
+        }, {
+          "description" : "Solicita estadisticas historicas",
+          "destinationId" : "6",
+          "id" : "12",
+          "sourceId" : "4",
+          "tags" : "Relationship",
+          "technology" : "HTTPS / JSON"
+        }, {
+          "description" : "Muestra alerta en pantalla",
+          "destinationId" : "1",
+          "id" : "15",
+          "sourceId" : "4",
+          "tags" : "Relationship",
+          "technology" : "UI"
+        } ],
+        "tags" : "Element,Container,APP",
+        "technology" : "Flutter"
+      }, {
+        "description" : "Lee el estado del auto a traves del CAN bus",
+        "documentation" : { },
+        "id" : "5",
+        "name" : "Dispositivo OBD2",
+        "properties" : {
+          "structurizr.dsl.identifier" : "ss.dvc"
+        },
+        "relationships" : [ {
+          "description" : "Envia telemetria en tiempo real",
+          "destinationId" : "4",
+          "id" : "8",
+          "sourceId" : "5",
+          "tags" : "Relationship",
+          "technology" : "BLE / Bluetooth"
+        } ],
+        "tags" : "Element,Container,hardwareDevice",
+        "technology" : "ESP32"
+      }, {
+        "description" : "Procesa telemetría y provee datos históricos",
+        "documentation" : { },
+        "id" : "6",
+        "name" : "API Backend",
+        "properties" : {
+          "structurizr.dsl.identifier" : "ss.api"
+        },
+        "relationships" : [ {
+          "description" : "Inserta registros de telemetría",
+          "destinationId" : "7",
+          "id" : "10",
+          "sourceId" : "6",
+          "tags" : "Relationship",
+          "technology" : "SQL (Escritura)"
+        }, {
+          "description" : "Consulta telemetría historica",
+          "destinationId" : "7",
+          "id" : "11",
+          "sourceId" : "6",
+          "tags" : "Relationship",
+          "technology" : "SQL (Lectura)"
+        }, {
+          "description" : "Dispara alerta",
+          "destinationId" : "2",
+          "id" : "19",
+          "sourceId" : "6",
+          "tags" : "Relationship",
+          "technology" : "HTTPS / Webhook"
+        } ],
+        "tags" : "Element,Container,API",
+        "technology" : "Java / Spring Boot"
+      }, {
+        "description" : "Registra estado y datos del vehiculo",
+        "documentation" : { },
+        "id" : "7",
+        "name" : "Base de Datos",
+        "properties" : {
+          "structurizr.dsl.identifier" : "ss.db"
+        },
+        "tags" : "Element,Container,Database",
+        "technology" : "PostgreSQL"
+      } ],
+      "documentation" : { },
+      "id" : "3",
+      "name" : "Sistema de Monitoreo Vehicular",
+      "properties" : {
+        "structurizr.dsl.identifier" : "ss"
+      },
+      "relationships" : [ {
+        "description" : "Muestra alerta en pantalla",
+        "destinationId" : "1",
+        "id" : "16",
+        "linkedRelationshipId" : "15",
+        "sourceId" : "3",
+        "technology" : "UI"
+      }, {
+        "description" : "Dispara alerta",
+        "destinationId" : "2",
+        "id" : "20",
+        "linkedRelationshipId" : "19",
+        "sourceId" : "3",
+        "technology" : "HTTPS / Webhook"
+      } ],
+      "tags" : "Element,Software System"
+    } ]
+  },
+  "name" : "OBD-C",
+  "properties" : {
+    "structurizr.inspection.info" : "0",
+    "structurizr.inspection.ignore" : "0",
+    "structurizr.inspection.error" : "3",
+    "structurizr.inspection.warning" : "0",
+    "structurizr.dsl" : "d29ya3NwYWNlICJPQkQtQyIgIkVzdHJ1Y3R1cmEgY2VudHJhbCBkZWwgZnVuY2lvbmFtaWVudG8gZGVsIE9CRC1DIiB7CgogICAgIWlkZW50aWZpZXJzIGhpZXJhcmNoaWNhbAoKICAgIG1vZGVsIHsKICAgICAgICBhcmNoZXR5cGVzIHsKICAgICAgICAgICAgYXBwbGljYXRpb24gPSBjb250YWluZXIKICAgICAgICAgICAgaGFyZHdhcmUgPSBjb250YWluZXIKICAgICAgICB9CgogICAgICAgIHUgPSBwZXJzb24gIlVzdWFyaW8iICJNb25pdG9yZWEgZWwgZXN0YWRvIGFjdHVhbCB5IGVsIGhpc3RvcmlhbCIKCiAgICAgICAgbnMgPSBlbGVtZW50ICJTZXJ2aWNpbyBkZSBOb3RpZmljYWNpb25lcyBQdXNoIiAiRmlyZWJhc2UgQ2xvdWQgTWVzc2FnaW5nIiAiR2VzdGlvbmEgeSBlbnJ1dGEgbm90aWZpY2FjaW9uZXMgbcOzdmlsZXMiCgogICAgICAgIHNzID0gc29mdHdhcmVTeXN0ZW0gIlNpc3RlbWEgZGUgTW9uaXRvcmVvIFZlaGljdWxhciIgewogICAgICAgICAgICBhcHAgPSBhcHBsaWNhdGlvbiAiQXBwIE3DsnZpbCIgIlJlY2liZSB5IG11ZXN0cmEgZWwgZXN0YWRvIGRlbCB2ZWhpY3VsbyIgIkZsdXR0ZXIiIHsKICAgICAgICAgICAgICAgIHRhZ3MgIkFQUCIKICAgICAgICAgICAgfQoKICAgICAgICAgICAgZHZjID0gaGFyZHdhcmUgIkRpc3Bvc2l0aXZvIE9CRDIiICJMZWUgZWwgZXN0YWRvIGRlbCBhdXRvIGEgdHJhdmVzIGRlbCBDQU4gYnVzIiAiRVNQMzIiIHsKICAgICAgICAgICAgICAgIHRhZ3MgImhhcmR3YXJlRGV2aWNlIgogICAgICAgICAgICB9CiAgICAgICAgICAKICAgICAgICAgICAgYXBpID0gY29udGFpbmVyICJBUEkgQmFja2VuZCIgIlByb2Nlc2EgdGVsZW1ldHLDrWEgeSBwcm92ZWUgZGF0b3MgaGlzdMOzcmljb3MiICJKYXZhIC8gU3ByaW5nIEJvb3QiIHsKICAgICAgICAgICAgICAgIHRhZ3MgIkFQSSIKICAgICAgICAgICAgfQoKCiAgICAgICAgICAgIGRiID0gY29udGFpbmVyICJCYXNlIGRlIERhdG9zIiAiUmVnaXN0cmEgZXN0YWRvIHkgZGF0b3MgZGVsIHZlaGljdWxvIiAiUG9zdGdyZVNRTCIgewogICAgICAgICAgICAgICAgdGFncyAiRGF0YWJhc2UiCiAgICAgICAgICAgIH0KCiAgICAgICAgICAgIGR2YyAtPiBhcHAgIkVudmlhIHRlbGVtZXRyaWEgZW4gdGllbXBvIHJlYWwiICJCTEUgLyBCbHVldG9vdGgiCiAgICAgICAgICAgIGFwcCAtPiBhcGkgIlNpbmNyb25pemEgeSBlbnZpYSBsb3RlcyBkZSB0ZWxlbWV0cmlhIiAiSFRUUFMiCiAgICAgICAgICAgIGFwaSAtPiBkYiAiSW5zZXJ0YSByZWdpc3Ryb3MgZGUgdGVsZW1ldHLDrWEiICJTUUwgKEVzY3JpdHVyYSkiCgogICAgICAgICAgICBhcGkgLT4gZGIgIkNvbnN1bHRhIHRlbGVtZXRyw61hIGhpc3RvcmljYSIgIlNRTCAoTGVjdHVyYSkiCiAgICAgICAgICAgIGFwcCAtPiBhcGkgIlNvbGljaXRhIGVzdGFkaXN0aWNhcyBoaXN0b3JpY2FzIiAiSFRUUFMgLyBKU09OIgogICAgICAgIH0KCiAgICAgICAgbnMgLT4gc3MuYXBwICJFbnRyZWdhIG5vdGlmaWNhY2nDs24gcHVzaCIgIlRDUC9JUCIKICAgICAgICBzcy5hcHAgLT4gdSAiTXVlc3RyYSBhbGVydGEgZW4gcGFudGFsbGEiICJVSSIKICAgICAgICB1IC0+IHNzLmFwcCAiVmlzdWFsaXphIGRhdG9zIHkgZXN0YWRpc3RpY2FzIiAiVUkgLyBVWCIKICAgICAgICBzcy5hcGkgLT4gbnMgIkRpc3BhcmEgYWxlcnRhIiAiSFRUUFMgLyBXZWJob29rIgogICAgfQoKICAgIHZpZXdzIHsKICAgICAgICBzeXN0ZW1Db250ZXh0IHNzICJOaXZlbDEiIHsKICAgICAgICAgICAgaW5jbHVkZSAqCiAgICAgICAgfQoKICAgICAgICBjb250YWluZXIgc3MgIk5pdmVsMiIgewogICAgICAgICAgICBpbmNsdWRlICogIi0+bnMtPiIKICAgICAgICB9CgogICAgICAgIHN0eWxlcyB7CiAgICAgICAgICAgIGVsZW1lbnQgIkVsZW1lbnQiIHsKICAgICAgICAgICAgICAgIGNvbG9yICMwMDAwMDAKICAgICAgICAgICAgICAgIHN0cm9rZSAjMDc3M2FmCiAgICAgICAgICAgICAgICBzdHJva2VXaWR0aCA3CiAgICAgICAgICAgICAgICBzaGFwZSByb3VuZGVkYm94CiAgICAgICAgICAgIH0KICAgICAgICAgICAgZWxlbWVudCAiUGVyc29uIiB7CiAgICAgICAgICAgICAgICBzaGFwZSBwZXJzb24KICAgICAgICAgICAgfQogICAgICAgICAgICBlbGVtZW50ICJEYXRhYmFzZSIgewogICAgICAgICAgICAgICAgc2hhcGUgY3lsaW5kZXIKICAgICAgICAgICAgfQogICAgICAgICAgICBlbGVtZW50ICJCb3VuZGFyeSIgewogICAgICAgICAgICAgICAgc3Ryb2tlV2lkdGggNQogICAgICAgICAgICB9CiAgICAgICAgICAgIHJlbGF0aW9uc2hpcCAiUmVsYXRpb25zaGlwIiB7CiAgICAgICAgICAgICAgICB0aGlja25lc3MgNAogICAgICAgICAgICB9CgogICAgICAgICAgICBlbGVtZW50ICJBUFAiIHsKICAgICAgICAgICAgICAgIHNoYXBlIE1vYmlsZURldmljZVBvcnRyYWl0CiAgICAgICAgICAgICAgICBiYWNrZ3JvdW5kICMxMTdmYmEKICAgICAgICAgICAgfQoKICAgICAgICAgICAgZWxlbWVudCAiQVBJIiB7CiAgICAgICAgICAgICAgICBzaGFwZSBoZXhhZ29uCiAgICAgICAgICAgIH0KCiAgICAgICAgICAgIGVsZW1lbnQgImhhcmR3YXJlRGV2aWNlIiB7CiAgICAgICAgICAgICAgICBzaGFwZSByb2JvdAogICAgICAgICAgICAgICAgYmFja2dyb3VuZCAjMjBjMjY3CiAgICAgICAgICAgICAgICBzdHJva2UgIzI2YTQ1ZAogICAgICAgICAgICB9CiAgICAgICAgfQogICAgfQoKICAgIGNvbmZpZ3VyYXRpb24gewogICAgICAgIHNjb3BlIHNvZnR3YXJlc3lzdGVtCiAgICB9Cgp9"
+  },
+  "views" : {
+    "configuration" : {
+      "lastSavedView" : "Nivel2",
+      "metadataSymbols" : "SquareBrackets",
+      "styles" : {
+        "elements" : [ {
+          "shape" : "Hexagon",
+          "tag" : "API"
+        }, {
+          "background" : "#117fba",
+          "shape" : "MobileDevicePortrait",
+          "tag" : "APP"
+        }, {
+          "strokeWidth" : 5,
+          "tag" : "Boundary"
+        }, {
+          "shape" : "Cylinder",
+          "tag" : "Database"
+        }, {
+          "color" : "#000000",
+          "shape" : "RoundedBox",
+          "stroke" : "#0773af",
+          "strokeWidth" : 7,
+          "tag" : "Element"
+        }, {
+          "background" : "#20c267",
+          "shape" : "Robot",
+          "stroke" : "#26a45d",
+          "tag" : "hardwareDevice"
+        }, {
+          "shape" : "Person",
+          "tag" : "Person"
+        } ],
+        "relationships" : [ {
+          "tag" : "Relationship",
+          "thickness" : 4
+        } ]
+      },
+      "terminology" : { }
+    },
+    "containerViews" : [ {
+      "dimensions" : {
+        "height" : 1864,
+        "width" : 3120
+      },
+      "elements" : [ {
+        "id" : "1",
+        "x" : 250,
+        "y" : 514
+      }, {
+        "id" : "2",
+        "x" : 1295,
+        "y" : 510
+      }, {
+        "id" : "4",
+        "x" : 990,
+        "y" : 1037
+      }, {
+        "id" : "5",
+        "x" : 235,
+        "y" : 1070
+      }, {
+        "id" : "6",
+        "x" : 1630,
+        "y" : 1068
+      }, {
+        "id" : "7",
+        "x" : 2410,
+        "y" : 1155
+      } ],
+      "externalSoftwareSystemBoundariesVisible" : false,
+      "key" : "Nivel2",
+      "name" : "Container View: Sistema de Monitoreo Vehicular",
+      "order" : 2,
+      "relationships" : [ {
+        "id" : "10",
+        "vertices" : [ {
+          "x" : 2215,
+          "y" : 1100
+        } ]
+      }, {
+        "id" : "11",
+        "position" : 50,
+        "vertices" : [ {
+          "x" : 2210,
+          "y" : 1410
+        } ]
+      }, {
+        "id" : "12",
+        "vertices" : [ {
+          "x" : 1460,
+          "y" : 1153
+        } ]
+      }, {
+        "id" : "13",
+        "vertices" : [ {
+          "x" : 1130,
+          "y" : 835
+        } ]
+      }, {
+        "id" : "15",
+        "vertices" : [ {
+          "x" : 690,
+          "y" : 1175
+        } ]
+      }, {
+        "id" : "17",
+        "vertices" : [ {
+          "x" : 865,
+          "y" : 915
+        } ]
+      }, {
+        "id" : "19",
+        "vertices" : [ {
+          "x" : 1855,
+          "y" : 860
+        } ]
+      }, {
+        "id" : "8",
+        "vertices" : [ {
+          "x" : 820,
+          "y" : 1378
+        } ]
+      }, {
+        "id" : "9",
+        "vertices" : [ {
+          "x" : 1460,
+          "y" : 1369
+        } ]
+      } ],
+      "softwareSystemId" : "3"
+    } ],
+    "systemContextViews" : [ {
+      "elements" : [ {
+        "id" : "1",
+        "x" : 0,
+        "y" : 0
+      }, {
+        "id" : "2",
+        "x" : 0,
+        "y" : 0
+      }, {
+        "id" : "3",
+        "x" : 0,
+        "y" : 0
+      } ],
+      "enterpriseBoundaryVisible" : true,
+      "key" : "Nivel1",
+      "name" : "System Context View: Sistema de Monitoreo Vehicular",
+      "order" : 1,
+      "relationships" : [ {
+        "id" : "14"
+      }, {
+        "id" : "16"
+      }, {
+        "id" : "18"
+      }, {
+        "id" : "20"
+      } ],
+      "softwareSystemId" : "3"
+    } ]
+  }
+}
