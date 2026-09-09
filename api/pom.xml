@@ -105,6 +105,24 @@
         <dependency><groupId>io.jsonwebtoken</groupId><artifactId>jjwt-api</artifactId><version>0.12.6</version></dependency>
         <dependency><groupId>io.jsonwebtoken</groupId><artifactId>jjwt-impl</artifactId><version>0.12.6</version><scope>runtime</scope></dependency>
         <dependency><groupId>io.jsonwebtoken</groupId><artifactId>jjwt-jackson</artifactId><version>0.12.6</version><scope>runtime</scope></dependency>
+        <!-- Repository/integration tests run against a real Postgres in Docker,
+             so JPA mappings are validated against the actual Flyway schema
+             rather than an in-memory database that behaves differently. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 	<build>
@@ -128,5 +146,41 @@
 			</plugin>
 		</plugins>
 	</build>
+
+	<profiles>
+		<!-- Colima puts the Docker socket under the user's home instead of
+		     /var/run/docker.sock, which is the only place Testcontainers looks by
+		     default. This profile activates itself when that socket exists, so
+		     Colima machines need no manual setup and Docker Desktop / CI (which
+		     have the standard socket) are left completely untouched.
+
+		     The socket override is separate on purpose: DOCKER_HOST tells the JVM
+		     where to reach the daemon, while TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE
+		     tells Testcontainers what path to bind-mount into the Ryuk reaper
+		     container - inside Colima's VM that is the standard path, and without
+		     it Ryuk fails to start with "operation not supported". -->
+		<profile>
+			<id>colima</id>
+			<activation>
+				<file>
+					<exists>${user.home}/.colima/default/docker.sock</exists>
+				</file>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-surefire-plugin</artifactId>
+						<configuration>
+							<environmentVariables>
+								<DOCKER_HOST>unix://${user.home}/.colima/default/docker.sock</DOCKER_HOST>
+								<TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>/var/run/docker.sock</TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>
+							</environmentVariables>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 
 </project>

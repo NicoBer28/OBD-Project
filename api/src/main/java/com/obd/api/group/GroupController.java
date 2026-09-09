@@ -1,7 +1,7 @@
-package com.obd.api.car;
+package com.obd.api.group;
 
 import com.obd.api.auth.UserPrincipal;
-import com.obd.api.car.dto.CarDTO;
+import com.obd.api.group.dto.GroupDTO;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -12,19 +12,17 @@ import org.springframework.web.util.UriComponentsBuilder;
 import java.net.URI;
 
 @RestController
-@RequestMapping("/api/v1/cars")
+@RequestMapping("/api/v1/groups")
 @RequiredArgsConstructor
-public class CarController {
+public class GroupController {
 
-    private final CarService carService;
+    private final GroupService groupService;
 
     @PostMapping
-    public ResponseEntity<CarDTO.Read> create(@AuthenticationPrincipal UserPrincipal principal,
-                                              @RequestBody @Valid CarDTO.Create request,
-                                              UriComponentsBuilder uriBuilder) {
-        CarDTO.Read created = carService.create(principal.getId(), request);
+    public ResponseEntity<GroupDTO.Read> create(@AuthenticationPrincipal UserPrincipal principal, @RequestBody @Valid GroupDTO.Create request, UriComponentsBuilder uriBuilder) {
+        GroupDTO.Read created = groupService.create(principal.getId(), request);
 
-        URI location = uriBuilder.path("/api/v1/cars/{id}")
+        URI location = uriBuilder.path("/api/v1/groups/{id}")
                 .buildAndExpand(created.id())
                 .toUri();
 

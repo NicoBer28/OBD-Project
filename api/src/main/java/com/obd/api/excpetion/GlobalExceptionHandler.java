@@ -12,6 +12,10 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import com.obd.api.auth.exception.EmailAlreadyInUseException;
+import com.obd.api.car.exception.CarNotFoundException;
+import com.obd.api.car.exception.LicensePlateAlreadyRegisteredException;
+import com.obd.api.car.exception.ModelNotFoundException;
+import com.obd.api.trip.exception.CarAlreadyOnATripException;
 
 import java.util.stream.Collectors;
 
@@ -33,6 +37,40 @@ public class GlobalExceptionHandler {
         var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
         p.setTitle("Conflict");
         p.setDetail("That email is already registered");
+        return p;
+    }
+
+    @ExceptionHandler(ModelNotFoundException.class)
+    public ProblemDetail modelNotFound(ModelNotFoundException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        p.setTitle("Not Found");
+        p.setDetail("No such car model");
+        return p;
+    }
+
+    @ExceptionHandler(LicensePlateAlreadyRegisteredException.class)
+    public ProblemDetail licensePlateTaken(LicensePlateAlreadyRegisteredException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        p.setTitle("Conflict");
+        p.setDetail("You already have a car with that licence plate");
+        return p;
+    }
+
+    @ExceptionHandler(CarNotFoundException.class)
+    public ProblemDetail carNotFound(CarNotFoundException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        p.setTitle("Not Found");
+        // Also the answer for a car that exists but belongs to someone else -
+        // see CarNotFoundException.
+        p.setDetail("No such car");
+        return p;
+    }
+
+    @ExceptionHandler(CarAlreadyOnATripException.class)
+    public ProblemDetail carAlreadyOnATrip(CarAlreadyOnATripException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        p.setTitle("Conflict");
+        p.setDetail("That car is already on a trip");
         return p;
     }
 
