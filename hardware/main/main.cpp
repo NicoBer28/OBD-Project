@@ -2,6 +2,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+#include "driver/spi_master.h"
+#include "esp_twai.h"
+#include "esp_twai_mcp2515.h"
 #include "esp_log.h"
 #include <string>
 #include <time.h>
