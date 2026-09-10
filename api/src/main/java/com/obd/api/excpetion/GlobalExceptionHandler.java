@@ -15,6 +15,7 @@ import com.obd.api.auth.exception.EmailAlreadyInUseException;
 import com.obd.api.car.exception.CarNotFoundException;
 import com.obd.api.car.exception.LicensePlateAlreadyRegisteredException;
 import com.obd.api.car.exception.ModelNotFoundException;
+import com.obd.api.model.exception.ModelAlreadyExistsException;
 import com.obd.api.trip.exception.CarAlreadyOnATripException;
 
 import java.util.stream.Collectors;
@@ -31,8 +32,8 @@ public class GlobalExceptionHandler {
         p.setDetail("Invalid email or password");
         return p;
     }
-    @ExceptionHandler(ModelNotFoundException.class)
-    public ProblemDetail modelExists(ModelNotFoundException e){
+    @ExceptionHandler(ModelAlreadyExistsException.class)
+    public ProblemDetail modelExists(ModelAlreadyExistsException e) {
         var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
         p.setTitle("Conflict");
         p.setDetail("That model already exists");

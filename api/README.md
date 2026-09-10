@@ -277,7 +277,7 @@ The car model catalog — what the create-car form lists, and where the
 `modelId` that `POST /cars` requires comes from. Requires
 `Authorization: Bearer <accessToken>`; any signed-in user may read it.
 
-**Response** `200 OK`, ordered by brand then model:
+**Response** `200 OK`, in insertion order (the seed first):
 
 ```json
 [
@@ -336,7 +336,7 @@ only ever read as a list — so there is nothing for one to point at.
 
 **Response:** the created model, same shape as one entry of `GET /models`.
 
-**Errors:** `403 Forbidden` for a non-admin account, `401 Unauthorized`
+**Errors:** `409 Conflict` if that brand/model is already in the catalog, `403 Forbidden` for a non-admin account, `401 Unauthorized`
 without a token.
 
 **Creating the first admin.** `register` always assigns `USER`, and no endpoint
@@ -737,13 +737,9 @@ What is missing, in what order to build it, and the endpoint roadmap live in
 - Whether `fuel_level` and `battery_level` are percentages or absolute units is
   undecided, so V2 constrains them to `>= 0` rather than `0..100`. Tighten in a
   later migration once the firmware settles what it reports.
-- `POST /api/v1/models` is not finished. Its handler takes the DTO without
-  `@RequestBody @Valid`, so Spring binds it from **query parameters** — a JSON
-  body is ignored and every field arrives null — and the size limits are never
-  checked. `ModelAlreadyExistsException` has no `@ExceptionHandler`, so a
-  duplicate `(brand, model)` is a `500` rather than a `409`. It also answers
-  `200` where the other creates answer `201`. The section above documents the
-  intended contract.
+- `POST /api/v1/models` answers `200` where the other creates answer `201`.
+  `GET /api/v1/models` is unordered (`findAll()`), so the catalog comes back in
+  insertion order rather than by brand.
 - `GET /api/v1/models` and `POST /api/v1/models` have no tests and no smoke
   checks yet.
 - `GET /api/v1/cars/{id}`, updating and deleting a car are not implemented.

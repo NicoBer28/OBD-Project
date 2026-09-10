@@ -21,7 +21,7 @@ public interface GroupMemberRepository extends JpaRepository<GroupMember, GroupM
     Optional<GroupMember> findByIdGroupIdAndIdUserId(UUID groupId, UUID userId);
 
     @Query("""
-        select new com.obd.api.group.dto.GroupDTO.Read(g.groupId, g.groupName, g.groupCreatedAt ,(select count(x) from GroupMember x where x.id.groupId = g.groupId), m.role)
+        select new com.obd.api.group.dto.GroupDTO$Read(g.groupId, g.groupName, g.groupCreatedAt ,(select count(x) from GroupMember x where x.id.groupId = g.groupId), m.role)
           from Group g, GroupMember m
          where m.id.groupId = g.groupId
            and m.id.userId = :userId

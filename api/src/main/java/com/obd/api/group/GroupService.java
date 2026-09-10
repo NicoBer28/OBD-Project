@@ -44,4 +44,6 @@ public class GroupService {
     public List<GroupDTO.Read> getGroups(UUID userId){
         return groupMemberRepository.findSummariesForUser(userId);
     }
+
+
 }

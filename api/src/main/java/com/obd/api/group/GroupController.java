@@ -35,5 +35,4 @@ public class GroupController {
         return groupService.getGroups(principal.getId());
     }
 
-    
 }
