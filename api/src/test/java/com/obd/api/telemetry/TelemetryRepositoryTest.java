@@ -3,7 +3,7 @@ package com.obd.api.telemetry;
 import com.obd.api.car.Car;
 import com.obd.api.car.CarRepository;
 import com.obd.api.car.Coordinates;
-import com.obd.api.car.ModelRepository;
+import com.obd.api.model.ModelRepository;
 import com.obd.api.support.RepositoryTest;
 import com.obd.api.trip.Trip;
 import com.obd.api.trip.TripRepository;

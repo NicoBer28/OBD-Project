@@ -1,6 +1,8 @@
 package com.obd.api.car;
 
 import com.obd.api.group.*;
+import com.obd.api.model.Model;
+import com.obd.api.model.ModelRepository;
 import com.obd.api.support.RepositoryTest;
 import com.obd.api.user.Role;
 import com.obd.api.user.User;

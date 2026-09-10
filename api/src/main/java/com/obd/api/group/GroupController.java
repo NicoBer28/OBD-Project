@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/groups")
@@ -28,4 +29,11 @@ public class GroupController {
 
         return ResponseEntity.created(location).body(created);
     }
+
+    @GetMapping
+    public List<GroupDTO.Read> groups(@AuthenticationPrincipal UserPrincipal principal){
+        return groupService.getGroups(principal.getId());
+    }
+
+    
 }

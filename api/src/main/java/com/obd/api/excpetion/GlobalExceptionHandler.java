@@ -31,6 +31,13 @@ public class GlobalExceptionHandler {
         p.setDetail("Invalid email or password");
         return p;
     }
+    @ExceptionHandler(ModelNotFoundException.class)
+    public ProblemDetail modelExists(ModelNotFoundException e){
+        var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        p.setTitle("Conflict");
+        p.setDetail("That model already exists");
+        return p;
+    }
 
     @ExceptionHandler(EmailAlreadyInUseException.class)
     public ProblemDetail emailTaken(EmailAlreadyInUseException e) {

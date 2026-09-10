@@ -1,7 +1,7 @@
 package com.obd.api.car.dto;
 
 import com.obd.api.car.Car;
-import com.obd.api.car.Model;
+import com.obd.api.model.Model;
 import jakarta.validation.constraints.*;
 
 import java.time.Instant;

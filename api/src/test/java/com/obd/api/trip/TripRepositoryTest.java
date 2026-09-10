@@ -2,7 +2,7 @@ package com.obd.api.trip;
 
 import com.obd.api.car.Car;
 import com.obd.api.car.CarRepository;
-import com.obd.api.car.ModelRepository;
+import com.obd.api.model.ModelRepository;
 import com.obd.api.support.RepositoryTest;
 import com.obd.api.user.Role;
 import com.obd.api.user.User;

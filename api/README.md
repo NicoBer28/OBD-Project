@@ -243,8 +243,9 @@ Plates are unique **per owner**, not globally: making them globally unique
 would let one account block another from registering a plate, and would leak
 whether a plate is already known to the system.
 
-The model catalog is seeded by `V2__cars_and_models.sql` with eight common
-models, so this endpoint is usable before a catalog admin UI exists.
+Model ids come from `GET /api/v1/models`. The catalog is seeded by
+`V2__cars_and_models.sql` with eight common models, so this endpoint is usable
+before an admin has added any.
 
 ---
 
@@ -267,6 +268,85 @@ own family twice, and would have been a second copy of the rule to keep in
 step. See `ROADMAP.md` §2.
 
 **Errors:** `401 Unauthorized` without a token.
+
+---
+
+### `GET /api/v1/models`
+
+The car model catalog — what the create-car form lists, and where the
+`modelId` that `POST /cars` requires comes from. Requires
+`Authorization: Bearer <accessToken>`; any signed-in user may read it.
+
+**Response** `200 OK`, ordered by brand then model:
+
+```json
+[
+  {
+    "modelId": "00000000-0000-4000-8000-000000000003",
+    "modelBrand": "Chevrolet",
+    "modelName": "Onix",
+    "modelProtocol": "ISO 15765-4 (CAN)"
+  },
+  {
+    "modelId": "00000000-0000-4000-8000-000000000001",
+    "modelBrand": "Volkswagen",
+    "modelName": "Gol",
+    "modelProtocol": "ISO 15765-4 (CAN)"
+  }
+]
+```
+
+Unpaged on purpose: the catalog is small and curated, not user-generated. The
+eight seeded models from `V2__cars_and_models.sql` are always present, with
+fixed ids, so the app is usable before anyone has added a model.
+
+**Errors:** `401 Unauthorized` without a token.
+
+---
+
+### `POST /api/v1/models`
+
+Adds a model to the catalog. **Admin-only**: requires an access token for an
+account whose system role is `ADMIN` (`@PreAuthorize("hasRole('ADMIN')")`).
+This is the account-level `Role`, unrelated to the `ADMIN` role inside a group.
+
+The catalog is curated rather than open because `POST /cars` refuses free-text
+brand/model precisely so the table cannot fill up with "VW" / "vw" /
+"Volkswagen" variants of the same car.
+
+**Body** (`application/json`):
+
+```json
+{
+  "modelBrand": "Renault",
+  "modelName": "Clio",
+  "modelProtocol": "ISO 15765-4 (CAN)"
+}
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `modelBrand` | yes | ≤ 60 chars |
+| `modelName` | yes | ≤ 60 chars |
+| `modelProtocol` | yes | ≤ 40 chars |
+
+`(brand, model)` is unique (`ux_models_brand_model`). No `Location` header is
+returned: a model has no canonical URL a client would fetch — the catalog is
+only ever read as a list — so there is nothing for one to point at.
+
+**Response:** the created model, same shape as one entry of `GET /models`.
+
+**Errors:** `403 Forbidden` for a non-admin account, `401 Unauthorized`
+without a token.
+
+**Creating the first admin.** `register` always assigns `USER`, and no endpoint
+promotes an account, so the first admin is made by hand:
+
+```sql
+update users set role = 'ADMIN' where email = 'you@example.com';
+```
+
+The change applies on the next login (the role is read into the token then).
 
 ---
 
@@ -313,6 +393,44 @@ so it must never be observable, not even after a crash between the two inserts.
 
 **Errors:** `400 Bad Request` if the name is blank or too long, `401
 Unauthorized` without a valid access token.
+
+---
+
+### `GET /api/v1/groups`
+
+Every group the caller belongs to. Requires
+`Authorization: Bearer <accessToken>`.
+
+**Response** `200 OK` — an array of the same objects `POST /groups` returns,
+ordered by name:
+
+```json
+[
+  {
+    "id": "e6c055de-e501-4e00-baf5-9cbc2d6722d2",
+    "name": "Familia Lazzari",
+    "createdAt": "2026-09-08T16:45:39.848482Z",
+    "memberCount": 3,
+    "callerRole": "ADMIN"
+  }
+]
+```
+
+`callerRole` is *this* caller's role in *that* group — the same person can be
+`ADMIN` of one group and `MEMBER` of another. `memberCount` is counted from
+`group_members` on every read, never stored.
+
+**One query.** The list is a single JPQL statement
+(`GroupMemberRepository.findSummariesForUser`) that joins the caller's
+memberships to their groups and builds the response objects directly, with the
+member count as a correlated subquery — so a user in N groups costs one
+round trip, not 1 + N. Empty for a user in no groups; never an error.
+
+There is deliberately no `GET /users/{id}/groups`: "my groups, from the token"
+is the same principal-not-body rule as everything else, and nothing yet needs
+to read someone else's list.
+
+**Errors:** `401 Unauthorized` without a valid access token.
 
 ---
 
@@ -586,8 +704,9 @@ What is missing, in what order to build it, and the endpoint roadmap live in
   nullable `cars.group_id` column and `Car.carGroup` maps it, but nothing writes
   it: the share/unshare endpoints and the widening of `CarAccess.readableBy` to
   group members are still to do (ROADMAP Phase 4).
-- Only group *creation* exists. Listing groups, adding/removing members and
-  changing roles are not implemented.
+- Groups can be created and listed. Reading one group, adding/removing
+  members, changing roles and invitations are not implemented.
+- `GET /api/v1/groups` has no tests and no smoke check yet.
 - `GroupMemberRepository.save()` is an upsert, not an insert: the composite id is
   assigned by us, so Spring Data cannot tell a new row from an existing one and
   merges. Adding a member who is already in the group would silently rewrite
@@ -618,6 +737,15 @@ What is missing, in what order to build it, and the endpoint roadmap live in
 - Whether `fuel_level` and `battery_level` are percentages or absolute units is
   undecided, so V2 constrains them to `>= 0` rather than `0..100`. Tighten in a
   later migration once the firmware settles what it reports.
+- `POST /api/v1/models` is not finished. Its handler takes the DTO without
+  `@RequestBody @Valid`, so Spring binds it from **query parameters** — a JSON
+  body is ignored and every field arrives null — and the size limits are never
+  checked. `ModelAlreadyExistsException` has no `@ExceptionHandler`, so a
+  duplicate `(brand, model)` is a `500` rather than a `409`. It also answers
+  `200` where the other creates answer `201`. The section above documents the
+  intended contract.
+- `GET /api/v1/models` and `POST /api/v1/models` have no tests and no smoke
+  checks yet.
 - `GET /api/v1/cars/{id}`, updating and deleting a car are not implemented.
   The `Location` header returned by create therefore points at a route that
   does not exist yet.

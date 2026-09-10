@@ -4,6 +4,8 @@ import com.obd.api.car.dto.CarDTO;
 import com.obd.api.car.exception.CarNotFoundException;
 import com.obd.api.car.exception.LicensePlateAlreadyRegisteredException;
 import com.obd.api.car.exception.ModelNotFoundException;
+import com.obd.api.model.Model;
+import com.obd.api.model.ModelRepository;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;

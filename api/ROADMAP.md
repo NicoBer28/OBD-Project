@@ -13,8 +13,8 @@ Last updated: 2026-09-10. Schema is at `V7__cars_group_id.sql`.
 | Area | Schema | Endpoints |
 |---|---|---|
 | Auth / users | `users`, refresh tokens | register, login, refresh, logout |
-| Cars | `cars` (now with `group_id`), `models` | `POST /cars`, `GET /cars` |
-| Groups | `groups`, `group_members` | `POST /groups` only |
+| Cars | `cars` (now with `group_id`), `models` | `POST /cars`, `GET /cars`, `GET /models`, `POST /models` (admin) |
+| Groups | `groups`, `group_members` | `POST /groups`, `GET /groups` |
 | Trips | `trips` | `POST /trips` (start) only |
 | Telemetry | `telemetry`, `cars.snapshot_at` | `POST /telemetry` (batch ingest), `GET /telemetry` (sync) |
 
@@ -249,9 +249,9 @@ largest unblock.
 | Endpoint | Notes |
 |---|---|
 | `GET /users/me` | `UserService`/`UserController` are empty stubs. Every app needs this on launch. |
-| `GET /models` | The create-car form cannot populate its dropdown without the catalog. Static, cacheable. |
+| ~~`GET /models`~~ **done** | Plus an admin-only `POST /models`, not in the original plan. See README limitations for what it still lacks. |
 | `GET /cars/{id}/trips/active` | The "who has the car right now" lookup. Derived from `ended_at is null`. 204 or `null` when idle — pick one and document it. |
-| `GET /groups` | Groups the caller belongs to, with `memberCount` and `callerRole`. |
+| ~~`GET /groups`~~ **done** | One JPQL query building the DTO directly; `memberCount` as a correlated subquery. |
 | `GET /groups/{id}` | Members list included, or a separate `/members` route. |
 | `GET /trips/{id}` | The route `POST /trips` advertises. |
 | `GET /trips` | The caller's history, paged, newest first. |

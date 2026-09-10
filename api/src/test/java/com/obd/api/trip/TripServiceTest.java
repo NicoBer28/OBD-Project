@@ -3,7 +3,7 @@ package com.obd.api.trip;
 import com.obd.api.car.Car;
 import com.obd.api.car.CarAccess;
 import com.obd.api.car.CarRepository;
-import com.obd.api.car.ModelRepository;
+import com.obd.api.model.ModelRepository;
 import com.obd.api.car.exception.CarNotFoundException;
 import com.obd.api.group.*;
 import com.obd.api.support.RepositoryTest;

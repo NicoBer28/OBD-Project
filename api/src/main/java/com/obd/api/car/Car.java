@@ -1,6 +1,7 @@
 package com.obd.api.car;
 
 import com.obd.api.group.Group;
+import com.obd.api.model.Model;
 import jakarta.persistence.*;
 import lombok.*;
 

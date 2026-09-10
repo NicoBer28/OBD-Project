@@ -1,4 +1,4 @@
-package com.obd.api.car;
+package com.obd.api.model;
 
 import jakarta.persistence.*;
 import lombok.*;

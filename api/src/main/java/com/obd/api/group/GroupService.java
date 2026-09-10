@@ -5,6 +5,7 @@ import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -37,5 +38,10 @@ public class GroupService {
         long memberCount = groupMemberRepository.countByIdGroupId(group.getGroupId());
 
         return GroupDTO.Read.from(group, memberCount, GroupRole.ADMIN);
+    }
+
+    @Transactional
+    public List<GroupDTO.Read> getGroups(UUID userId){
+        return groupMemberRepository.findSummariesForUser(userId);
     }
 }
