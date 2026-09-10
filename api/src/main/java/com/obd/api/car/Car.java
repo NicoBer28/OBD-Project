@@ -1,5 +1,6 @@
 package com.obd.api.car;
 
+import com.obd.api.group.Group;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -37,6 +38,18 @@ public class Car {
     @JoinColumn(name = "model_id", nullable = false)
     private Model carModel;
 
+    /**
+     * The group this car is shared with, or null - the common case. Not
+     * {@code optional = false}: that would make Hibernate reject every insert
+     * of an unshared car with "not-null property references a null value",
+     * which is every car at creation. LAZY like the model: reading a car
+     * wants the group's name, so it is an association, but it must be
+     * touched inside the service transaction.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "group_id")
+    private Group carGroup;
+
     @Column(nullable = false, name = "name")
     private String carName;
 
@@ -55,11 +68,9 @@ public class Car {
     @Column(name = "battery_level")
     private Integer carBatteryLevel;
 
-    @Column(name = "max_speed")
-    private Integer carMaxSpeed;
-
-    @Column(name = "avg_speed")
-    private Integer carAvgSpeed;
+    // No max/avg speed here: those are aggregates over telemetry, not a
+    // snapshot of anything, so they are computed on demand rather than stored.
+    // Dropped in V6__drop_car_speed_aggregates.sql.
 
     @Embedded
     private Coordinates carLocation;

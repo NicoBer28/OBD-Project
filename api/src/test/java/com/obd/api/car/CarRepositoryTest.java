@@ -13,6 +13,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import java.time.Instant;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -81,8 +82,6 @@ class CarRepositoryTest {
                         .latitude(-34.6037).longitude(-58.3816).build())
                 .carFuelLevel(70)
                 .carBatteryLevel(85)
-                .carMaxSpeed(130)
-                .carAvgSpeed(48)
                 .build());
 
         Car found = carRepository.findById(saved.getCarId()).orElseThrow();
@@ -93,8 +92,6 @@ class CarRepositoryTest {
         assertThat(found.getCarMileage()).isEqualTo(120_000);
         assertThat(found.getCarFuelLevel()).isEqualTo(70);
         assertThat(found.getCarBatteryLevel()).isEqualTo(85);
-        assertThat(found.getCarMaxSpeed()).isEqualTo(130);
-        assertThat(found.getCarAvgSpeed()).isEqualTo(48);
         assertThat(found.getCarLocation().getLatitude()).isEqualTo(-34.6037);
         assertThat(found.getCarLocation().getLongitude()).isEqualTo(-58.3816);
         assertThat(found.getCarCreatedAt()).isNotNull();
@@ -178,6 +175,83 @@ class CarRepositoryTest {
         // Enforced by ck_cars_mileage in the migration, not by the entity.
         assertThatThrownBy(() -> carRepository.saveAndFlush(aCar().carMileage(-1).build()))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    // --- refreshSnapshot: the compare-and-set behind telemetry ingestion -----
+
+    private static final Instant NOON = Instant.parse("2026-09-10T12:00:00Z");
+
+    private Car reload(UUID id) {
+        return carRepository.findById(id).orElseThrow();
+    }
+
+    @Test
+    void refreshSnapshotSetsTheFirstReadingOnACarThatNeverReported() {
+        UUID id = carRepository.saveAndFlush(aCar().build()).getCarId();
+
+        int moved = carRepository.refreshSnapshot(id, NOON, 70, 85, 120_500, -34.6, -58.3);
+
+        assertThat(moved).isEqualTo(1);
+        Car car = reload(id);
+        assertThat(car.getCarFuelLevel()).isEqualTo(70);
+        assertThat(car.getCarBatteryLevel()).isEqualTo(85);
+        assertThat(car.getCarMileage()).isEqualTo(120_500);
+        assertThat(car.getCarLocation().getLatitude()).isEqualTo(-34.6);
+        assertThat(car.getCarSnapshotAt()).isEqualTo(NOON);
+    }
+
+    @Test
+    void refreshSnapshotReplacesWithANewerReading() {
+        UUID id = carRepository.saveAndFlush(aCar().build()).getCarId();
+        carRepository.refreshSnapshot(id, NOON, 70, 85, 120_500, -34.6, -58.3);
+
+        int moved = carRepository.refreshSnapshot(id, NOON.plusSeconds(5), 69, 84, 120_501, -34.7, -58.4);
+
+        assertThat(moved).isEqualTo(1);
+        Car car = reload(id);
+        assertThat(car.getCarFuelLevel()).isEqualTo(69);
+        assertThat(car.getCarLocation().getLatitude()).isEqualTo(-34.7);
+        assertThat(car.getCarSnapshotAt()).isEqualTo(NOON.plusSeconds(5));
+    }
+
+    @Test
+    void refreshSnapshotIgnoresAnOlderReading() {
+        UUID id = carRepository.saveAndFlush(aCar().build()).getCarId();
+        carRepository.refreshSnapshot(id, NOON, 70, 85, 120_500, -34.6, -58.3);
+
+        // The one that matters: a late buffer flush must not roll the car back.
+        int moved = carRepository.refreshSnapshot(id, NOON.minusSeconds(3600), 90, 99, 120_000, 0.0, 0.0);
+
+        assertThat(moved).isZero();
+        Car car = reload(id);
+        assertThat(car.getCarFuelLevel()).isEqualTo(70);
+        assertThat(car.getCarLocation().getLatitude()).isEqualTo(-34.6);
+        assertThat(car.getCarSnapshotAt()).isEqualTo(NOON);
+    }
+
+    @Test
+    void refreshSnapshotIgnoresTheSameInstant() {
+        UUID id = carRepository.saveAndFlush(aCar().build()).getCarId();
+        carRepository.refreshSnapshot(id, NOON, 70, 85, 120_500, -34.6, -58.3);
+
+        // A retried batch: strictly newer or nothing, so a replay is a no-op.
+        assertThat(carRepository.refreshSnapshot(id, NOON, 70, 85, 120_500, -34.6, -58.3)).isZero();
+    }
+
+    @Test
+    void refreshSnapshotKeepsFieldsAPartialReadingLacks() {
+        UUID id = carRepository.saveAndFlush(aCar().build()).getCarId();
+        carRepository.refreshSnapshot(id, NOON, 70, 85, 120_500, -34.6, -58.3);
+
+        // A fuel-only frame, no GPS fix: the pin must not vanish from the map.
+        int moved = carRepository.refreshSnapshot(id, NOON.plusSeconds(5), 65, null, null, null, null);
+
+        assertThat(moved).isEqualTo(1);
+        Car car = reload(id);
+        assertThat(car.getCarFuelLevel()).isEqualTo(65);
+        assertThat(car.getCarBatteryLevel()).isEqualTo(85);
+        assertThat(car.getCarLocation().getLatitude()).isEqualTo(-34.6);
+        assertThat(car.getCarSnapshotAt()).isEqualTo(NOON.plusSeconds(5));
     }
 
     @Test

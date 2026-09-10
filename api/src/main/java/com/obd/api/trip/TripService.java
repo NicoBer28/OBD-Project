@@ -1,7 +1,7 @@
 package com.obd.api.trip;
 
 import com.obd.api.car.Car;
-import com.obd.api.car.CarRepository;
+import com.obd.api.car.CarAccess;
 import com.obd.api.car.exception.CarNotFoundException;
 import com.obd.api.trip.dto.TripDTO;
 import com.obd.api.trip.exception.CarAlreadyOnATripException;
@@ -17,7 +17,7 @@ import java.util.UUID;
 public class TripService {
 
     private final TripRepository tripRepository;
-    private final CarRepository carRepository;
+    private final CarAccess carAccess;
 
     /**
      * Starts a trip: records that {@code driverId} is now using the car, and
@@ -29,12 +29,10 @@ public class TripService {
      */
     @Transactional
     public TripDTO.Read start(UUID driverId, TripDTO.Create request) {
-        Car car = carRepository.findById(request.carId())
-                // Not-mine and not-there give the same answer on purpose: a 403
-                // for someone else's car would confirm that the id exists.
-                // Ownership is the whole rule only until cars can be shared with
-                // a group; that endpoint widens this check to group members.
-                .filter(c -> driverId.equals(c.getCarOwnerId()))
+        // Read-level access is what driving needs: once cars can be shared, a
+        // group member may start a trip without owning the car. CarAccess is
+        // where that rule lives and where it will change.
+        Car car = carAccess.readableBy(driverId, request.carId())
                 .orElseThrow(() -> new CarNotFoundException(request.carId()));
 
         // Checked here for the sake of a clear 409 rather than a 500 - the

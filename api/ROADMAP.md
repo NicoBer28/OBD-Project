@@ -4,7 +4,7 @@ What is missing, what to build next, and in what order. Companion to
 `README.md`, which documents what already **exists**; this file is about what
 does not.
 
-Last updated: 2026-09-09. Schema is at `V5__telemetry.sql`.
+Last updated: 2026-09-10. Schema is at `V7__cars_group_id.sql`.
 
 ---
 
@@ -13,13 +13,16 @@ Last updated: 2026-09-09. Schema is at `V5__telemetry.sql`.
 | Area | Schema | Endpoints |
 |---|---|---|
 | Auth / users | `users`, refresh tokens | register, login, refresh, logout |
-| Cars | `cars`, `models` | `POST /cars` only |
+| Cars | `cars` (now with `group_id`), `models` | `POST /cars` only |
 | Groups | `groups`, `group_members` | `POST /groups` only |
 | Trips | `trips` | `POST /trips` (start) only |
-| Telemetry | `telemetry`, `cars.snapshot_at` | **none** — the table exists, nothing writes to it |
+| Telemetry | `telemetry`, `cars.snapshot_at` | `POST /telemetry` (batch ingest), `GET /telemetry` (sync) |
 
-Four `POST`s and no `GET`s. Every `Location` header currently returned points at
+Five `POST`s and one `GET`. Every `Location` header currently returned points at
 a route that does not exist. That is the shape of the work below.
+
+`CarAccess` exists (owner-only) and both `TripService` and `TelemetryService`
+go through it.
 
 ---
 
@@ -51,7 +54,7 @@ Optional<Car> ownedBy(UUID userId, UUID carId);      // owner only: share, delet
 
 Eight hand-rolled copies of that predicate is exactly how one endpoint ends up
 quietly wrong. **Build the seam in Phase 1**, implemented as "owner only" —
-then Phase 3 changes one method instead of revisiting every endpoint.
+then Phase 4 changes one method instead of revisiting every endpoint.
 
 ### 3. A `devices` table — the dongle is unmodelled
 
@@ -144,7 +147,9 @@ most of what makes the API coherent.
 - Fuel expense = `initial_fuel - final_fuel`, computed on read.
 - `memberCount` is counted from `group_members`.
 - A car's current trip/driver is the row with `ended_at is null`.
-- `cars.max_speed`/`avg_speed` are aggregates over `telemetry`, not readings.
+- Max/avg speed are aggregates over `telemetry`, not readings — which is why
+  they are no longer columns on `cars` (`V6`). A snapshot column is a copy of
+  one reading; an aggregate is a copy of nothing.
 
 **Schema**
 - Migrations are immutable once run. Change = new `V{n}__*.sql`.
@@ -173,20 +178,72 @@ most of what makes the API coherent.
 
 ## Part 3 — Endpoint roadmap
 
-Ordered by what breaks while it is missing, not by what is easiest.
+Ordered by the cost of *not* having it yet — which is not the same as how
+urgent the feature is. Ingestion comes first because delay loses data
+permanently; everything after it only loses time.
 
-### Phase 1 — Reads. Nothing is visible without them.
+### Phase 1 — Close the hardware loop. Everything else can wait; data cannot.
 
-The app currently cannot render a single screen. Cheapest phase, largest
-unblock. **Introduce `CarAccess` here** (owner-only for now) so Phase 3 is a
-one-method change.
+Reads can be built at any time and lose nothing by being late. **Ingestion is
+different: every reading the device produces before this endpoint exists is
+gone for good.** That asymmetry is what puts it first — not that it is the most
+urgent feature, but that it is the only one with an unrecoverable cost for
+being late.
+
+Two more reasons it belongs here rather than late:
+
+- The whole snapshot on `cars` (`fuel_level`, `battery_level`, `mileage`,
+  position, `snapshot_at`) stays `null` forever until something writes it. Car
+  reads built before ingestion return a car with nothing in it, so the two are
+  worth building together.
+- It is the first time the full path — ESP32 → BLE → phone → API → Postgres —
+  runs end to end, across three subsystems and two people. Integration seams
+  get more expensive to discover the longer they go unexercised.
+
+Nothing blocks it. Ingestion needs `CarAccess` (introduced here) and the car's
+open trip (`POST /trips` already exists). It does **not** need the `devices`
+table: the phone is a logged-in client and relays with the user's own access
+token, so there is no device-credential problem to solve yet.
+
+**`CarAccess` is in place** (owner-only) — see `car/CarAccess.java` — so Phase 4
+is a one-method change instead of a sweep through every endpoint.
+
+| Endpoint | Notes |
+|---|---|
+| ~~`POST /telemetry`~~ **done** | Batch ingest; `carId` in the body rather than the path. Response is the summary in the README. |
+| ~~`GET /telemetry?carId=&since=&limit=`~~ **done** | Oldest-first from an exclusive cursor, `hasMore` + `nextSince`. The sync primitive from §5. |
+| `GET /cars` | The caller's cars, with the snapshot and `snapshot_at` so the client can show staleness. |
+| `GET /cars/{id}` | The route `POST /cars` already advertises in `Location`. |
+
+Ingestion algorithm, in order:
+1. Access check via `CarAccess`.
+2. Look up the car's open trip once per batch; stamp `trip_id` on readings whose
+   `recorded_at` falls inside it.
+3. Insert. A duplicate `(car_id, recorded_at)` is **success, not an error** —
+   that is what makes the relay's retries safe.
+4. Refresh the car's snapshot **only if** the newest `recorded_at` in the batch
+   is later than `cars.snapshot_at`, and set `snapshot_at` with it. Skipping
+   this check lets a late buffer flush overwrite fresh values with stale ones.
+5. Keep `raw_frame` verbatim, even for readings you could not decode.
+
+Traps:
+- Until sharing lands (Phase 4), `CarAccess` is owner-only, so **only the
+  owner's phone can relay**. A group member driving the car cannot upload. That
+  is acceptable temporarily, but note it in the README rather than discovering
+  it in the field.
+- A batch will routinely contain readings you already have. Decide the response
+  shape now: how many were stored versus already known, so the relay can trim
+  its buffer with confidence.
+
+### Phase 2 — The remaining reads. Nothing is visible without them.
+
+The app still cannot render a screen that is not about one car. Cheapest phase,
+largest unblock.
 
 | Endpoint | Notes |
 |---|---|
 | `GET /users/me` | `UserService`/`UserController` are empty stubs. Every app needs this on launch. |
 | `GET /models` | The create-car form cannot populate its dropdown without the catalog. Static, cacheable. |
-| `GET /cars` | The caller's cars. Include the snapshot + `snapshot_at` so the client can show staleness. |
-| `GET /cars/{id}` | The route `POST /cars` already advertises in `Location`. |
 | `GET /cars/{id}/trips/active` | The "who has the car right now" lookup. Derived from `ended_at is null`. 204 or `null` when idle — pick one and document it. |
 | `GET /groups` | Groups the caller belongs to, with `memberCount` and `callerRole`. |
 | `GET /groups/{id}` | Members list included, or a separate `/members` route. |
@@ -194,7 +251,7 @@ one-method change.
 | `GET /trips` | The caller's history, paged, newest first. |
 | `GET /cars/{id}/trips` | One car's history, paged. |
 
-### Phase 2 — Finish the trip lifecycle.
+### Phase 3 — Finish the trip lifecycle.
 
 Until this exists `fuelUsed` is always `null` and the expense feature is dead.
 
@@ -202,6 +259,7 @@ Until this exists `fuelUsed` is always `null` and the expense feature is dead.
 |---|---|
 | `POST /trips/{id}/finish` | Body: `finalFuel?`, `distance?`. Sets `ended_at` = server clock. |
 | `DELETE /trips/{id}` | Cancel a trip started by mistake. Only while active. |
+| `GET /trips/{id}/route` | Readings stamped with this trip, oldest first. Works on an active trip too. |
 
 Traps:
 - Only the **driver** may finish or cancel; the car's owner may not finish
@@ -212,14 +270,15 @@ Traps:
   car: Hibernate orders inserts ahead of updates within one flush, so a
   start-immediately-after-finish would collide with the trip it just closed.
   Pinned by `TripRepositoryTest.allowsANewTripOnceThePreviousOneIsFinished`.
-- Finishing a trip is a good moment to recompute the car's `mileage` and
-  `avg_speed`.
+- Finishing a trip is a good moment to bring the car's `mileage` up to date.
+  Speed figures are **not** stored — they are computed from `telemetry` in the
+  stats endpoint (Phase 6).
 
-### Phase 3 — Sharing. The product premise.
+### Phase 4 — Sharing. The product premise.
 
-Migration `V6`: `cars.group_id`. Then flip `CarAccess.readableBy` from
+`cars.group_id` already exists (`V7`) and `Car.carGroup` maps it. Flip `CarAccess.readableBy` from
 "owner" to "owner or member of the car's group" — and everything built in
-Phases 1–2 gains sharing for free. That is the payoff for building the seam
+Phases 1–3 gains sharing for free. That is the payoff for building the seam
 early.
 
 | Endpoint | Notes |
@@ -235,9 +294,9 @@ Traps:
 - Owner-only for share/unshare, member-level for read. Two different rules on
   the same resource — this is why §2 exposes two methods.
 
-### Phase 4 — Membership. Sharing with a one-person group is pointless.
+### Phase 5 — Membership. Sharing with a one-person group is pointless.
 
-Ships together with Phase 3 as one milestone.
+Ships together with Phase 4 as one milestone.
 
 | Endpoint | Notes |
 |---|---|
@@ -253,25 +312,6 @@ Traps:
   unadministrable and no endpoint can recover it.
 - The upsert trap from §4: check membership before writing it.
 - Removing a member who is mid-trip in a group car: same question as un-sharing.
-
-### Phase 5 — Telemetry. The hardware currently has nowhere to send data.
-
-| Endpoint | Notes |
-|---|---|
-| `POST /cars/{id}/telemetry` | Accepts an **array**. The phone relays in batches. |
-| `GET /cars/{id}/telemetry?since=&limit=` | History and incremental sync. |
-| `GET /trips/{id}/route` | Readings stamped with this trip, oldest first. |
-
-Ingestion algorithm, in order:
-1. Access check via `CarAccess`.
-2. Look up the car's open trip once per batch; stamp `trip_id` on readings whose
-   `recorded_at` falls inside it.
-3. Insert. A duplicate `(car_id, recorded_at)` is **success, not an error** —
-   that is what makes retries safe.
-4. Refresh the car's snapshot **only if** the newest `recorded_at` in the batch
-   is later than `cars.snapshot_at`, and set `snapshot_at` with it. Skipping
-   this check lets a late buffer flush overwrite fresh values with stale ones.
-5. Keep `raw_frame` verbatim, even for readings you could not decode.
 
 ### Phase 6 — Aggregates. The payoff.
 
@@ -307,8 +347,110 @@ headers stay correct once a reverse proxy terminates TLS.
 
 ---
 
+## Part 4 — Implementation note: the snapshot guard
+
+Step 4 of the ingestion algorithm is the one part of Phase 1 that is easy to
+write incorrectly in a way that tests written afterwards will not catch. Worth
+settling before the endpoint is started.
+
+### The comparison belongs in the `WHERE`, not in Java
+
+The obvious version reads the car, compares, then writes:
+
+```java
+if (car.getCarSnapshotAt() == null || newest.isAfter(car.getCarSnapshotAt())) {
+    car.setCarFuelLevel(...);
+    car.setCarSnapshotAt(newest);
+}
+```
+
+That is a lost update. Two batches arriving at once both read `snapshot_at =
+T0`, both conclude they are newer, and whichever commits last wins — which may
+be the older one. The snapshot goes backwards, which is precisely what the
+guard exists to prevent.
+
+One atomic statement instead:
+
+```java
+@Modifying(flushAutomatically = true, clearAutomatically = true)
+@Query("""
+        update Car c
+           set c.carFuelLevel    = coalesce(:fuelLevel,    c.carFuelLevel),
+               c.carBatteryLevel = coalesce(:batteryLevel, c.carBatteryLevel),
+               c.carMileage      = coalesce(:mileage,      c.carMileage),
+               c.carLocation.latitude  = coalesce(:latitude,  c.carLocation.latitude),
+               c.carLocation.longitude = coalesce(:longitude, c.carLocation.longitude),
+               c.carSnapshotAt   = :recordedAt
+         where c.carId = :carId
+           and (c.carSnapshotAt is null or c.carSnapshotAt < :recordedAt)
+        """)
+int refreshSnapshot(UUID carId, Instant recordedAt, Integer fuelLevel, ...);
+```
+
+This is the same compare-and-set already used in `RefreshTokenService` to
+revoke a token family, so it is not a new idea in this codebase.
+
+Why each piece:
+
+- **`where snapshot_at < :recordedAt`** — a late batch updates 0 rows, and that
+  is the correct outcome, not an error. The returned `int` distinguishes the
+  two cases: useful for logging, and it is what the tests assert on.
+- **`coalesce(:x, c.x)`** — a partial reading (fuel but no GPS fix) must not
+  blank the last known position. The cost is that `snapshot_at` then means "as
+  of, for the fields this reading carried"; the position may be older. The
+  alternative — overwriting with nulls — makes `snapshot_at` exact for every
+  column but makes the map pin blink every time a fuel-only frame arrives.
+  Prefer `coalesce`, and say so in the README.
+- **`@Modifying` with flush/clear** — a JPQL update bypasses the persistence
+  context. Without those flags a `Car` loaded earlier in the same transaction
+  shadows the update with stale state.
+
+**Where it runs:** inside the same `@Transactional` as the batch inserts, after
+them. One transaction, so a failed insert leaves the snapshot where it was.
+
+**Which reading:** the one with the greatest `recorded_at` **in the batch, in
+memory**. Never `select max(recorded_at) from telemetry where car_id = ...` —
+that re-reads the largest table in the database to find something already in
+hand.
+
+**Refinement worth taking:** the newest reading does not necessarily carry every
+field. If it has `fuel_level = null` but an older reading in the same batch has
+one, `coalesce` keeps the old *database* value and discards the batch's. Fold
+the batch first — build one effective reading, taking each field from the newest
+reading that carries it, and pass that. Ten lines, and it stops you throwing
+away data you were just handed.
+
+**Optional:** `greatest(...)` on `mileage` so an odometer never goes backwards.
+Deliberately not doing this is also defensible — a reversing odometer is a data
+quality signal you may prefer to see rather than silently smooth over.
+
+### Tests (repository lane, real Postgres)
+
+| Case | Expected |
+|---|---|
+| First ever reading (`snapshot_at` null) | 1 row, values set |
+| Newer reading | 1 row, values replaced, `snapshot_at` advances |
+| **Older reading** | **0 rows, nothing changes** ← the one that matters |
+| Identical timestamp (a retry) | 0 rows |
+| Partial reading | fuel updated, previous position intact |
+
+### Two alternatives, and why not
+
+**`SELECT ... FOR UPDATE` then write.** Correct, but takes a row lock on `cars`
+for every batch from every car, serialising ingestion behind a lock to achieve
+what a conditional `UPDATE` does without one.
+
+**A trigger on insert into `telemetry`.** Tempting, because it cannot be
+forgotten. But it fires per row rather than per batch, and it hides a write to
+`cars` inside an insert into another table — six months from now, wondering why
+a car changed, the trigger is the last place anyone looks. Application code, in
+one place (`TelemetryService`), is easier to reason about.
+
+---
+
 ## Suggested next step
 
-Phase 1, starting with `GET /users/me` and `GET /models` — the two smallest,
-each unblocking a screen — then `GET /cars` with the `CarAccess` seam in place
-from the first commit.
+Phase 1: telemetry is done in both directions. What remains of the phase is
+`GET /cars` + `GET /cars/{id}`, to see the snapshot ingestion maintains — and
+those need `CarDTO.Read` to gain `snapshotAt` and, now that `Car.carGroup`
+exists, the group's id and name.

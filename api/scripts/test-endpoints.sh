@@ -343,4 +343,175 @@ echo "ok: driver is still $CAR_USER_ID"
 echo "$SPOOF_TRIP" | grep -q '"initialFuel"[[:space:]]*:[[:space:]]*null' \
   || fail "expected initialFuel to be null when neither the client nor the car has a reading"
 
+# --- Telemetry --------------------------------------------------------------
+TELEMETRY="$BASE_URL/api/v1/telemetry"
+
+# ISO-8601 UTC timestamp $1 seconds in the past (BSD date first, then GNU).
+iso_ago() {
+  local t=$(( $(date +%s) - $1 ))
+  date -u -r "$t" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$t" +%Y-%m-%dT%H:%M:%SZ
+}
+# Asserts that JSON body $1 has field $2 with unquoted value $3 (number/bool/null).
+expect_json() {
+  echo "$1" | grep -q "\"$2\"[[:space:]]*:[[:space:]]*$3" \
+    || fail "expected \"$2\": $3 in: $1"
+}
+
+# A car with no trip yet, owned by Carl, so the trip-stamping check below
+# starts from a known state.
+TCAR=$(curl -sS -X POST "$CARS" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"name\":\"Telemetry car\",\"modelId\":\"$MODEL_GOL\"}")
+TCAR_ID=$(extract_field "$TCAR" id)
+[ -n "$TCAR_ID" ] || fail "could not create a car for the telemetry checks"
+
+T30=$(iso_ago 30); T25=$(iso_ago 25); T20=$(iso_ago 20)
+BATCH="{\"carId\":\"$TCAR_ID\",\"readings\":[
+  {\"recordedAt\":\"$T30\",\"latitude\":-34.6037,\"longitude\":-58.3816,\"speed\":40,\"fuelLevel\":70,\"batteryLevel\":85,\"mileage\":120000,\"raw\":{\"pids\":{\"04\":\"5020\"}}},
+  {\"recordedAt\":\"$T25\",\"speed\":55,\"fuelLevel\":69,\"raw\":\"01045020\"},
+  {\"recordedAt\":\"$T20\",\"latitude\":-34.6100,\"longitude\":-58.3900,\"speed\":60,\"fuelLevel\":68}
+]}"
+
+line "30. Ingest a batch of 3 readings, no trip open (expect 200)"
+ING1=$(curl -sS -X POST "$TELEMETRY" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" -d "$BATCH")
+print_json "$ING1"
+expect_json "$ING1" stored 3
+expect_json "$ING1" duplicates 0
+# No trip is open on this car - the signal the app uses to prompt "start one?".
+expect_json "$ING1" tripId null
+expect_json "$ING1" snapshotUpdated true
+[ "$(extract_field "$ING1" latestRecordedAt)" = "$T20" ] \
+  || fail "latestRecordedAt should be the newest reading in the batch ($T20)"
+
+line "31. Re-send the same batch (expect 200, all duplicates, snapshot untouched)"
+ING2=$(curl -sS -X POST "$TELEMETRY" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" -d "$BATCH")
+print_json "$ING2"
+expect_json "$ING2" stored 0
+expect_json "$ING2" duplicates 3
+expect_json "$ING2" snapshotUpdated false
+
+line "32. The snapshot is real: a trip started with no reading inherits the car's fuel"
+# POST /trips falls back to cars.fuel_level when initialFuel is omitted, so
+# this reads the snapshot back through an existing endpoint - end to end,
+# with no database access from the script.
+TRIP2=$(curl -sS -X POST "$TRIPS" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"carId\":\"$TCAR_ID\"}")
+print_json "$TRIP2"
+expect_json "$TRIP2" initialFuel 68
+TRIP2_ID=$(extract_field "$TRIP2" id)
+[ -n "$TRIP2_ID" ] || fail "no id in the trip started for the telemetry check"
+
+line "33. Readings taken during the trip are stamped with it (expect tripId set)"
+sleep 1   # so the reading's second is strictly after the trip's start
+T0=$(iso_ago 0)
+ING3=$(curl -sS -X POST "$TELEMETRY" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"carId\":\"$TCAR_ID\",\"readings\":[{\"recordedAt\":\"$T0\",\"speed\":80,\"fuelLevel\":67}]}")
+print_json "$ING3"
+expect_json "$ING3" stored 1
+[ "$(extract_field "$ING3" tripId)" = "$TRIP2_ID" ] \
+  || fail "expected the reading to be stamped with trip $TRIP2_ID"
+expect_json "$ING3" snapshotUpdated true
+
+line "34. An hour-old reading is stored but does not roll the snapshot back"
+OLD=$(iso_ago 3600)
+ING4=$(curl -sS -X POST "$TELEMETRY" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"carId\":\"$TCAR_ID\",\"readings\":[{\"recordedAt\":\"$OLD\",\"fuelLevel\":95}]}")
+print_json "$ING4"
+expect_json "$ING4" stored 1
+expect_json "$ING4" snapshotUpdated false
+# ...and it predates the trip, so it must not be attributed to it either.
+expect_json "$ING4" tripId "\"$TRIP2_ID\""
+
+line "35. Ingest for someone else's car (expect 404, not 403)"
+T_FOREIGN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TELEMETRY" \
+  -H "Authorization: Bearer $OTHER_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"carId\":\"$TCAR_ID\",\"readings\":[{\"recordedAt\":\"$T0\",\"speed\":1}]}")
+echo "status: $T_FOREIGN"
+[ "$T_FOREIGN" = "404" ] || fail "expected 404 for another owner's car, got $T_FOREIGN"
+
+line "36. Invalid batch: bad latitude, half a position, future timestamp (expect 400)"
+T_BAD_BODY=$(curl -sS -X POST "$TELEMETRY" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"carId\":\"$TCAR_ID\",\"readings\":[
+        {\"recordedAt\":\"$T0\",\"latitude\":91,\"longitude\":0},
+        {\"recordedAt\":\"$T0\",\"latitude\":-34.6},
+        {\"recordedAt\":\"2099-01-01T00:00:00Z\"}]}")
+print_json "$T_BAD_BODY"
+echo "$T_BAD_BODY" | grep -q '"readings\[0\].latitude"'        || fail "expected an error on readings[0].latitude"
+echo "$T_BAD_BODY" | grep -q '"readings\[1\].positionComplete"' || fail "expected an error on readings[1].positionComplete"
+echo "$T_BAD_BODY" | grep -q '"readings\[2\].notFromTheFuture"' || fail "expected an error on readings[2].notFromTheFuture"
+
+line "37. Ingest without a token (expect 401)"
+T_NOAUTH=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TELEMETRY" \
+  -H "Content-Type: application/json" -d "$BATCH")
+echo "status: $T_NOAUTH"
+[ "$T_NOAUTH" = "401" ] || fail "expected 401 without a token, got $T_NOAUTH"
+
+# --- Telemetry history (sync) -----------------------------------------------
+# The car above now holds five readings; oldest first they are:
+#   OLD (an hour ago), T30, T25, T20, T0.
+count_readings() { echo "$1" | grep -o '"recordedAt"' | wc -l | tr -d ' '; }
+
+line "38. History from scratch, limit 2 (expect the two oldest, hasMore)"
+H1=$(curl -sS -G "$TELEMETRY" -H "Authorization: Bearer $CAR_TOKEN" \
+  --data-urlencode "carId=$TCAR_ID" --data-urlencode "limit=2")
+print_json "$H1"
+[ "$(count_readings "$H1")" = "2" ] || fail "expected 2 readings on the first page"
+expect_json "$H1" hasMore true
+[ "$(extract_field "$H1" nextSince)" = "$T30" ] || fail "expected nextSince=$T30"
+# Oldest first - the hour-old reading leads, even though it was uploaded last.
+echo "$H1" | grep -q "\"recordedAt\":\"$OLD\"" || fail "expected the hour-old reading first"
+# The raw frame comes back as JSON, not as a string containing JSON. Postgres
+# re-serialises jsonb with its own spacing, so match loosely.
+echo "$H1" | grep -Eq '"raw":\{"pids":[[:space:]]*\{"04":[[:space:]]*"5020"\}\}' \
+  || fail "expected raw to be emitted as an object"
+
+line "39. Continue from nextSince (expect the next two, hasMore)"
+H2=$(curl -sS -G "$TELEMETRY" -H "Authorization: Bearer $CAR_TOKEN" \
+  --data-urlencode "carId=$TCAR_ID" --data-urlencode "since=$T30" --data-urlencode "limit=2")
+print_json "$H2"
+[ "$(count_readings "$H2")" = "2" ] || fail "expected 2 readings on the second page"
+# Strictly after the cursor: T30 itself must not appear again.
+echo "$H2" | grep -q "\"recordedAt\":\"$T30\"" && fail "the cursor row must not be repeated"
+expect_json "$H2" hasMore true
+[ "$(extract_field "$H2" nextSince)" = "$T20" ] || fail "expected nextSince=$T20"
+
+line "40. Last page (expect one reading, stamped with the trip, hasMore false)"
+H3=$(curl -sS -G "$TELEMETRY" -H "Authorization: Bearer $CAR_TOKEN" \
+  --data-urlencode "carId=$TCAR_ID" --data-urlencode "since=$T20" --data-urlencode "limit=2")
+print_json "$H3"
+[ "$(count_readings "$H3")" = "1" ] || fail "expected 1 reading on the last page"
+expect_json "$H3" hasMore false
+echo "$H3" | grep -q "\"tripId\":\"$TRIP2_ID\"" || fail "expected the on-trip reading to carry $TRIP2_ID"
+
+line "41. Already up to date (expect an empty page that keeps the cursor)"
+H4=$(curl -sS -G "$TELEMETRY" -H "Authorization: Bearer $CAR_TOKEN" \
+  --data-urlencode "carId=$TCAR_ID" --data-urlencode "since=$T0")
+print_json "$H4"
+[ "$(count_readings "$H4")" = "0" ] || fail "expected no readings after the newest"
+expect_json "$H4" hasMore false
+[ "$(extract_field "$H4" nextSince)" = "$T0" ] || fail "an empty page must hand the cursor back"
+
+line "42. Bad query: limit 0, then an unparseable since (expect 400, not 500)"
+H_LIM=$(curl -sS -o /dev/null -w '%{http_code}' -G "$TELEMETRY" -H "Authorization: Bearer $CAR_TOKEN" \
+  --data-urlencode "carId=$TCAR_ID" --data-urlencode "limit=0")
+H_SINCE=$(curl -sS -o /dev/null -w '%{http_code}' -G "$TELEMETRY" -H "Authorization: Bearer $CAR_TOKEN" \
+  --data-urlencode "carId=$TCAR_ID" --data-urlencode "since=yesterday")
+echo "limit=0: $H_LIM   since=yesterday: $H_SINCE"
+[ "$H_LIM" = "400" ]   || fail "expected 400 for limit=0, got $H_LIM"
+[ "$H_SINCE" = "400" ] || fail "expected 400 for since=yesterday, got $H_SINCE"
+
+line "43. History of someone else's car (expect 404), and without a token (expect 401)"
+H_FOREIGN=$(curl -sS -o /dev/null -w '%{http_code}' -G "$TELEMETRY" -H "Authorization: Bearer $OTHER_TOKEN" \
+  --data-urlencode "carId=$TCAR_ID")
+H_NOAUTH=$(curl -sS -o /dev/null -w '%{http_code}' -G "$TELEMETRY" --data-urlencode "carId=$TCAR_ID")
+echo "foreign: $H_FOREIGN   no token: $H_NOAUTH"
+[ "$H_FOREIGN" = "404" ] || fail "expected 404 for another owner's car, got $H_FOREIGN"
+[ "$H_NOAUTH" = "401" ]  || fail "expected 401 without a token, got $H_NOAUTH"
+
 line "All checks passed"

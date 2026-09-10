@@ -150,6 +150,42 @@ class TelemetryRepositoryTest {
     }
 
     @Test
+    void insertIgnoringDuplicatesStoresAReadingExactlyOnce() {
+        int first = telemetryRepository.insertIgnoringDuplicates(
+                carId, null, noon, -34.6, -58.3, 60, 70, 85, 120_000, null);
+        int again = telemetryRepository.insertIgnoringDuplicates(
+                carId, null, noon, -34.6, -58.3, 60, 70, 85, 120_000, null);
+
+        // 1 then 0, and crucially no exception: this is how a batch survives
+        // its own duplicates without aborting the transaction.
+        assertThat(first).isEqualTo(1);
+        assertThat(again).isZero();
+        assertThat(telemetryRepository.count()).isEqualTo(1);
+        // The database clock filled in received_at.
+        assertThat(telemetryRepository.findFirstByTelemetryCarIdOrderByTelemetryRecordedAtDesc(carId))
+                .get().extracting(Telemetry::getTelemetryReceivedAt).isNotNull();
+    }
+
+    @Test
+    void insertIgnoringDuplicatesStoresAnyJsonAsTheRawFrame() {
+        // An object, and a bare string - both are valid jsonb, and the firmware
+        // currently sends the latter.
+        telemetryRepository.insertIgnoringDuplicates(
+                carId, null, noon, null, null, null, null, null, null,
+                "{\"pids\": {\"04\": \"5020\"}}");
+        telemetryRepository.insertIgnoringDuplicates(
+                carId, null, noon.plusSeconds(5), null, null, null, null, null, null,
+                "\"01045020\"");
+
+        var history = telemetryRepository
+                .findByTelemetryCarIdOrderByTelemetryRecordedAtDesc(carId, PageRequest.of(0, 10));
+        assertThat(history).extracting(Telemetry::getTelemetryRawFrame)
+                .satisfiesExactly(
+                        s -> assertThat(s).contains("01045020"),
+                        s -> assertThat(s).contains("5020"));
+    }
+
+    @Test
     void refusesTheSameReadingTwiceForOneCar() {
         telemetryRepository.saveAndFlush(aReading(noon).build());
 

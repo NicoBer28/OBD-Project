@@ -46,8 +46,14 @@ whatever it is unsure about. Hence:
 | `bigint` primary key | The only table that is not `uuid`. This one grows without bound, and a reading is addressed as "this car, at this instant", never by id. |
 | `cars.snapshot_at` | Says which reading the cached snapshot on `cars` came from, so a late upload cannot overwrite fresher values with stale ones. |
 
-Note `telemetry.speed` is singular: `cars.max_speed` and `cars.avg_speed` are
-aggregates over many readings, not measurements, and are derivable from here.
+Note `telemetry.speed` is singular. `cars` originally carried `max_speed` and
+`avg_speed`; `V6__drop_car_speed_aggregates.sql` removes them. The rest of the
+snapshot is a *copy of one reading* — `snapshot_at` names which — so it can be
+stale but never ambiguous. A max or an average is a copy of nothing: it is an
+aggregate over many rows, and storing it would mean recomputing on every
+reading or letting it drift silently, the same trap as storing fuel consumption
+next to the two readings it comes from. They are `max(speed)`/`avg(speed)` over
+`telemetry`, filtered by car or by `trip_id`, and belong in the stats endpoint.
 
 ## Running
 
@@ -217,8 +223,6 @@ client cannot create a car in someone else's name.
   "mileage": 120000,
   "fuelLevel": null,
   "batteryLevel": null,
-  "maxSpeed": null,
-  "avgSpeed": null,
   "latitude": null,
   "longitude": null
 }
@@ -347,6 +351,154 @@ that an id is real; `409 Conflict` if the car is already on a trip; `400 Bad
 Request` with a per-field error map if validation fails; `401 Unauthorized`
 without a valid access token.
 
+---
+
+### `POST /api/v1/telemetry`
+
+Stores a batch of readings for one car and brings the car's cached snapshot up
+to date. Requires `Authorization: Bearer <accessToken>`.
+
+The phone is the relay (the ESP32 speaks only BLE), so it uploads whatever the
+dongle sent since the last upload — batched, possibly late, possibly a repeat of
+something it was unsure about. The endpoint is shaped for that: **retrying a
+batch is always safe.**
+
+**Body** (`application/json`):
+
+```json
+{
+  "carId": "2d14dd55-c2c8-4b5a-aae8-b1c93a632cfc",
+  "readings": [
+    {
+      "recordedAt": "2026-09-10T14:56:13Z",
+      "latitude": -34.6037, "longitude": -58.3816,
+      "speed": 40, "fuelLevel": 70, "batteryLevel": 85, "mileage": 120000,
+      "raw": {"pids": {"04": "5020"}}
+    },
+    {"recordedAt": "2026-09-10T14:56:18Z", "speed": 55, "fuelLevel": 69, "raw": "01045020"}
+  ]
+}
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `carId` | yes | one car per batch |
+| `readings` | yes | 1–500 entries |
+| `readings[].recordedAt` | yes | when the reading was **taken** (device time), not uploaded; at most 5 minutes in the future |
+| `readings[].latitude` / `longitude` | no | both or neither; valid WGS-84 ranges |
+| `readings[].speed`, `fuelLevel`, `batteryLevel`, `mileage` | no | ≥ 0 each |
+| `readings[].raw` | no | any JSON — the frame as the device sent it, kept verbatim |
+
+The uploader is taken from the access token. The car must be one the caller
+may read (its owner, until sharing exists).
+
+**Response** `200 OK`:
+
+```json
+{
+  "carId": "2d14dd55-c2c8-4b5a-aae8-b1c93a632cfc",
+  "stored": 3,
+  "duplicates": 0,
+  "tripId": null,
+  "snapshotUpdated": true,
+  "latestRecordedAt": "2026-09-10T14:56:24Z"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `stored` / `duplicates` | How many were new versus already in the database. Both are success — a retry that finds its readings present has done its job. Use them to trim the buffer. |
+| `tripId` | The car's open trip, or `null` if the car is reporting with no trip open — the cue to prompt the driver to start one. |
+| `snapshotUpdated` | Whether the car's cached state moved. `false` means the whole batch was older than what the car already knew: nothing to redraw. |
+| `latestRecordedAt` | The newest `recordedAt` in the batch — the client's sync cursor. |
+
+`200` rather than `201`: a batch that turns out to be all duplicates creates
+nothing, and there is no single resource for a `Location` header to point at.
+The readings are not echoed back; the client already has them.
+
+**What happens to each reading.** It is inserted with
+`on conflict (car_id, recorded_at) do nothing` — a duplicate is skipped, not an
+error. (Saving each and catching the duplicate-key exception would not work:
+Postgres aborts the transaction on the first violation and every statement
+after it fails, so a batch would lose everything past its first duplicate.) If
+the car has an open trip, readings taken **after the trip started** are stamped
+with it; a late-flushed reading from before the driver pressed "start" is
+history from when the car was parked, not part of the trip.
+
+**What happens to the car.** The batch is folded into one effective reading —
+each field from the newest reading that carries it — and the snapshot on
+`cars` is refreshed with a single conditional `UPDATE ... where snapshot_at is
+null or snapshot_at < :recordedAt`. The comparison is in the `WHERE` clause on
+purpose: read-compare-write in Java would be a lost update between two
+concurrent batches. Fields the batch did not carry keep their previous value
+(`coalesce`), so a fuel-only frame does not blank the last known position. See
+`ROADMAP.md` Part 4 for the full reasoning.
+
+**Errors:** `400 Bad Request` rejects the **whole batch**, with errors keyed by
+index (`readings[2].positionComplete`, `readings[3].notFromTheFuture`) — a
+malformed reading is a serialiser bug on the phone, and half-applying a batch
+would leave its buffer state unknowable. `404 Not Found` if the car does not
+exist or is not the caller's. `401 Unauthorized` without a token. There is
+deliberately no `409`: unlike a duplicate trip start, a duplicate reading is the
+normal retry path.
+
+---
+
+### `GET /api/v1/telemetry`
+
+One page of a car's readings after a cursor, oldest first. Shaped for
+incremental sync: the client stores `nextSince` and keeps calling while
+`hasMore` is true. Requires `Authorization: Bearer <accessToken>`.
+
+| Query param | Required | Notes |
+|---|---|---|
+| `carId` | yes | must be a car the caller may read |
+| `since` | no | ISO-8601 instant; returns readings recorded **strictly after** it. Absent means from the beginning. |
+| `limit` | no | 1–500, default 100 |
+
+**Response** `200 OK`:
+
+```json
+{
+  "carId": "40a8379c-75d0-46af-997f-01509cc23dd6",
+  "readings": [
+    {
+      "tripId": null,
+      "recordedAt": "2026-09-10T17:37:52Z",
+      "receivedAt": "2026-09-10T17:38:26.388044Z",
+      "latitude": -34.6037, "longitude": -58.3816,
+      "speed": 40, "fuelLevel": 70, "batteryLevel": 85, "mileage": 120000,
+      "raw": {"pids": {"04": "5020"}}
+    }
+  ],
+  "nextSince": "2026-09-10T17:37:52Z",
+  "hasMore": true
+}
+```
+
+`since` is exclusive because the client passes back a value it was given —
+`nextSince` from the last page, or `latestRecordedAt` from an ingest — and
+already holds that row. `nextSince` is the last reading's `recordedAt`, or the
+cursor you passed in when the page is empty, so it can always be stored
+unconditionally. `hasMore` comes from fetching one row past the limit, which
+spares both a final empty round trip and a count over the largest table.
+
+**Oldest first, on purpose.** Newest-first with a limit is what a display
+wants, but it cannot be paged forward correctly: whatever fell between the
+newest N and the cursor is silently skipped. Ascending with an exclusive cursor
+walks the whole series with no gaps and no repeats — the client has a local
+cache, so it syncs everything and sorts locally.
+
+The query is a single range scan on `ux_telemetry_car_recorded_at` from the
+cursor forward, so it costs the same on a car with a million readings as on one
+with ten. `raw` is emitted as the JSON that was stored, not as a string
+containing JSON.
+
+**Errors:** `400 Bad Request` for a missing `carId`, a `limit` outside 1–500,
+or a `since` that does not parse — the parameters bind to a record so a type
+error is a field error, not a `500`. `404 Not Found` if the car does not exist
+or is not the caller's. `401 Unauthorized` without a token.
+
 ## Auth flow at a glance
 
 1. `register`/`login` → access token (body) + refresh token (cookie), same
@@ -405,9 +557,10 @@ TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
 What is missing, in what order to build it, and the endpoint roadmap live in
 [`ROADMAP.md`](ROADMAP.md). This list is the short version.
 
-- Cars cannot yet be shared with a group. `groups` now exists, but `cars` still
-  has no `group_id` column - it arrives with the share/unshare endpoints, so the
-  migration lands together with the code that uses it.
+- Cars cannot yet be shared with a group. `V7__cars_group_id.sql` adds the
+  nullable `cars.group_id` column and `Car.carGroup` maps it, but nothing writes
+  it: the share/unshare endpoints and the widening of `CarAccess.readableBy` to
+  group members are still to do (ROADMAP Phase 4).
 - Only group *creation* exists. Listing groups, adding/removing members and
   changing roles are not implemented.
 - `GroupMemberRepository.save()` is an upsert, not an insert: the composite id is
@@ -415,19 +568,20 @@ What is missing, in what order to build it, and the endpoint roadmap live in
   merges. Adding a member who is already in the group would silently rewrite
   their role. The add-member endpoint must check membership first - see
   `GroupRepositoryTest.savingAnExistingMembershipSilentlyChangesTheRole`.
-- `telemetry` has no endpoints at all yet — the table, entity and repository
-  exist, nothing writes to it. Ingestion is the next piece: insert the reading,
-  stamp the car's open trip on it, and refresh the car's snapshot **only if**
-  `recorded_at` is newer than `cars.snapshot_at`.
+- Telemetry history is only readable oldest-first from a cursor. A
+  newest-first view for display (`order=desc`) is not implemented; the client is
+  expected to sync into its local cache and sort there.
 - Telemetry grows without bound and nothing prunes it. At real volume this wants
   a retention window or monthly partitioning; neither is worth building before
   there is a device actually reporting.
 - Only *starting* a trip exists. Finishing one, the active-trip lookup, trip
   history per car and per user, and the aggregated fuel expense per user are not
   implemented.
-- Only the car's **owner** may start a trip on it. Once a car can be shared with
-  a group, that check widens to the group's members - it is a single `filter` in
-  `TripService.start`.
+- Only the car's **owner** may start a trip on it or upload telemetry for it.
+  In practice: only the owner's phone can relay readings, so a group member
+  driving the car cannot upload. Once cars can be shared, the rule widens to
+  group members in one place - `CarAccess.readableBy` - and both endpoints
+  pick it up unchanged.
 - Deleting a car deletes its trips (`on delete cascade`), unlike deleting a user,
   which orphans them. There is no delete-car endpoint yet, so this is still free
   to change if trip history should outlive the car.

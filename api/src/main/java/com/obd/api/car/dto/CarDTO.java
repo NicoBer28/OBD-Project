@@ -27,8 +27,6 @@ public class CarDTO {
             Integer mileage,
             Integer fuelLevel,
             Integer batteryLevel,
-            Integer maxSpeed,
-            Integer avgSpeed,
             Double latitude,
             Double longitude
     ) {
@@ -46,8 +44,6 @@ public class CarDTO {
                     car.getCarMileage(),
                     car.getCarFuelLevel(),
                     car.getCarBatteryLevel(),
-                    car.getCarMaxSpeed(),
-                    car.getCarAvgSpeed(),
                     location == null ? null : location.getLatitude(),
                     location == null ? null : location.getLongitude());
         }

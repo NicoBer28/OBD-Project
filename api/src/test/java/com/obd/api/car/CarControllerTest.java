@@ -70,7 +70,7 @@ class CarControllerTest {
     private static CarDTO.Read created() {
         return new CarDTO.Read(CAR_ID, "Ada's Gol", "AB123CD",
                 new CarDTO.ModelRead(MODEL_ID, "Volkswagen", "Gol", "ISO 15765-4 (CAN)"),
-                120_000, null, null, null, null, null, null);
+                120_000, null, null, null, null);
     }
 
     private static final String VALID_BODY = """
