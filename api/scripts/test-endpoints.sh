@@ -529,6 +529,10 @@ TCAR_JSON=$(echo "$CAR_LIST" | grep -o "{\"id\":\"$TCAR_ID\"[^}]*}[^}]*}")
 print_json "$TCAR_JSON"
 echo "$TCAR_JSON" | grep -q '"fuelLevel":67' \
   || fail "expected the telemetry car to show fuelLevel 67 from its snapshot"
+# snapshotAt names the reading the snapshot came from: T0 (step 33), not the
+# hour-old one that arrived afterwards (step 34) and was correctly ignored.
+[ "$(extract_field "$TCAR_JSON" snapshotAt)" = "$T0" ] \
+  || fail "expected snapshotAt=$T0, got $(extract_field "$TCAR_JSON" snapshotAt)"
 # Grace's list must not contain Carl's car - and the two lists are disjoint
 # only because nothing is shared yet.
 OTHER_LIST=$(curl -sS "$CARS" -H "Authorization: Bearer $OTHER_TOKEN")

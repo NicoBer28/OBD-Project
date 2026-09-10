@@ -218,7 +218,7 @@ is a one-method change instead of a sweep through every endpoint.
 |---|---|
 | ~~`POST /telemetry`~~ **done** | Batch ingest; `carId` in the body rather than the path. Response is the summary in the README. |
 | ~~`GET /telemetry?carId=&since=&limit=`~~ **done** | Oldest-first from an exclusive cursor, `hasMore` + `nextSince`. The sync primitive from §5. |
-| ~~`GET /cars`~~ **done** | Through `CarAccess.allReadableBy`. Still to add to the DTO: `snapshotAt` and the group. |
+| ~~`GET /cars`~~ **done** | Through `CarAccess.allReadableBy`. Exposes `snapshotAt`; still to add: the group. |
 | `GET /cars/{id}` | The route `POST /cars` already advertises in `Location`. |
 
 Ingestion algorithm, in order:
@@ -459,7 +459,7 @@ one place (`TelemetryService`), is easier to reason about.
 
 Phase 1 is done except `GET /cars/{id}` — a one-liner through
 `CarAccess.readableBy`, and the route every `Location` header from `POST /cars`
-already promises. Add `snapshotAt` and a `GroupRef(id, name)` to `CarDTO.Read`
+already promises. Add a `GroupRef(id, name)` to `CarDTO.Read`
 at the same time; `carGroup` is lazy, so map it inside the transaction like the
 model.
 

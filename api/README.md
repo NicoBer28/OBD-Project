@@ -224,13 +224,16 @@ client cannot create a car in someone else's name.
   "fuelLevel": null,
   "batteryLevel": null,
   "latitude": null,
-  "longitude": null
+  "longitude": null,
+  "snapshotAt": null
 }
 ```
 
 The telemetry fields are a cached snapshot of the last reading reported by the
-device, so they are all `null` on a car that has never reported. They are never
-accepted from the client.
+device, so they are all `null` on a car that has never reported. `snapshotAt`
+is the `recordedAt` of the reading they came from - "last seen" for the UI -
+and is maintained by `POST /telemetry`. None of them are accepted from the
+client.
 
 **Errors:** `404 Not Found` if `modelId` is unknown, `409 Conflict` if the
 caller already has a car with that plate, `400 Bad Request` with a per-field
@@ -618,9 +621,8 @@ What is missing, in what order to build it, and the endpoint roadmap live in
 - `GET /api/v1/cars/{id}`, updating and deleting a car are not implemented.
   The `Location` header returned by create therefore points at a route that
   does not exist yet.
-- `CarDTO.Read` does not yet expose `snapshotAt` or the group a car is shared
-  with, so a client cannot show "last seen 3 hours ago" or "shared with
-  Familia Lazzari".
+- `CarDTO.Read` does not yet expose the group a car is shared with, so a
+  client cannot show "shared with Familia Lazzari".
 - `AuthController.logout` is still not covered by the controller slice. It reads
   `@AuthenticationPrincipal`, so `SliceSecurityConfig` would now make this
   straightforward.

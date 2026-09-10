@@ -71,7 +71,7 @@ class CarControllerTest {
     private static CarDTO.Read created() {
         return new CarDTO.Read(CAR_ID, "Ada's Gol", "AB123CD",
                 new CarDTO.ModelRead(MODEL_ID, "Volkswagen", "Gol", "ISO 15765-4 (CAN)"),
-                120_000, null, null, null, null);
+                120_000, null, null, null, null, null);
     }
 
     private static final String VALID_BODY = """
@@ -99,9 +99,11 @@ class CarControllerTest {
                 .andExpect(jsonPath("$.model.brand").value("Volkswagen"))
                 .andExpect(jsonPath("$.model.model").value("Gol"))
                 .andExpect(jsonPath("$.mileage").value(120000))
-                // A car that has never reported has no snapshot yet.
+                // A car that has never reported has no snapshot yet - and no
+                // time for one either.
                 .andExpect(jsonPath("$.fuelLevel").doesNotExist())
-                .andExpect(jsonPath("$.latitude").doesNotExist());
+                .andExpect(jsonPath("$.latitude").doesNotExist())
+                .andExpect(jsonPath("$.snapshotAt").doesNotExist());
     }
 
     @Test

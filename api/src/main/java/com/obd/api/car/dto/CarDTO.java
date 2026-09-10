@@ -4,6 +4,7 @@ import com.obd.api.car.Car;
 import com.obd.api.car.Model;
 import jakarta.validation.constraints.*;
 
+import java.time.Instant;
 import java.util.UUID;
 
 public class CarDTO {
@@ -28,7 +29,8 @@ public class CarDTO {
             Integer fuelLevel,
             Integer batteryLevel,
             Double latitude,
-            Double longitude
+            Double longitude,
+            Instant snapshotAt
     ) {
         /**
          * Must be called while the persistence context is still open - it walks
@@ -45,7 +47,9 @@ public class CarDTO {
                     car.getCarFuelLevel(),
                     car.getCarBatteryLevel(),
                     location == null ? null : location.getLatitude(),
-                    location == null ? null : location.getLongitude());
+                    location == null ? null : location.getLongitude(),
+                    car.getCarSnapshotAt()
+            );
         }
     }
 
