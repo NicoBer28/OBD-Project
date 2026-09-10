@@ -245,6 +245,28 @@ models, so this endpoint is usable before a catalog admin UI exists.
 
 ---
 
+### `GET /api/v1/cars`
+
+Every car the caller may use: their own, plus any shared with a group they
+belong to. Requires `Authorization: Bearer <accessToken>`.
+
+**Response** `200 OK` — an array of the same objects `POST /cars` returns,
+ordered by name. Empty for a new user, never an error. The telemetry fields
+are the cached snapshot maintained by `POST /telemetry`.
+
+**One definition of "may use".** The list comes from `CarRepository.READABLE`,
+a JPQL predicate that `CarAccess` also uses for the per-car check every write
+goes through (`POST /trips`, `POST /telemetry`). Sharing the clause verbatim is
+what guarantees the two cannot disagree: a car that appears in this list is,
+by construction, one the same user can start a trip on. A two-query merge -
+own cars plus cars-from-my-groups - would have listed a car shared with your
+own family twice, and would have been a second copy of the rule to keep in
+step. See `ROADMAP.md` §2.
+
+**Errors:** `401 Unauthorized` without a token.
+
+---
+
 ### `POST /api/v1/groups`
 
 Creates a group (a "family") and enrols the caller as its first member with the
@@ -577,11 +599,11 @@ What is missing, in what order to build it, and the endpoint roadmap live in
 - Only *starting* a trip exists. Finishing one, the active-trip lookup, trip
   history per car and per user, and the aggregated fuel expense per user are not
   implemented.
-- Only the car's **owner** may start a trip on it or upload telemetry for it.
-  In practice: only the owner's phone can relay readings, so a group member
-  driving the car cannot upload. Once cars can be shared, the rule widens to
-  group members in one place - `CarAccess.readableBy` - and both endpoints
-  pick it up unchanged.
+- Access is already "owner **or** member of the group the car is shared with"
+  (`CarRepository.READABLE`, via `CarAccess`), for the car list, starting a
+  trip and uploading telemetry alike - but no endpoint can *set*
+  `cars.group_id` yet, so in practice every car is still owner-only until
+  share/unshare exist.
 - Deleting a car deletes its trips (`on delete cascade`), unlike deleting a user,
   which orphans them. There is no delete-car endpoint yet, so this is still free
   to change if trip history should outlive the car.
@@ -593,9 +615,12 @@ What is missing, in what order to build it, and the endpoint roadmap live in
 - Whether `fuel_level` and `battery_level` are percentages or absolute units is
   undecided, so V2 constrains them to `>= 0` rather than `0..100`. Tighten in a
   later migration once the firmware settles what it reports.
-- Reading, updating and deleting a car are not implemented — only `POST`. The
-  `Location` header returned by create therefore points at a route that does
-  not exist yet.
+- `GET /api/v1/cars/{id}`, updating and deleting a car are not implemented.
+  The `Location` header returned by create therefore points at a route that
+  does not exist yet.
+- `CarDTO.Read` does not yet expose `snapshotAt` or the group a car is shared
+  with, so a client cannot show "last seen 3 hours ago" or "shared with
+  Familia Lazzari".
 - `AuthController.logout` is still not covered by the controller slice. It reads
   `@AuthenticationPrincipal`, so `SliceSecurityConfig` would now make this
   straightforward.

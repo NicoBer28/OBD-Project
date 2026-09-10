@@ -7,12 +7,36 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface CarRepository extends JpaRepository<Car, UUID> {
 
     // Derived from the entity property (carOwnerId), not the column (owner_id).
     List<Car> findByCarOwnerId(UUID carOwnerId);
+
+    /**
+     * The one definition of "cars this user may use": their own, plus any
+     * shared with a group they belong to. Both queries below share it verbatim,
+     * so the list a user sees and the per-car check every write goes through
+     * can never disagree - a car that appears in GET /cars is, by construction,
+     * one they can start a trip on and upload telemetry for.
+     *
+     * {@code c.carGroup.groupId} resolves to the foreign-key column with no
+     * join; an unshared car has null there, fails the IN, and falls through to
+     * the ownership test. Only {@link CarAccess} should call these.
+     */
+    String READABLE = """
+             where (c.carOwnerId = :userId
+                    or c.carGroup.groupId in (
+                        select m.id.groupId from GroupMember m where m.id.userId = :userId))
+            """;
+
+    @Query("select c from Car c" + READABLE + " order by c.carName")
+    List<Car> findAllReadableBy(@Param("userId") UUID userId);
+
+    @Query("select c from Car c" + READABLE + " and c.carId = :carId")
+    Optional<Car> findReadableBy(@Param("userId") UUID userId, @Param("carId") UUID carId);
 
     /**
      * Refreshes the car's cached snapshot from a reading, but only if that

@@ -514,4 +514,25 @@ echo "foreign: $H_FOREIGN   no token: $H_NOAUTH"
 [ "$H_FOREIGN" = "404" ] || fail "expected 404 for another owner's car, got $H_FOREIGN"
 [ "$H_NOAUTH" = "401" ]  || fail "expected 401 without a token, got $H_NOAUTH"
 
+# --- Car list ---------------------------------------------------------------
+line "44. List my cars (expect 200, mine present, another owner's absent)"
+CAR_LIST=$(curl -sS -w '\n%{http_code}' "$CARS" -H "Authorization: Bearer $CAR_TOKEN")
+CAR_LIST_STATUS=$(echo "$CAR_LIST" | tail -1); CAR_LIST=$(echo "$CAR_LIST" | sed '$d')
+echo "status: $CAR_LIST_STATUS  cars: $(echo "$CAR_LIST" | grep -o '"id"' | wc -l | tr -d ' ')"
+# 200, not 302 FOUND: that status is a redirect and clients act on it.
+[ "$CAR_LIST_STATUS" = "200" ] || fail "expected 200 from GET /cars, got $CAR_LIST_STATUS"
+echo "$CAR_LIST" | grep -q "\"id\":\"$CAR_ID\""  || fail "the caller's first car is missing from the list"
+echo "$CAR_LIST" | grep -q "\"id\":\"$TCAR_ID\"" || fail "the telemetry car is missing from the list"
+# The snapshot ingestion maintained is what the list shows. A car object holds
+# one nested object (model) before fuelLevel, hence the two [^}]*} hops.
+TCAR_JSON=$(echo "$CAR_LIST" | grep -o "{\"id\":\"$TCAR_ID\"[^}]*}[^}]*}")
+print_json "$TCAR_JSON"
+echo "$TCAR_JSON" | grep -q '"fuelLevel":67' \
+  || fail "expected the telemetry car to show fuelLevel 67 from its snapshot"
+# Grace's list must not contain Carl's car - and the two lists are disjoint
+# only because nothing is shared yet.
+OTHER_LIST=$(curl -sS "$CARS" -H "Authorization: Bearer $OTHER_TOKEN")
+echo "$OTHER_LIST" | grep -q "\"id\":\"$CAR_ID\"" && fail "another owner's car leaked into the list"
+echo "ok: $(echo "$OTHER_LIST" | grep -o '"id"' | wc -l | tr -d ' ') car(s) for the other owner, none of them Carl's"
+
 line "All checks passed"

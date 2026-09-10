@@ -5,6 +5,7 @@ import com.obd.api.car.CarAccess;
 import com.obd.api.car.CarRepository;
 import com.obd.api.car.ModelRepository;
 import com.obd.api.car.exception.CarNotFoundException;
+import com.obd.api.group.*;
 import com.obd.api.support.RepositoryTest;
 import com.obd.api.telemetry.dto.TelemetryDTO;
 import com.obd.api.telemetry.dto.TelemetryDTO.Reading;
@@ -52,6 +53,10 @@ class TelemetryServiceTest {
     private ModelRepository modelRepository;
     @Autowired
     private UserRepository userRepository;
+    @Autowired
+    private GroupRepository groupRepository;
+    @Autowired
+    private GroupMemberRepository groupMemberRepository;
 
     @MockitoBean
     private PasswordEncoder passwordEncoder;
@@ -311,6 +316,25 @@ class TelemetryServiceTest {
 
         assertThatThrownBy(() -> telemetryService.history(graceId, query(null, null)))
                 .isInstanceOf(CarNotFoundException.class);
+    }
+
+    @Test
+    void aGroupMemberMayUploadForASharedCar() {
+        Group family = groupRepository.saveAndFlush(Group.builder().groupName("Familia").build());
+        groupMemberRepository.saveAndFlush(GroupMember.builder()
+                .id(new GroupMemberId(family.getGroupId(), graceId))
+                .role(GroupRole.MEMBER).build());
+        Car car = carRepository.findById(carId).orElseThrow();
+        car.setCarGroup(family);
+        carRepository.saveAndFlush(car);
+
+        // Grace's phone is the one connected to the dongle in Ada's car. The
+        // README limitation "only the owner's phone can relay" no longer holds.
+        var result = telemetryService.ingest(graceId, batch(reading(noon, 70)));
+
+        assertThat(result.stored()).isEqualTo(1);
+        assertThat(car().getCarFuelLevel()).isEqualTo(70);
+        assertThat(telemetryService.history(graceId, query(null, null)).readings()).hasSize(1);
     }
 
     @Test

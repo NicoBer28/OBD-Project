@@ -13,16 +13,17 @@ Last updated: 2026-09-10. Schema is at `V7__cars_group_id.sql`.
 | Area | Schema | Endpoints |
 |---|---|---|
 | Auth / users | `users`, refresh tokens | register, login, refresh, logout |
-| Cars | `cars` (now with `group_id`), `models` | `POST /cars` only |
+| Cars | `cars` (now with `group_id`), `models` | `POST /cars`, `GET /cars` |
 | Groups | `groups`, `group_members` | `POST /groups` only |
 | Trips | `trips` | `POST /trips` (start) only |
 | Telemetry | `telemetry`, `cars.snapshot_at` | `POST /telemetry` (batch ingest), `GET /telemetry` (sync) |
 
-Five `POST`s and one `GET`. Every `Location` header currently returned points at
+Five `POST`s and two `GET`s. Every `Location` header currently returned points at
 a route that does not exist. That is the shape of the work below.
 
-`CarAccess` exists (owner-only) and both `TripService` and `TelemetryService`
-go through it.
+`CarAccess` exists and already answers "owner **or** group member", from one
+predicate (`CarRepository.READABLE`); `CarService`, `TripService` and
+`TelemetryService` all go through it. Nothing can set `cars.group_id` yet.
 
 ---
 
@@ -53,8 +54,13 @@ Optional<Car> ownedBy(UUID userId, UUID carId);      // owner only: share, delet
 ```
 
 Eight hand-rolled copies of that predicate is exactly how one endpoint ends up
-quietly wrong. **Build the seam in Phase 1**, implemented as "owner only" —
-then Phase 4 changes one method instead of revisiting every endpoint.
+quietly wrong.
+
+**Done.** `CarRepository.READABLE` is the predicate; `findAllReadableBy` and
+`findReadableBy` share it verbatim, and `CarAccess` is the only caller. It
+already includes group membership, so Phase 4 needs no change here — proven by
+`TripServiceTest.aGroupMemberMayStartATripOnASharedCar`, which passes without
+`TripService` knowing groups exist.
 
 ### 3. A `devices` table — the dongle is unmodelled
 
@@ -212,7 +218,7 @@ is a one-method change instead of a sweep through every endpoint.
 |---|---|
 | ~~`POST /telemetry`~~ **done** | Batch ingest; `carId` in the body rather than the path. Response is the summary in the README. |
 | ~~`GET /telemetry?carId=&since=&limit=`~~ **done** | Oldest-first from an exclusive cursor, `hasMore` + `nextSince`. The sync primitive from §5. |
-| `GET /cars` | The caller's cars, with the snapshot and `snapshot_at` so the client can show staleness. |
+| ~~`GET /cars`~~ **done** | Through `CarAccess.allReadableBy`. Still to add to the DTO: `snapshotAt` and the group. |
 | `GET /cars/{id}` | The route `POST /cars` already advertises in `Location`. |
 
 Ingestion algorithm, in order:
@@ -276,10 +282,11 @@ Traps:
 
 ### Phase 4 — Sharing. The product premise.
 
-`cars.group_id` already exists (`V7`) and `Car.carGroup` maps it. Flip `CarAccess.readableBy` from
-"owner" to "owner or member of the car's group" — and everything built in
-Phases 1–3 gains sharing for free. That is the payoff for building the seam
-early.
+`cars.group_id` exists (`V7`), `Car.carGroup` maps it, and `CarAccess` already
+grants group members read-level access. **All that is left is writing the
+column** — the moment share/unshare land, every endpoint built in Phases 1–3
+honours sharing with no further change. That is the payoff for building the
+seam early.
 
 | Endpoint | Notes |
 |---|---|
@@ -450,7 +457,13 @@ one place (`TelemetryService`), is easier to reason about.
 
 ## Suggested next step
 
-Phase 1: telemetry is done in both directions. What remains of the phase is
-`GET /cars` + `GET /cars/{id}`, to see the snapshot ingestion maintains — and
-those need `CarDTO.Read` to gain `snapshotAt` and, now that `Car.carGroup`
-exists, the group's id and name.
+Phase 1 is done except `GET /cars/{id}` — a one-liner through
+`CarAccess.readableBy`, and the route every `Location` header from `POST /cars`
+already promises. Add `snapshotAt` and a `GroupRef(id, name)` to `CarDTO.Read`
+at the same time; `carGroup` is lazy, so map it inside the transaction like the
+model.
+
+After that, Phase 4's write side — `PUT`/`DELETE /cars/{id}/group` — is unusually
+cheap now: the access rule, the column and the tests for "a member can use a
+shared car" all exist. Share/unshare only has to set `carGroup`, through
+`CarAccess.ownedBy` plus a membership check on the target group.

@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -148,6 +149,27 @@ class CarControllerTest {
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.licensePlate").exists());
+    }
+
+    @Test
+    void carsReturns200WithTheCallersList() throws Exception {
+        given(carService.getCars(OWNER_ID)).willReturn(List.of(created()));
+
+        mockMvc.perform(get("/api/v1/cars").with(caller()))
+                // 200, not 302 FOUND - that one is a redirect.
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(CAR_ID.toString()))
+                .andExpect(jsonPath("$[0].model.brand").value("Volkswagen"));
+    }
+
+    @Test
+    void carsIsEmptyNotAnErrorForANewUser() throws Exception {
+        given(carService.getCars(OWNER_ID)).willReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/cars").with(caller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
     }
 
     @Test

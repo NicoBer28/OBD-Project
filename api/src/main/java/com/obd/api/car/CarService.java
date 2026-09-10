@@ -1,6 +1,7 @@
 package com.obd.api.car;
 
 import com.obd.api.car.dto.CarDTO;
+import com.obd.api.car.exception.CarNotFoundException;
 import com.obd.api.car.exception.LicensePlateAlreadyRegisteredException;
 import com.obd.api.car.exception.ModelNotFoundException;
 import jakarta.transaction.Transactional;
@@ -8,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -16,6 +18,7 @@ public class CarService {
 
     private final CarRepository carRepository;
     private final ModelRepository modelRepository;
+    private final CarAccess carAccess;
 
     /**
      * Registers a car owned by {@code ownerId}.
@@ -52,6 +55,19 @@ public class CarService {
         // Still inside the transaction, so reading the lazy model is safe.
         return CarDTO.Read.from(saved);
     }
+
+    @Transactional
+    public List<CarDTO.Read> getCars(UUID userId) {
+        return carAccess.allReadableBy(userId).stream()
+                .map(CarDTO.Read::from)
+                .toList();
+    }
+
+    @Transactional
+    public CarDTO.Read getCar(UUID ownerId, UUID carId){
+        return carAccess.readableBy(ownerId, carId).map(CarDTO.Read::from).orElseThrow(() -> new CarNotFoundException(carId));
+    }
+
 
     private static String normalisePlate(String raw) {
         if (raw == null) {

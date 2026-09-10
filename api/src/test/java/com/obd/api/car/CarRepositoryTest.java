@@ -1,5 +1,6 @@
 package com.obd.api.car;
 
+import com.obd.api.group.*;
 import com.obd.api.support.RepositoryTest;
 import com.obd.api.user.Role;
 import com.obd.api.user.User;
@@ -175,6 +176,114 @@ class CarRepositoryTest {
         // Enforced by ck_cars_mileage in the migration, not by the entity.
         assertThatThrownBy(() -> carRepository.saveAndFlush(aCar().carMileage(-1).build()))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    // --- READABLE: the one definition of "cars this user may use" -----------
+
+    @Autowired
+    private GroupRepository groupRepository;
+    @Autowired
+    private GroupMemberRepository groupMemberRepository;
+
+    private UUID newUser(String email) {
+        return userRepository.saveAndFlush(User.builder()
+                .userName("Test").userLastName("User").userEmail(email)
+                .userPasswordHash("$2a$12$notarealhash")
+                .role(Role.USER).enabled(true).build()).getUserId();
+    }
+
+    private Group newGroupWith(UUID... memberIds) {
+        Group group = groupRepository.saveAndFlush(Group.builder().groupName("Familia").build());
+        for (UUID memberId : memberIds) {
+            groupMemberRepository.saveAndFlush(GroupMember.builder()
+                    .id(new GroupMemberId(group.getGroupId(), memberId))
+                    .role(GroupRole.MEMBER).build());
+        }
+        return group;
+    }
+
+    private Car shared(Car car, Group group) {
+        car.setCarGroup(group);
+        return carRepository.saveAndFlush(car);
+    }
+
+    @Test
+    void listsOwnCarsAndCarsSharedWithMyGroupsOnce() {
+        UUID grace = newUser("grace@example.com");
+        UUID stranger = newUser("stranger@example.com");
+        Group family = newGroupWith(ownerId, grace);
+        Group otherFamily = newGroupWith(stranger);
+
+        Car mine = carRepository.saveAndFlush(aCar().carName("A mine, unshared").carLicensePlate(null).build());
+        // Owned by me *and* shared with my own group - the everyday case, and
+        // the one a two-source merge would list twice.
+        shared(aCar().carName("B mine, shared").carLicensePlate(null).build(), family);
+        // Grace's car, shared with the family: visible to me through membership.
+        shared(aCar().carOwnerId(grace).carName("C grace, shared").build(), family);
+        // Grace's car kept to herself, and a stranger's car in a group I am not in.
+        carRepository.saveAndFlush(aCar().carOwnerId(grace).carName("D grace, private").carLicensePlate(null).build());
+        shared(aCar().carOwnerId(stranger).carName("E stranger, shared elsewhere").build(), otherFamily);
+
+        assertThat(carRepository.findAllReadableBy(ownerId))
+                .extracting(Car::getCarName)
+                .containsExactly("A mine, unshared", "B mine, shared", "C grace, shared");
+        assertThat(carRepository.findAllReadableBy(grace))
+                .extracting(Car::getCarName)
+                .containsExactly("B mine, shared", "C grace, shared", "D grace, private");
+        assertThat(carRepository.findAllReadableBy(stranger))
+                .extracting(Car::getCarName)
+                .containsExactly("E stranger, shared elsewhere");
+        assertThat(carRepository.findAllReadableBy(mine.getCarOwnerId())).hasSize(3);
+    }
+
+    @Test
+    void perCarCheckAgreesWithTheList() {
+        UUID grace = newUser("grace@example.com");
+        UUID stranger = newUser("stranger@example.com");
+        Group family = newGroupWith(ownerId, grace);
+        Car car = shared(aCar().build(), family);
+
+        // Same predicate as the list, so these can never drift apart.
+        assertThat(carRepository.findReadableBy(ownerId, car.getCarId())).isPresent();
+        assertThat(carRepository.findReadableBy(grace, car.getCarId())).isPresent();
+        assertThat(carRepository.findReadableBy(stranger, car.getCarId())).isEmpty();
+        assertThat(carRepository.findReadableBy(ownerId, UUID.randomUUID())).isEmpty();
+    }
+
+    @Test
+    void unsharingACarRemovesItFromTheMembersList() {
+        UUID grace = newUser("grace@example.com");
+        Group family = newGroupWith(ownerId, grace);
+        Car car = shared(aCar().build(), family);
+        assertThat(carRepository.findReadableBy(grace, car.getCarId())).isPresent();
+
+        car.setCarGroup(null);
+        carRepository.saveAndFlush(car);
+
+        assertThat(carRepository.findReadableBy(grace, car.getCarId())).isEmpty();
+        // The owner, of course, keeps it.
+        assertThat(carRepository.findReadableBy(ownerId, car.getCarId())).isPresent();
+    }
+
+    @Test
+    void deletingAGroupUnsharesItsCarsInsteadOfDeletingThem() {
+        UUID grace = newUser("grace@example.com");
+        Group family = newGroupWith(ownerId, grace);
+        Car car = shared(aCar().build(), family);
+        // Detach first: a managed Car still pointing at the Group would make
+        // Hibernate refuse the flush. In production the group is deleted in a
+        // request that never loaded the cars; this mirrors that.
+        entityManager.clear();
+
+        groupRepository.deleteById(family.getGroupId());
+        entityManager.flush();
+        entityManager.clear();
+
+        // on delete set null in V7: the car and its history belong to the
+        // owner, not to the group.
+        Car found = carRepository.findById(car.getCarId()).orElseThrow();
+        assertThat(found.getCarGroup()).isNull();
+        assertThat(carRepository.findReadableBy(grace, car.getCarId())).isEmpty();
     }
 
     // --- refreshSnapshot: the compare-and-set behind telemetry ingestion -----
