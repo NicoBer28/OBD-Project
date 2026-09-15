@@ -15,13 +15,13 @@ import java.util.List;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/v1/cars")
+@RequestMapping("/api/v1")
 @RequiredArgsConstructor
 public class CarController {
 
     private final CarService carService;
 
-    @PostMapping
+    @PostMapping("/cars")
     public ResponseEntity<CarDTO.Read> create(@AuthenticationPrincipal UserPrincipal principal,
                                               @RequestBody @Valid CarDTO.Create request,
                                               UriComponentsBuilder uriBuilder) {
@@ -34,13 +34,16 @@ public class CarController {
         return ResponseEntity.created(location).body(created);
     }
 
-    @GetMapping
+    @GetMapping("/cars")
     public List<CarDTO.Read> cars(@AuthenticationPrincipal UserPrincipal principal){
         return carService.getCars(principal.getId());
     }
 
-    @GetMapping("/{car_id}")
-    public ResponseEntity<CarDTO.Read> car(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID car_id){
-        return new ResponseEntity<CarDTO.Read>(carService.getCar(principal.getId(), car_id), HttpStatus.ACCEPTED);
+    @GetMapping("/cars/{car_id}")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public CarDTO.Read car(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID car_id){
+        return carService.getCar(principal.getId(), car_id);
     }
+
+
 }
