@@ -28,7 +28,7 @@ public class GroupMember {
     @Column(nullable = false, name = "role")
     private GroupRole role;
 
-    static GroupMember of(UUID groupId, UUID userId, GroupRole role) {
+    public static GroupMember of(UUID groupId, UUID userId, GroupRole role) {
         return GroupMember.builder()
                 .id(new GroupMemberId(groupId, userId))
                 .role(role)

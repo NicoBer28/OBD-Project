@@ -5,6 +5,7 @@ import com.obd.api.group.GroupMemberRepository;
 import com.obd.api.group.GroupRole;
 import com.obd.api.invitation.dto.InvitationDTO;
 import com.obd.api.invitation.exception.*;
+import com.obd.api.user.Role;
 import com.obd.api.user.UserRepository;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
@@ -51,7 +52,7 @@ public class InvitationService {
     }
 
     @Transactional
-    public InvitationDTO.Read accept(String email ,UUID invitationId){
+    public InvitationDTO.Read accept(UUID userId ,String email ,UUID invitationId){
 
         if(invitationRepository.accept(invitationId, email, Instant.now()) == 0){
             Invitation invitation = invitationRepository.findById(invitationId)
@@ -62,7 +63,11 @@ public class InvitationService {
             throw new InvitationExpiredException(invitationId, invitation.getInvitationExpiresAt());
         }
 
-        return InvitationDTO.Read.from(invitationRepository.findById(invitationId).orElse(new Invitation()));
+        Invitation invitation = invitationRepository.findById(invitationId).orElse(new Invitation());
+
+        groupMemberRepository.save(GroupMember.of(invitation.getInvitationGroupId(), userId, GroupRole.MEMBER));
+
+        return InvitationDTO.Read.from(invitation);
     }
 
     @Transactional

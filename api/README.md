@@ -637,7 +637,8 @@ time — `[]`, never `404`.
 
 ### `POST /api/v1/invitations/{id}/accept`
 
-The invitee accepts an invitation addressed to their email. Requires
+The invitee accepts an invitation addressed to their email **and joins the
+group as `MEMBER`**, in one transaction. Requires
 `Authorization: Bearer <accessToken>`; no body.
 
 Acceptance is a single conditional `UPDATE`
@@ -648,6 +649,9 @@ atomic statement. The caller physically cannot accept an invitation that is
 not theirs, or twice, whatever happens around the call.
 
 **Response** `200 OK` — the invitation, now `"invitationStatus": "ACCEPTED"`.
+The caller appears in `GET /groups` immediately, with `callerRole: MEMBER`.
+The membership is written under the id of the account that accepted, which
+is the only account whose email could have matched.
 
 **Errors:** the `UPDATE` affecting zero rows means one of four things, and the
 service reads the row back to say which:
@@ -937,14 +941,6 @@ What is missing, in what order to build it, and the endpoint roadmap live in
   nullable `cars.group_id` column and `Car.carGroup` maps it, but nothing writes
   it: the share/unshare endpoints and the widening of `CarAccess.readableBy` to
   group members are still to do (ROADMAP Phase 4).
-- **Accepting an invitation does not yet enrol the invitee.** `POST
-  /invitations/{id}/accept` marks the row accepted and returns it, but writes
-  nothing to `group_members` — the invitee still is not in the group, and it
-  vanishes from their pending list. The membership insert belongs in the same
-  transaction as the accept, after a membership check (`GroupMemberRepository
-  .save()` is an upsert), using the invitation's `groupId` and the caller's
-  user id. Pinned by nothing yet on purpose: a test asserting the current
-  behaviour would enshrine the bug.
 - A second pending invitation for the same email in the same group is
   rejected by the database, but the service maps it to
   `FailedInvitationException`, which has no `@ExceptionHandler` — so the client

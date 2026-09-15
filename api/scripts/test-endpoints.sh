@@ -587,10 +587,15 @@ ACC_AGAIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITATIONS/$INV_I
 echo "second accept status: $ACC_AGAIN"
 [ "$ACC_AGAIN" = "409" ] || fail "expected 409 accepting twice, got $ACC_AGAIN"
 
-line "50. Accepted invitations leave the pending list (expect [])"
+line "50. Accepted invitations leave the pending list, and the invitee is now a member"
 PENDING2=$(curl -sS "$INVITATIONS/pending" -H "Authorization: Bearer $INV_TOKEN")
 [ "$PENDING2" = "[]" ] || fail "expected an empty pending list after accepting, got: $PENDING2"
-echo "ok: []"
+# The point of the feature: GET /groups for the invitee now lists the group,
+# with the role accept gives - MEMBER, never ADMIN.
+INV_GROUPS=$(curl -sS "$GROUPS_URL" -H "Authorization: Bearer $INV_TOKEN")
+print_json "$INV_GROUPS"
+echo "$INV_GROUPS" | grep -q "\"id\":\"$GROUP_ID\"" || fail "the invitee is not in the group after accepting"
+echo "$INV_GROUPS" | grep -q '"callerRole":"MEMBER"' || fail "expected the invitee to join as MEMBER"
 
 # --- Devices ---------------------------------------------------------------
 # Carl owns TCAR_ID (the telemetry car) and FRESH_CAR_ID; Grace is a stranger.

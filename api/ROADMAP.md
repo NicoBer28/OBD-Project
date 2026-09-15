@@ -25,11 +25,8 @@ Access is one predicate — `CarRepository.READABLE`, owner **or** member of the
 car's group — behind `CarAccess`, and every car/trip/telemetry endpoint goes
 through it. It already honours sharing; nothing can *set* `cars.group_id` yet.
 
-Two things in the table are half-built and worth knowing before anything else:
+One thing in the table is off and worth knowing before anything else:
 
-- **Accepting an invitation does not enrol the invitee.** The row is marked
-  accepted and vanishes from their pending list, but no `group_members` row is
-  written. From the user's side it looks like it worked.
 - **`GET /cars/{car_id}` answers `202 Accepted`** — a status that means "queued
   for later" — instead of `200`. It has no README section and no tests.
 
@@ -229,7 +226,7 @@ Traps:
 |---|---|
 | ~~`POST /invitations/invite/{groupId}`~~ | Admin-only, by email, 7-day expiry. Answers `200` not `201`; verb in the route. |
 | ~~`GET /invitations/pending`~~ | The invitee's list — how they find the id to accept. |
-| `POST /invitations/{id}/accept` — **half done** | Marks the row accepted (atomic, tested). **Does not insert the `group_members` row.** Fix: same transaction, after `findByIdGroupIdAndIdUserId` (the upsert trap), `save(GroupMember.of(inv.groupId, userId, MEMBER))` — which means `accept` needs the caller's user id as well as their email. |
+| ~~`POST /invitations/{id}/accept`~~ | Atomic accept + `group_members` insert in one transaction. Pinned by `acceptingJoinsTheGroupAsAMember` and smoke 50. No membership guard before the insert — unreachable today (invite already refuses members), reachable once add-member exists. |
 | **`FailedInvitationException` handler** | A duplicate pending invitation is a `500` today. One `@ExceptionHandler` → `409`. |
 | **Reclaim expired rows on invite** | An expired invitation still holds `ux_invitations_pending`, so that email can never be re-invited. Delete expired pending rows for `(group, email)` before inserting. |
 | **`GET /groups/{id}/invitations`** | Admin's view: who was invited, status. |
@@ -386,14 +383,13 @@ one place (`TelemetryService`), is easier to reason about.
 
 In this order, each small:
 
-1. **Enrol on accept** (Phase 5). The invitation feature is live and silently
-   does nothing — the most misleading state a feature can be in. One
-   membership check and one insert, in the transaction that already exists.
-2. **`POST /trips/{id}/finish`** (Phase 3). Every trip ever started is still
+1. **`POST /trips/{id}/finish`** (Phase 3). Every trip ever started is still
    open; nothing downstream — expenses, stats, the car's mileage — can exist
    until trips can end.
-3. **`GET /users/me`** (Phase 2). The empty `UserController` is the oldest
+2. **`GET /users/me`** (Phase 2). The empty `UserController` is the oldest
    stub in the codebase and the first call every app makes.
+3. **`FailedInvitationException` handler + expired-row reclaim** (Phase 5).
+   Both are small, and both turn a `500` into the right answer.
 
 Then Phase 4's two writes, which are cheap now that everything they depend on
 exists.

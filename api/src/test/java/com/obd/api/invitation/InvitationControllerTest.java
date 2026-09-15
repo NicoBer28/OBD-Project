@@ -181,7 +181,7 @@ class InvitationControllerTest {
 
     @Test
     void acceptReturnsTheAcceptedInvitation() throws Exception {
-        given(invitationService.accept(eq(CALLER_EMAIL), eq(INVITATION_ID)))
+        given(invitationService.accept(eq(CALLER_ID), eq(CALLER_EMAIL), eq(INVITATION_ID)))
                 .willReturn(invitation(InvitationStatus.ACCEPTED));
 
         mockMvc.perform(post("/api/v1/invitations/" + INVITATION_ID + "/accept").with(caller()))
@@ -193,7 +193,7 @@ class InvitationControllerTest {
     @Test
     void acceptMapsNotFoundAndNotYoursToNotFound() throws Exception {
         willThrow(new InvitationNotFoundException(INVITATION_ID, CALLER_EMAIL))
-                .given(invitationService).accept(eq(CALLER_EMAIL), eq(INVITATION_ID));
+                .given(invitationService).accept(eq(CALLER_ID), eq(CALLER_EMAIL), eq(INVITATION_ID));
 
         mockMvc.perform(post("/api/v1/invitations/" + INVITATION_ID + "/accept").with(caller()))
                 .andExpect(status().isNotFound())
@@ -203,7 +203,7 @@ class InvitationControllerTest {
     @Test
     void acceptMapsAlreadyAcceptedToConflict() throws Exception {
         willThrow(new InvitationAlreadyAccepted(INVITATION_ID, NOON))
-                .given(invitationService).accept(eq(CALLER_EMAIL), eq(INVITATION_ID));
+                .given(invitationService).accept(eq(CALLER_ID), eq(CALLER_EMAIL), eq(INVITATION_ID));
 
         mockMvc.perform(post("/api/v1/invitations/" + INVITATION_ID + "/accept").with(caller()))
                 .andExpect(status().isConflict())
@@ -213,7 +213,7 @@ class InvitationControllerTest {
     @Test
     void acceptMapsExpiredToConflict() throws Exception {
         willThrow(new InvitationExpiredException(INVITATION_ID, NOON))
-                .given(invitationService).accept(eq(CALLER_EMAIL), eq(INVITATION_ID));
+                .given(invitationService).accept(eq(CALLER_ID), eq(CALLER_EMAIL), eq(INVITATION_ID));
 
         mockMvc.perform(post("/api/v1/invitations/" + INVITATION_ID + "/accept").with(caller()))
                 .andExpect(status().isConflict())

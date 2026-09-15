@@ -203,7 +203,7 @@ class InvitationServiceTest {
     void theInviteeAcceptsAndTheInvitationIsMarkedAccepted() {
         UUID id = invitationService.invite(adaId, "stranger@example.com", familiaId).invitationId();
 
-        InvitationDTO.Read read = invitationService.accept("stranger@example.com", id);
+        InvitationDTO.Read read = invitationService.accept(strangerId, "stranger@example.com", id);
 
         assertThat(read.invitationStatus()).isEqualTo(InvitationStatus.ACCEPTED);
         assertThat(invitationRepository.findById(id).orElseThrow().getInvitationAcceptedAt()).isNotNull();
@@ -212,28 +212,53 @@ class InvitationServiceTest {
     }
 
     @Test
+    void acceptingJoinsTheGroupAsAMember() {
+        UUID id = invitationService.invite(adaId, "stranger@example.com", familiaId).invitationId();
+        assertThat(groupMemberRepository.findByIdGroupIdAndIdUserId(familiaId, strangerId)).isEmpty();
+
+        invitationService.accept(strangerId, "stranger@example.com", id);
+
+        // The point of the whole feature: the invitee is now in the group, as
+        // MEMBER - never ADMIN - under the id of the account that accepted.
+        assertThat(groupMemberRepository.findByIdGroupIdAndIdUserId(familiaId, strangerId))
+                .get().extracting(GroupMember::getRole).isEqualTo(GroupRole.MEMBER);
+        assertThat(groupMemberRepository.countByIdGroupId(familiaId)).isEqualTo(3);
+    }
+
+    @Test
+    void aRefusedAcceptDoesNotEnrol() {
+        UUID id = invitationService.invite(adaId, "new@example.com", familiaId).invitationId();
+
+        // Addressed to someone else: refused, and the caller must not end up
+        // in the group as a side effect.
+        assertThatThrownBy(() -> invitationService.accept(strangerId, "stranger@example.com", id))
+                .isInstanceOf(InvitationNotFoundException.class);
+        assertThat(groupMemberRepository.findByIdGroupIdAndIdUserId(familiaId, strangerId)).isEmpty();
+    }
+
+    @Test
     void acceptRefusesAnInvitationAddressedToSomeoneElse() {
         UUID id = invitationService.invite(adaId, "new@example.com", familiaId).invitationId();
 
         // Not 403: a "not yours" that differed from "does not exist" would
         // confirm the id is real.
-        assertThatThrownBy(() -> invitationService.accept("stranger@example.com", id))
+        assertThatThrownBy(() -> invitationService.accept(strangerId, "stranger@example.com", id))
                 .isInstanceOf(InvitationNotFoundException.class);
         assertThat(invitationRepository.findById(id).orElseThrow().getInvitationAcceptedAt()).isNull();
     }
 
     @Test
     void acceptRefusesAnUnknownInvitation() {
-        assertThatThrownBy(() -> invitationService.accept("stranger@example.com", UUID.randomUUID()))
+        assertThatThrownBy(() -> invitationService.accept(strangerId, "stranger@example.com", UUID.randomUUID()))
                 .isInstanceOf(InvitationNotFoundException.class);
     }
 
     @Test
     void acceptRefusesASecondTime() {
         UUID id = invitationService.invite(adaId, "stranger@example.com", familiaId).invitationId();
-        invitationService.accept("stranger@example.com", id);
+        invitationService.accept(strangerId, "stranger@example.com", id);
 
-        assertThatThrownBy(() -> invitationService.accept("stranger@example.com", id))
+        assertThatThrownBy(() -> invitationService.accept(strangerId, "stranger@example.com", id))
                 .isInstanceOf(InvitationAlreadyAccepted.class);
     }
 
@@ -245,7 +270,7 @@ class InvitationServiceTest {
                 .invitationCreatedAt(now.minus(10, ChronoUnit.DAYS))
                 .invitationExpiresAt(now.minus(3, ChronoUnit.DAYS)).build()).getInvitationId();
 
-        assertThatThrownBy(() -> invitationService.accept("stranger@example.com", id))
+        assertThatThrownBy(() -> invitationService.accept(strangerId, "stranger@example.com", id))
                 .isInstanceOf(InvitationExpiredException.class);
         assertThat(invitationRepository.findById(id).orElseThrow().getInvitationAcceptedAt()).isNull();
     }

@@ -34,6 +34,6 @@ public class InvitationController {
     @ResponseStatus(HttpStatus.OK)
     public InvitationDTO.Read accept(@AuthenticationPrincipal UserPrincipal principal,
                                      @PathVariable UUID id){
-        return invitationService.accept(principal.getEmail() ,id);
+        return invitationService.accept(principal.getId() ,principal.getEmail() ,id);
     }
 }
