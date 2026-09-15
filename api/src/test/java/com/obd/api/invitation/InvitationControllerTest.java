@@ -150,7 +150,7 @@ class InvitationControllerTest {
                 .andExpect(jsonPath("$.detail").value("Already a Member of the Group"));
     }
 
-    // --- GET /invitations ----------------------------------------------------
+    // --- GET /invitations/pending --------------------------------------------
 
     @Test
     void pendingListsInvitationsForThePrincipalsEmail() throws Exception {
@@ -160,7 +160,7 @@ class InvitationControllerTest {
 
         // The email comes from the token; there is no way to ask for anyone
         // else's list.
-        mockMvc.perform(get("/api/v1/invitations").with(caller()))
+        mockMvc.perform(get("/api/v1/invitations/pending").with(caller()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].id").value(INVITATION_ID.toString()))
@@ -172,7 +172,7 @@ class InvitationControllerTest {
     void pendingIsAnEmptyListNotAnError() throws Exception {
         given(invitationService.pending(eq(CALLER_EMAIL))).willReturn(List.of());
 
-        mockMvc.perform(get("/api/v1/invitations").with(caller()))
+        mockMvc.perform(get("/api/v1/invitations/pending").with(caller()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isEmpty());
     }

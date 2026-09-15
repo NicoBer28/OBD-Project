@@ -20,11 +20,21 @@ public class TelemetryDTO {
      * to exactly one each.
      */
     public record Ingest(
-            @NotNull UUID carId,
+            // Exactly one of carId / serial. The phone that relays knows what
+            // it is physically connected to - the dongle - so it may name the
+            // car by serial and let the server resolve it; carId remains for
+            // clients that already hold it.
+            UUID carId,
+            @Size(max = 64) String serial,
             // Bounded so a client cannot post an unbounded array; 500 readings
             // at one every 5 seconds is about 40 minutes of buffering.
             @NotEmpty @Size(max = 500) List<@Valid Reading> readings
-    ) {}
+    ) {
+        @AssertTrue(message = "exactly one of carId or serial is required")
+        public boolean isExactlyOneTarget() {
+            return (carId == null) != (serial == null || serial.isBlank());
+        }
+    }
 
     public record Reading(
             // Device time, when the reading was taken - not when it is being

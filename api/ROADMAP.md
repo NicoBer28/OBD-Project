@@ -4,7 +4,8 @@ What is missing, what to build next, and in what order. Companion to
 `README.md`, which documents what already **exists**; this file is about what
 does not.
 
-Last updated: 2026-09-15. Schema is at `V8__invitations.sql`.
+Last updated: 2026-09-15. Schema is at `V9__devices.sql`. 197 tests, 56 smoke
+checks.
 
 ---
 
@@ -12,141 +13,102 @@ Last updated: 2026-09-15. Schema is at `V8__invitations.sql`.
 
 | Area | Schema | Endpoints |
 |---|---|---|
-| Auth / users | `users`, refresh tokens | register, login, refresh, logout |
-| Cars | `cars` (now with `group_id`), `models` | `POST /cars`, `GET /cars`, `GET /models`, `POST /models` (admin) |
-| Groups | `groups`, `group_members`, `invitations` | `POST /groups`, `GET /groups`; invite / list pending / accept |
-| Trips | `trips` | `POST /trips` (start) only |
-| Telemetry | `telemetry`, `cars.snapshot_at` | `POST /telemetry` (batch ingest), `GET /telemetry` (sync) |
+| Auth / users | `users`, `refresh_tokens` | register, login, refresh, logout. **No profile endpoint** — `UserController` is still an empty class. |
+| Cars | `cars` (with `group_id`, `snapshot_at`), `models` | `POST /cars`, `GET /cars`, `GET /cars/{id}`, `GET /models`, `POST /models` (admin) |
+| Groups | `groups`, `group_members` | `POST /groups`, `GET /groups` |
+| Invitations | `invitations` | `POST /invitations/invite/{groupId}`, `GET /invitations/pending`, `POST /invitations/{id}/accept` |
+| Trips | `trips` | `POST /trips` (start) only — **nothing can finish a trip** |
+| Telemetry | `telemetry` | `POST /telemetry` (batch ingest, by `carId` or by dongle `serial`), `GET /telemetry` (cursor sync) |
+| Devices | `devices` | `PUT`/`GET`/`DELETE /cars/{id}/device`, `GET /devices/{serial}` |
 
-Five `POST`s and two `GET`s. Every `Location` header currently returned points at
-a route that does not exist. That is the shape of the work below.
+Access is one predicate — `CarRepository.READABLE`, owner **or** member of the
+car's group — behind `CarAccess`, and every car/trip/telemetry endpoint goes
+through it. It already honours sharing; nothing can *set* `cars.group_id` yet.
 
-`CarAccess` exists and already answers "owner **or** group member", from one
-predicate (`CarRepository.READABLE`); `CarService`, `TripService` and
-`TelemetryService` all go through it. Nothing can set `cars.group_id` yet.
+Two things in the table are half-built and worth knowing before anything else:
+
+- **Accepting an invitation does not enrol the invitee.** The row is marked
+  accepted and vanishes from their pending list, but no `group_members` row is
+  written. From the user's side it looks like it worked.
+- **`GET /cars/{car_id}` answers `202 Accepted`** — a status that means "queued
+  for later" — instead of `200`. It has no README section and no tests.
 
 ---
 
-## Part 1 — Open design decisions
+## Part 1 — Design decisions
 
-Ten things that are missing or undecided. Roughly in the order they hurt.
+### Resolved
 
-### 1. `cars.group_id` — the product premise is not in the schema
+- ~~**`cars.group_id`**~~ — `V7`, nullable, `ON DELETE SET NULL`, mapped as
+  `Car.carGroup`. Only the write endpoints remain (Phase 4).
+- ~~**One access rule, not eight**~~ — `CarRepository.READABLE`, shared verbatim
+  by `findAllReadableBy` and `findReadableBy`; `CarAccess` is the only caller.
+  Proven by `TripServiceTest.aGroupMemberMayStartATripOnASharedCar`, which
+  passes without `TripService` knowing groups exist.
+- ~~**`?since=` on history reads**~~ — `GET /telemetry?carId=&since=&limit=`,
+  oldest-first from an exclusive cursor, `hasMore` + `nextSince`. Paired with
+  batch ingest that treats duplicates as success.
+- ~~**Invitations by email**~~ — `V8`; people without an account can be invited,
+  and the invite response is identical whether or not the email is registered.
+  Accept is an atomic conditional `UPDATE`. What is *not* done is listed under
+  Phase 5.
 
-Every access check in the codebase is "am I the owner". Family sharing, the
-entire point of the app, has nowhere to live. A nullable `group_id` on `cars`,
-FK to `groups`, `ON DELETE SET NULL` (deleting a group must un-share the cars,
-not delete them). One car belongs to at most one group at a time — that was the
-rule from the start, and a plain column enforces it for free where a join table
-would not.
+### Still open
 
-*Decide before:* any read endpoint that filters cars.
+**1. The firmware exposes no serial.** The API side of devices is done (V9,
+pair/read/unpair/resolve, ingest by serial), keyed on a serial rather than the
+BLE MAC because iOS hides the MAC. But `main.cpp` advertises only a name, so
+today the serial is whatever the pairing person types. The "phone learns the
+car without asking" benefit needs the GATT Device Information Service
+(`0x180A`, Serial Number `0x2A25`) derived from the ESP32's factory MAC — a
+few lines of firmware.
 
-### 2. One access rule, not eight
+**2. Settle whether fuel is a percentage or litres.** `V2` and `V5` both dodge
+this with `>= 0` floors instead of `0..100`. Every day of real data makes the
+tightening migration harder, and `fuelUsed` cannot be rendered with a unit until
+it is decided. Same for `battery_level`. *Decide before the first device
+reports for real.*
 
-The moment sharing lands, `TripService`, telemetry ingestion, and every car
-read each need "owner **or** member of the car's group". Write it once:
+**3. OpenAPI (springdoc).** The Flutter side needs a contract, and it generates
+client models from what is already built. Unusually high leverage for one
+dependency and zero code.
 
-```java
-// CarAccess.java
-Optional<Car> readableBy(UUID userId, UUID carId);   // owner or group member
-Optional<Car> ownedBy(UUID userId, UUID carId);      // owner only: share, delete, rename
-```
+**4. Compute expenses in SQL.** "Fuel expense per user" is
+`sum(initial_fuel - final_fuel) group by driver_id` over a date range — one
+query, not trips loaded into Java and summed. Decide before the endpoint
+exists.
 
-Eight hand-rolled copies of that predicate is exactly how one endpoint ends up
-quietly wrong.
+**5. Notify when a trip starts.** "Someone just took the car" is the feature
+that makes a family car-sharing app worth installing, and it falls straight out
+of the open-trip row. Needs a `device_tokens` table.
 
-**Done.** `CarRepository.READABLE` is the predicate; `findAllReadableBy` and
-`findReadableBy` share it verbatim, and `CarAccess` is the only caller. It
-already includes group membership, so Phase 4 needs no change here — proven by
-`TripServiceTest.aGroupMemberMayStartATripOnASharedCar`, which passes without
-`TripService` knowing groups exist.
+**6. Retention for telemetry.** Nothing prunes it and it grows without bound.
+Not worth building before a real device is reporting, but decide the window (or
+monthly partitioning) *before* the table is large.
 
-### 3. A `devices` table — the dongle is unmodelled
+**7. An audit log.** Deliberately not built. `telemetry` logs where a car went;
+nothing logs who removed a member, un-shared a car, or deleted a trip. A
+separate table plus a choice: Postgres triggers (catch everything, actor via a
+session variable) or application code (readable, blind to anything that
+bypasses the API).
 
-The ESP32 has an identity (BLE address, serial) and none of it exists in the
-database. Without it you cannot move a dongle between cars, cannot say which
-device produced a reading, and cannot revoke one that was sold with the car.
+Two smaller ones that keep coming up:
 
-```sql
-devices(device_id, car_id, ble_address unique, paired_at, last_seen_at)
-```
-
-### 4. Group invitations
-
-Only group *creation* exists. Adding a member today would require knowing their
-`user_id`, and the alternative — a user-search endpoint — leaks your user table
-to anyone with an account. An invite code (or an emailed link) sidesteps that
-entirely: the invitee brings the token, so nobody has to look anyone up.
-
-⚠ `GroupMemberRepository.save()` is an **upsert, not an insert** — the composite
-id is assigned by us, so Spring Data cannot tell a new row from an existing one
-and merges. Adding someone already in the group silently rewrites their role.
-The add-member path **must check membership first**. Pinned by
-`GroupRepositoryTest.savingAnExistingMembershipSilentlyChangesTheRole`.
-
-**Mostly done.** `invitations` (V8) is keyed by email so people without an
-account can be invited; invite, the invitee's pending list, and accept all
-exist and are tested. Accept is a conditional `UPDATE`
-(`InvitationRepository.accept`) — atomic, email-bound, once only. What is
-still missing is the actual enrolment on accept, plus revoke and the admin's
-list; see the README's Known limitations.
-
-### 5. `?since=` on history reads
-
-This is the offline-cache primitive already wanted for the phone. The client
-stores its last-seen `recorded_at` and asks only for the delta. Combined with
-the idempotent ingest that `ux_telemetry_car_recorded_at` already gives you,
-sync becomes trivial in both directions. Pair it with a **batch** ingest
-endpoint, since the relay uploads in batches by nature.
-
-### 6. Settle whether fuel is a percentage or litres
-
-`V2` and `V5` both dodge this with `>= 0` floors instead of `0..100`. Every day
-of real data makes the tightening migration harder, and `fuelUsed` cannot be
-rendered with a unit until it is decided. Same question for `battery_level`.
-
-*Decide before:* the first device reports for real.
-
-### 7. OpenAPI (springdoc)
-
-The Flutter side needs a contract, and it generates client models from what is
-already built. On a three-subsystem project this is unusually high leverage for
-one dependency and zero code.
-
-### 8. Compute expenses in SQL
-
-"Fuel expense per user" is `sum(initial_fuel - final_fuel) group by driver_id`
-with a date range — a single query, not trips loaded into Java and summed in a
-loop. Decide that before the endpoint exists, or it will be written the slow
-way and stay that way.
-
-### 9. Notify when a trip starts
-
-"Someone just took the car" is the feature that makes a family car-sharing app
-worth installing, and it falls straight out of the open-trip row that already
-exists. Needs a `device_tokens` table (push tokens per user per phone).
-
-### 10. Retention for telemetry
-
-Nothing prunes it and it grows without bound. Not worth building before a real
-device is reporting, but decide the window (or monthly partitioning) *before*
-the table is large — both are painful to retrofit.
-
-### Still open: an audit log
-
-Deliberately not built. `telemetry` logs where a car went; nothing logs who
-removed a member, un-shared a car, or deleted a trip. If that is wanted, it is
-a separate table plus a choice: Postgres triggers (catch every change, including
-manual SQL, actor passed via a session variable) or application code (easier to
-read, blind to anything that bypasses the API).
+- **`GroupMemberRepository.save()` is an upsert, not an insert** — the
+  composite id is assigned by us, so Spring Data merges. Adding someone already
+  in the group silently rewrites their role. Every path that writes a
+  membership **must check first**. Pinned by
+  `GroupRepositoryTest.savingAnExistingMembershipSilentlyChangesTheRole`.
+- **`Location` only where a GET-by-id exists or is committed.** Cars, groups
+  and trips send one; models and invitations do not. A `Location` that 404s is
+  a broken promise, not a convention.
 
 ---
 
 ## Part 2 — Conventions every endpoint follows
 
-These are already true of the four endpoints that exist. Keeping them true is
-most of what makes the API coherent.
+These are true of the endpoints that exist. Keeping them true is most of what
+makes the API coherent.
 
 **Identity and authorization**
 - The actor always comes from `@AuthenticationPrincipal`, **never** from the
@@ -191,176 +153,127 @@ most of what makes the API coherent.
 
 ## Part 3 — Endpoint roadmap
 
-Ordered by the cost of *not* having it yet — which is not the same as how
-urgent the feature is. Ingestion comes first because delay loses data
-permanently; everything after it only loses time.
+Ordered by the cost of *not* having it yet. Struck-through rows exist and are
+tested; **bold** notes are what is left.
 
-### Phase 1 — Close the hardware loop. Everything else can wait; data cannot.
+### ~~Phase 1 — Close the hardware loop~~ — done
 
-Reads can be built at any time and lose nothing by being late. **Ingestion is
-different: every reading the device produces before this endpoint exists is
-gone for good.** That asymmetry is what puts it first — not that it is the most
-urgent feature, but that it is the only one with an unrecoverable cost for
-being late.
+`POST /telemetry` (batch, idempotent, trip-stamped, snapshot guard),
+`GET /telemetry` (cursor sync), `GET /cars`, `GET /cars/{id}`, and `CarAccess`.
+The full path ESP32 → phone → API → Postgres can run end to end.
 
-Two more reasons it belongs here rather than late:
+Left over:
+- **`GET /cars/{car_id}` returns `202`** instead of `200`; no README section,
+  no slice test, no smoke check.
+- `CarDTO.Read` has `snapshotAt` but **not the group** a car is shared with —
+  a client cannot show "shared with Familia".
 
-- The whole snapshot on `cars` (`fuel_level`, `battery_level`, `mileage`,
-  position, `snapshot_at`) stays `null` forever until something writes it. Car
-  reads built before ingestion return a car with nothing in it, so the two are
-  worth building together.
-- It is the first time the full path — ESP32 → BLE → phone → API → Postgres —
-  runs end to end, across three subsystems and two people. Integration seams
-  get more expensive to discover the longer they go unexercised.
-
-Nothing blocks it. Ingestion needs `CarAccess` (introduced here) and the car's
-open trip (`POST /trips` already exists). It does **not** need the `devices`
-table: the phone is a logged-in client and relays with the user's own access
-token, so there is no device-credential problem to solve yet.
-
-**`CarAccess` is in place** (owner-only) — see `car/CarAccess.java` — so Phase 4
-is a one-method change instead of a sweep through every endpoint.
+### Phase 2 — The remaining reads
 
 | Endpoint | Notes |
 |---|---|
-| ~~`POST /telemetry`~~ **done** | Batch ingest; `carId` in the body rather than the path. Response is the summary in the README. |
-| ~~`GET /telemetry?carId=&since=&limit=`~~ **done** | Oldest-first from an exclusive cursor, `hasMore` + `nextSince`. The sync primitive from §5. |
-| ~~`GET /cars`~~ **done** | Through `CarAccess.allReadableBy`. Exposes `snapshotAt`; still to add: the group. |
-| `GET /cars/{id}` | The route `POST /cars` already advertises in `Location`. |
+| **`GET /users/me`** | `UserController`/`UserService` are still empty classes. Every app needs this on launch. |
+| **`GET /cars/{id}/trips/active`** | "Who has the car right now." Derived from `ended_at is null`. 204 or `null` when idle — pick one and document it. |
+| **`GET /groups/{id}`** | One group, with its members (or a separate `/members`). `GroupAccess.memberOf` for the check. |
+| **`GET /trips/{id}`** | The route `POST /trips` already advertises in `Location`. |
+| **`GET /trips`** | The caller's history, paged, newest first. |
+| **`GET /cars/{id}/trips`** | One car's history, paged. |
+| ~~`GET /models`~~ | Plus an admin-only `POST /models`. Answers `200` where other creates answer `201`; `findAll()` is unordered. |
+| ~~`GET /groups`~~ | One JPQL query building the DTO directly; `memberCount` as a correlated subquery. No tests or smoke check yet. |
 
-Ingestion algorithm, in order:
-1. Access check via `CarAccess`.
-2. Look up the car's open trip once per batch; stamp `trip_id` on readings whose
-   `recorded_at` falls inside it.
-3. Insert. A duplicate `(car_id, recorded_at)` is **success, not an error** —
-   that is what makes the relay's retries safe.
-4. Refresh the car's snapshot **only if** the newest `recorded_at` in the batch
-   is later than `cars.snapshot_at`, and set `snapshot_at` with it. Skipping
-   this check lets a late buffer flush overwrite fresh values with stale ones.
-5. Keep `raw_frame` verbatim, even for readings you could not decode.
+### Phase 3 — Finish the trip lifecycle
+
+**Nothing here exists.** Until it does, `fuelUsed` is always `null` and the
+expense feature is dead.
+
+| Endpoint | Notes |
+|---|---|
+| **`POST /trips/{id}/finish`** | Body: `finalFuel?`, `distance?`. Sets `ended_at` = server clock. |
+| **`DELETE /trips/{id}`** | Cancel a trip started by mistake. Only while active. |
+| **`GET /trips/{id}/route`** | Readings stamped with this trip, oldest first. `findByTelemetryTripIdOrderByTelemetryRecordedAtAsc` already exists. |
 
 Traps:
-- Until sharing lands (Phase 4), `CarAccess` is owner-only, so **only the
-  owner's phone can relay**. A group member driving the car cannot upload. That
-  is acceptable temporarily, but note it in the README rather than discovering
-  it in the field.
-- A batch will routinely contain readings you already have. Decide the response
-  shape now: how many were stored versus already known, so the relay can trim
-  its buffer with confidence.
-
-### Phase 2 — The remaining reads. Nothing is visible without them.
-
-The app still cannot render a screen that is not about one car. Cheapest phase,
-largest unblock.
-
-| Endpoint | Notes |
-|---|---|
-| `GET /users/me` | `UserService`/`UserController` are empty stubs. Every app needs this on launch. |
-| ~~`GET /models`~~ **done** | Plus an admin-only `POST /models`, not in the original plan. See README limitations for what it still lacks. |
-| `GET /cars/{id}/trips/active` | The "who has the car right now" lookup. Derived from `ended_at is null`. 204 or `null` when idle — pick one and document it. |
-| ~~`GET /groups`~~ **done** | One JPQL query building the DTO directly; `memberCount` as a correlated subquery. |
-| `GET /groups/{id}` | Members list included, or a separate `/members` route. |
-| `GET /trips/{id}` | The route `POST /trips` advertises. |
-| `GET /trips` | The caller's history, paged, newest first. |
-| `GET /cars/{id}/trips` | One car's history, paged. |
-
-### Phase 3 — Finish the trip lifecycle.
-
-Until this exists `fuelUsed` is always `null` and the expense feature is dead.
-
-| Endpoint | Notes |
-|---|---|
-| `POST /trips/{id}/finish` | Body: `finalFuel?`, `distance?`. Sets `ended_at` = server clock. |
-| `DELETE /trips/{id}` | Cancel a trip started by mistake. Only while active. |
-| `GET /trips/{id}/route` | Readings stamped with this trip, oldest first. Works on an active trip too. |
-
-Traps:
-- Only the **driver** may finish or cancel; the car's owner may not finish
-  someone else's trip out from under them.
+- Only the **driver** may finish or cancel; the owner may not finish someone
+  else's trip out from under them.
 - `finalFuel > initialFuel` is legal — the driver refuelled. Do not "validate"
   it away.
 - Finishing must **flush the `UPDATE` before any subsequent `INSERT`** on that
   car: Hibernate orders inserts ahead of updates within one flush, so a
-  start-immediately-after-finish would collide with the trip it just closed.
-  Pinned by `TripRepositoryTest.allowsANewTripOnceThePreviousOneIsFinished`.
-- Finishing a trip is a good moment to bring the car's `mileage` up to date.
-  Speed figures are **not** stored — they are computed from `telemetry` in the
-  stats endpoint (Phase 6).
+  start-immediately-after-finish collides with the trip it just closed. Pinned
+  by `TripRepositoryTest.allowsANewTripOnceThePreviousOneIsFinished`.
+- Finishing is a good moment to bring `cars.mileage` up to date. Speed figures
+  are **not** stored — they are computed from `telemetry` (Phase 6).
 
 ### Phase 4 — Sharing. The product premise.
 
-`cars.group_id` exists (`V7`), `Car.carGroup` maps it, and `CarAccess` already
-grants group members read-level access. **All that is left is writing the
-column** — the moment share/unshare land, every endpoint built in Phases 1–3
-honours sharing with no further change. That is the payoff for building the
-seam early.
+The column, the mapping and the access rule all exist. **All that is left is
+writing `cars.group_id`** — the moment these land, every endpoint in Phases 1–3
+honours sharing with no further change.
 
 | Endpoint | Notes |
 |---|---|
-| `PUT /cars/{id}/group` | Share. Caller must own the car **and** belong to the target group. |
-| `DELETE /cars/{id}/group` | Un-share. |
-| `GET /groups/{id}/cars` | Cars available to this group. |
+| **`PUT /cars/{id}/group`** | Share. `CarAccess.ownedBy` for the car **and** membership of the target group. |
+| **`DELETE /cars/{id}/group`** | Un-share. Owner only. |
+| **`GET /groups/{id}/cars`** | Cars available to this group. `ix_cars_group_id` already exists for it. |
 
 Traps:
 - Un-sharing a car that has an **active trip driven by a group member**: does
-  the trip continue or get cut off? Decide deliberately; letting it continue is
-  the kinder answer and needs no extra code.
-- Owner-only for share/unshare, member-level for read. Two different rules on
-  the same resource — this is why §2 exposes two methods.
+  the trip continue or get cut off? Letting it continue is the kinder answer
+  and needs no extra code — but decide it deliberately.
+- Owner-only for share/unshare, member-level for read. Two rules on the same
+  resource; this is why `CarAccess` has two methods.
 
-### Phase 5 — Membership. Sharing with a one-person group is pointless.
-
-Ships together with Phase 4 as one milestone.
+### Phase 5 — Membership
 
 | Endpoint | Notes |
 |---|---|
-| ~~`POST /invitations/invite/{groupId}`~~ **done** | Admin-only, by email, 7-day expiry. Built at `/invitations/invite/{groupId}` rather than nested under the group. |
-| ~~`GET /invitations`~~ **done** | The invitee's pending list — how they find the id to accept. |
-| `POST /invitations/{id}/accept` **half done** | Marks the row accepted (atomic, tested). **Does not yet insert the `group_members` row** — the invitee is still not in the group. Same transaction, after the membership check. |
-| `GET /groups/{id}/invitations` | Admin's view: who was invited, status. |
-| `DELETE /groups/{id}/invitations/{invId}` | Revoke a pending invitation. Today the only way out is expiry. |
-| `GET /groups/{id}/members` | |
-| `PATCH /groups/{id}/members/{userId}` | Change role. Admin-only. |
-| `DELETE /groups/{id}/members/{userId}` | Remove, or leave when it is yourself. |
-| `DELETE /groups/{id}` | Admin-only. Cars fall back to un-shared, not deleted. |
+| ~~`POST /invitations/invite/{groupId}`~~ | Admin-only, by email, 7-day expiry. Answers `200` not `201`; verb in the route. |
+| ~~`GET /invitations/pending`~~ | The invitee's list — how they find the id to accept. |
+| `POST /invitations/{id}/accept` — **half done** | Marks the row accepted (atomic, tested). **Does not insert the `group_members` row.** Fix: same transaction, after `findByIdGroupIdAndIdUserId` (the upsert trap), `save(GroupMember.of(inv.groupId, userId, MEMBER))` — which means `accept` needs the caller's user id as well as their email. |
+| **`FailedInvitationException` handler** | A duplicate pending invitation is a `500` today. One `@ExceptionHandler` → `409`. |
+| **Reclaim expired rows on invite** | An expired invitation still holds `ux_invitations_pending`, so that email can never be re-invited. Delete expired pending rows for `(group, email)` before inserting. |
+| **`GET /groups/{id}/invitations`** | Admin's view: who was invited, status. |
+| **`DELETE /groups/{id}/invitations/{invId}`** | Revoke. Today the only way out of a pending invitation is expiry. |
+| **`GET /groups/{id}/members`** | |
+| **`PATCH /groups/{id}/members/{userId}`** | Change role. Admin-only. |
+| **`DELETE /groups/{id}/members/{userId}`** | Remove, or leave when it is yourself. |
+| **`DELETE /groups/{id}`** | Admin-only. Cars fall back to un-shared (`ON DELETE SET NULL`), invitations go with the group (`CASCADE`). |
 
 Traps:
 - **Never allow the last ADMIN to leave or be demoted** — the group becomes
   unadministrable and no endpoint can recover it.
-- The upsert trap from §4: check membership before writing it.
-- Re-inviting after expiry: an expired row still holds `ux_invitations_pending`.
-  The invite endpoint should delete expired pending rows for `(group, email)`
-  before inserting. Not done yet — today it is a `500`, since
-  `FailedInvitationException` has no handler.
-- Removing a member who is mid-trip in a group car: same question as un-sharing.
+- A `GroupAccess` seam (`memberOf` / `adminOf`, one PK lookup answering both)
+  is worth building with the first of these, for the same reason `CarAccess`
+  was: five endpoints need the identical check.
+- Removing a member who is mid-trip in a group car: same question as
+  un-sharing.
 
 ### Phase 6 — Aggregates. The payoff.
 
 | Endpoint | Notes |
 |---|---|
-| `GET /users/me/expenses?from=&to=` | `sum(initial_fuel - final_fuel)`, in SQL. |
-| `GET /groups/{id}/expenses` | Per member, over a range. Who used how much. |
-| `GET /cars/{id}/stats` | Total distance, max/avg speed, trip count — from `telemetry` and `trips`. |
+| **`GET /users/me/expenses?from=&to=`** | `sum(initial_fuel - final_fuel)`, in SQL. Needs Phase 3 first — there are no finished trips to sum. |
+| **`GET /groups/{id}/expenses`** | Per member, over a range. |
+| **`GET /cars/{id}/stats`** | Total distance, `max(speed)`/`avg(speed)`, trip count — from `telemetry` and `trips`. |
 
-### Phase 7 — Updates and deletes.
-
-| Endpoint | Notes |
-|---|---|
-| `PATCH /cars/{id}` | Rename, plate, mileage correction. Owner-only. |
-| `DELETE /cars/{id}` | **Cascades to trips and telemetry.** Consider a soft delete / archive flag first — a shared car's history belongs to the group, not only the owner. |
-| `PATCH /users/me` | |
-| `DELETE /users/me` | Cars orphan (`owner_id` → null), trips keep the car, memberships cascade. Verify that is the intent before shipping it. |
-| `PATCH /groups/{id}` | Rename. Admin-only. |
-
-### Phase 8 — Devices.
+### Phase 7 — Updates and deletes
 
 | Endpoint | Notes |
 |---|---|
-| `POST /cars/{id}/device` | Pair a dongle by BLE address. |
-| `GET /cars/{id}/device` | Includes `last_seen_at`. |
-| `DELETE /cars/{id}/device` | Unpair — needed when a car is sold. |
+| **`PATCH /cars/{id}`** | Rename, plate, mileage correction. `CarAccess.ownedBy`. |
+| **`DELETE /cars/{id}`** | **Cascades to trips and telemetry.** Consider a soft delete first — a shared car's history belongs to the group, not only the owner. |
+| **`PATCH /users/me`** | The `UserDTO.Update` record already exists, unused. |
+| **`DELETE /users/me`** | Cars orphan (`owner_id` → null), trips keep the car, memberships cascade, invitations keep `invited_by` → null. Verify that is the intent before shipping it. |
+| **`PATCH /groups/{id}`** | Rename. Admin-only. |
 
-### Phase 9 — Polish.
+### ~~Phase 8 — Devices~~ — done
+
+`V9`, `PUT`/`GET`/`DELETE /cars/{id}/device`, `GET /devices/{serial}`, and
+`POST /telemetry` accepting `serial` instead of `carId`. Keyed on a
+firmware serial, not the BLE MAC. Left over: **the firmware half** — see Part 1
+§1.
+
+### Phase 9 — Polish
 
 OpenAPI, push notifications on trip start, rate limiting on ingest, telemetry
 retention, and `server.forward-headers-strategy=framework` so `Location`
@@ -370,9 +283,9 @@ headers stay correct once a reverse proxy terminates TLS.
 
 ## Part 4 — Implementation note: the snapshot guard
 
-Step 4 of the ingestion algorithm is the one part of Phase 1 that is easy to
-write incorrectly in a way that tests written afterwards will not catch. Worth
-settling before the endpoint is started.
+**Implemented** as `CarRepository.refreshSnapshot` + `TelemetryService.fold`,
+with the five cases below pinned in `CarRepositoryTest`. Kept here because it
+is the reasoning, and the same shape is reused by `InvitationRepository.accept`.
 
 ### The comparison belongs in the `WHERE`, not in Java
 
@@ -471,13 +384,16 @@ one place (`TelemetryService`), is easier to reason about.
 
 ## Suggested next step
 
-Phase 1 is done except `GET /cars/{id}` — a one-liner through
-`CarAccess.readableBy`, and the route every `Location` header from `POST /cars`
-already promises. Add a `GroupRef(id, name)` to `CarDTO.Read`
-at the same time; `carGroup` is lazy, so map it inside the transaction like the
-model.
+In this order, each small:
 
-After that, Phase 4's write side — `PUT`/`DELETE /cars/{id}/group` — is unusually
-cheap now: the access rule, the column and the tests for "a member can use a
-shared car" all exist. Share/unshare only has to set `carGroup`, through
-`CarAccess.ownedBy` plus a membership check on the target group.
+1. **Enrol on accept** (Phase 5). The invitation feature is live and silently
+   does nothing — the most misleading state a feature can be in. One
+   membership check and one insert, in the transaction that already exists.
+2. **`POST /trips/{id}/finish`** (Phase 3). Every trip ever started is still
+   open; nothing downstream — expenses, stats, the car's mileage — can exist
+   until trips can end.
+3. **`GET /users/me`** (Phase 2). The empty `UserController` is the oldest
+   stub in the codebase and the first call every app makes.
+
+Then Phase 4's two writes, which are cheap now that everything they depend on
+exists.

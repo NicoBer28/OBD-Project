@@ -14,6 +14,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import com.obd.api.auth.exception.EmailAlreadyInUseException;
 import com.obd.api.car.exception.CarNotFoundException;
+import com.obd.api.device.exception.DeviceAlreadyPairedException;
+import com.obd.api.device.exception.DeviceNotFoundException;
+import com.obd.api.device.exception.NoDevicePairedException;
 import com.obd.api.car.exception.LicensePlateAlreadyRegisteredException;
 import com.obd.api.car.exception.ModelNotFoundException;
 import com.obd.api.model.exception.ModelAlreadyExistsException;
@@ -125,6 +128,31 @@ public class GlobalExceptionHandler {
         var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
         p.setTitle("Conflict");
         p.setDetail("That car is already on a trip");
+        return p;
+    }
+
+    @ExceptionHandler(DeviceNotFoundException.class)
+    public ProblemDetail deviceNotFound(DeviceNotFoundException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        p.setTitle("Not Found");
+        // Also the answer for a serial paired to a car the caller may not see.
+        p.setDetail("No such device");
+        return p;
+    }
+
+    @ExceptionHandler(NoDevicePairedException.class)
+    public ProblemDetail noDevicePaired(NoDevicePairedException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        p.setTitle("Not Found");
+        p.setDetail("No device is paired to this car");
+        return p;
+    }
+
+    @ExceptionHandler(DeviceAlreadyPairedException.class)
+    public ProblemDetail deviceAlreadyPaired(DeviceAlreadyPairedException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        p.setTitle("Conflict");
+        p.setDetail("That device is paired to another car; unpair it there first");
         return p;
     }
 

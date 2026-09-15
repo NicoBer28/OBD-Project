@@ -567,7 +567,7 @@ INV_REG=$(curl -sS -X POST "$BASE/register" -H "Content-Type: application/json" 
   -d "{\"userName\":\"Inv\",\"userLastName\":\"Itee\",\"userEMail\":\"$INV_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
 INV_TOKEN=$(extract_field "$INV_REG" accessToken)
 [ -n "$INV_TOKEN" ] || fail "could not register the invitee"
-PENDING=$(curl -sS "$INVITATIONS" -H "Authorization: Bearer $INV_TOKEN")
+PENDING=$(curl -sS "$INVITATIONS/pending" -H "Authorization: Bearer $INV_TOKEN")
 print_json "$PENDING"
 echo "$PENDING" | grep -q "\"id\":\"$INV_ID\"" || fail "the invitation is not in the invitee's pending list"
 echo "$PENDING" | grep -q '"groupName":"Familia Lazzari"' || fail "expected the group's name in the pending list"
@@ -588,8 +588,66 @@ echo "second accept status: $ACC_AGAIN"
 [ "$ACC_AGAIN" = "409" ] || fail "expected 409 accepting twice, got $ACC_AGAIN"
 
 line "50. Accepted invitations leave the pending list (expect [])"
-PENDING2=$(curl -sS "$INVITATIONS" -H "Authorization: Bearer $INV_TOKEN")
+PENDING2=$(curl -sS "$INVITATIONS/pending" -H "Authorization: Bearer $INV_TOKEN")
 [ "$PENDING2" = "[]" ] || fail "expected an empty pending list after accepting, got: $PENDING2"
 echo "ok: []"
+
+# --- Devices ---------------------------------------------------------------
+# Carl owns TCAR_ID (the telemetry car) and FRESH_CAR_ID; Grace is a stranger.
+# Serial unique per run: the database persists between runs and a serial can
+# only be paired to one car.
+SERIAL_LOWER="obd-c-$(date +%s)"
+SERIAL=$(echo "$SERIAL_LOWER" | tr '[:lower:]' '[:upper:]')
+
+line "51. Owner pairs a dongle to the car (expect 200, serial normalised)"
+DEV=$(curl -sS -X PUT "$CARS/$TCAR_ID/device" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"serial\": \" $SERIAL_LOWER \"}")
+print_json "$DEV"
+[ "$(extract_field "$DEV" serial)" = "$SERIAL" ] || fail "expected the serial trimmed and upper-cased"
+[ "$(extract_field "$DEV" carId)" = "$TCAR_ID" ]  || fail "expected the device paired to $TCAR_ID"
+expect_json "$DEV" lastSeenAt null
+
+line "52. A phone resolves the serial to the car (expect 200)"
+RES=$(curl -sS "$BASE_URL/api/v1/devices/$SERIAL_LOWER" -H "Authorization: Bearer $CAR_TOKEN")
+print_json "$RES"
+[ "$(extract_field "$RES" carId)" = "$TCAR_ID" ] || fail "expected resolve to return $TCAR_ID"
+[ "$(extract_field "$RES" carName)" = "Telemetry car" ] || fail "expected the car's name in the resolve response"
+
+line "53. Telemetry by serial lands on the right car and marks the dongle seen"
+T_NOW=$(iso_ago 0)
+ING_S=$(curl -sS -X POST "$TELEMETRY" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"serial\":\"$SERIAL\",\"readings\":[{\"recordedAt\":\"$T_NOW\",\"speed\":42,\"fuelLevel\":66}]}")
+print_json "$ING_S"
+[ "$(extract_field "$ING_S" carId)" = "$TCAR_ID" ] || fail "expected the batch resolved to $TCAR_ID"
+expect_json "$ING_S" stored 1
+SEEN=$(curl -sS "$CARS/$TCAR_ID/device" -H "Authorization: Bearer $CAR_TOKEN")
+[ -n "$(extract_field "$SEEN" lastSeenAt)" ] || fail "expected lastSeenAt to be set after a batch by serial"
+echo "lastSeenAt: $(extract_field "$SEEN" lastSeenAt)"
+
+line "54. The same serial on another car (expect 409 - unpair first)"
+DUP=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$CARS/$FRESH_CAR_ID/device" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"serial\": \"$SERIAL\"}")
+echo "status: $DUP"
+[ "$DUP" = "409" ] || fail "expected 409 pairing a serial that is paired elsewhere, got $DUP"
+
+line "55. A stranger can neither resolve nor pair (expect 404, 404)"
+S_RES=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE_URL/api/v1/devices/$SERIAL" -H "Authorization: Bearer $OTHER_TOKEN")
+S_PAIR=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$CARS/$TCAR_ID/device" \
+  -H "Authorization: Bearer $OTHER_TOKEN" -H "Content-Type: application/json" -d '{"serial":"ZZ-1"}')
+echo "resolve: $S_RES   pair: $S_PAIR"
+[ "$S_RES" = "404" ]  || fail "a stranger must not learn the serial exists, got $S_RES"
+[ "$S_PAIR" = "404" ] || fail "a stranger must not pair someone else's car, got $S_PAIR"
+
+line "56. Owner unpairs (expect 204); the serial is unknown afterwards (expect 404, 404)"
+UNP=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$CARS/$TCAR_ID/device" -H "Authorization: Bearer $CAR_TOKEN")
+AFTER_DEV=$(curl -sS -o /dev/null -w '%{http_code}' "$CARS/$TCAR_ID/device" -H "Authorization: Bearer $CAR_TOKEN")
+AFTER_RES=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE_URL/api/v1/devices/$SERIAL" -H "Authorization: Bearer $CAR_TOKEN")
+echo "unpair: $UNP   car's device: $AFTER_DEV   resolve: $AFTER_RES"
+[ "$UNP" = "204" ]       || fail "expected 204 from unpair, got $UNP"
+[ "$AFTER_DEV" = "404" ] || fail "expected 404 reading the car's device after unpair, got $AFTER_DEV"
+[ "$AFTER_RES" = "404" ] || fail "expected 404 resolving the serial after unpair, got $AFTER_RES"
 
 line "All checks passed"

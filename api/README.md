@@ -55,6 +55,33 @@ reading or letting it drift silently, the same trap as storing fuel consumption
 next to the two readings it comes from. They are `max(speed)`/`avg(speed)` over
 `telemetry`, filtered by car or by `trip_id`, and belong in the stats endpoint.
 
+### Devices
+
+`devices` maps an OBD dongle to the car it is plugged into, so a phone that
+connects to one can learn which car it is talking to **without asking the
+user** — and get the same answer on every phone in the family.
+
+The problem it solves is in the firmware: every dongle advertises the same BLE
+name (`NimBLEDevice::init("OBD-C")`). A phone that sees "OBD-C" cannot tell two
+family cars apart, and a mapping stored locally on one phone is unknown to the
+others and goes stale the moment a dongle is moved.
+
+| Decision | Because |
+|---|---|
+| keyed on a **serial the firmware exposes**, not the BLE MAC | iOS hides the real address and gives each app a per-phone random UUID for the same peripheral, so a MAC-keyed mapping would not actually be shared across phones. |
+| `serial` stored trimmed + upper-cased, enforced by a CHECK | However the phone's BLE stack reports it, `a4:cf:12` and `A4:CF:12` are one device. |
+| one dongle per car **and** one car per dongle (two unique constraints) | Re-pairing a car to a new dongle replaces the row; moving a dongle to another car is an explicit unpair-then-pair, so readings are never silently re-attributed. |
+| `last_seen_at`, server clock | "The dongle hasn't reported since Tuesday" cannot be produced any other way. Set only by batches that name the serial. |
+| `ON DELETE CASCADE` from `cars` | A dongle without its car is nothing to us. |
+
+**The firmware does not expose a serial yet.** `main.cpp` advertises a name and
+a raw frame, nothing that identifies the unit. The intended change is small:
+add the standard Device Information Service (`0x180A`) with a Serial Number
+String characteristic (`0x2A25`), derived from the ESP32's factory MAC
+(`esp_efuse_mac_get_default`). Until then the serial is whatever the pairing
+person types — the API works either way, but the "no user prompt" benefit
+needs the firmware half.
+
 ## Running
 
 Copy `.env.example` to `.env` and fill in real values, then load it into your
@@ -268,6 +295,93 @@ own family twice, and would have been a second copy of the rule to keep in
 step. See `ROADMAP.md` §2.
 
 **Errors:** `401 Unauthorized` without a token.
+
+---
+
+### `PUT /api/v1/cars/{carId}/device`
+
+Pairs a dongle to a car the caller **owns**. Requires
+`Authorization: Bearer <accessToken>`.
+
+**Body** (`application/json`):
+
+```json
+{ "serial": "a4:cf:12:8b:3c:7e" }
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `serial` | yes | ≤ 64 chars; letters, digits, `:`, `_`, `-`; trimmed and upper-cased before storing |
+
+`PUT` semantics: pairing the car to a new serial **replaces** its current
+dongle (and clears `lastSeenAt` — the new one has not reported yet); pairing
+the same serial again is a no-op that returns the existing row. Owner-only —
+group members may drive the car and upload for it, but which physical device
+speaks for a car is the owner's decision.
+
+**Response** `200 OK`:
+
+```json
+{
+  "id": "776e510b-5367-4986-8bf5-2345903fa238",
+  "serial": "A4:CF:12:8B:3C:7E",
+  "carId": "2333c028-9224-4096-9c06-da2fd83e8bb3",
+  "carName": "Telemetry car",
+  "pairedAt": "2026-09-15T15:08:14.296645Z",
+  "lastSeenAt": null
+}
+```
+
+No `Location` header: a device is addressed as "this car's dongle" or "this
+serial", never by its own id.
+
+**Errors:** `404 Not Found` if the car does not exist or the caller does not
+own it (a member gets the same answer as a stranger); `409 Conflict` if the
+serial is paired to a **different** car — unpair it there first, so a move is
+always deliberate; `400 Bad Request` for a blank or malformed serial; `401
+Unauthorized` without a token.
+
+---
+
+### `GET /api/v1/cars/{carId}/device`
+
+The dongle paired to a car the caller may read (owner or group member).
+
+**Response** `200 OK` — same shape as above, `lastSeenAt` set once the dongle
+has delivered readings.
+
+**Errors:** `404 Not Found` with `"No such car"` if the car is not readable,
+or `"No device is paired to this car"` if it is readable but has no dongle.
+`401 Unauthorized` without a token.
+
+---
+
+### `DELETE /api/v1/cars/{carId}/device`
+
+Unpairs the car's dongle. Owner-only. Idempotent — a car with no dongle
+answers the same.
+
+**Response** `204 No Content`. The serial is free to pair elsewhere afterwards.
+
+**Errors:** `404 Not Found` if the car is not the caller's; `401 Unauthorized`
+without a token.
+
+---
+
+### `GET /api/v1/devices/{serial}`
+
+**"Which car is this dongle?"** — what a phone asks the moment it connects.
+The serial is matched after normalisation, so the phone sends it however its
+BLE stack reports it.
+
+**Response** `200 OK` — the same device object, whose `carId` and `carName`
+are what the phone needs to start uploading and to tell the user what it
+found.
+
+Answered only if the caller may read that car. Otherwise — and for a serial
+that does not exist — `404 Not Found` with `"No such device"`, identically:
+a phone outside the family cannot confirm that a dongle exists. `401
+Unauthorized` without a token.
 
 ---
 
@@ -489,7 +603,7 @@ surfaces.
 
 ---
 
-### `GET /api/v1/invitations`
+### `GET /api/v1/invitations/pending`
 
 The caller's pending invitations — the way an invitee discovers the id they
 need to accept. Requires `Authorization: Bearer <accessToken>`.
@@ -639,7 +753,8 @@ batch is always safe.**
 
 | Field | Required | Notes |
 |---|---|---|
-| `carId` | yes | one car per batch |
+| `carId` | one of | the car, by id |
+| `serial` | one of | the car, by the serial of its paired dongle — what the relaying phone actually knows. Exactly one of `carId`/`serial`. |
 | `readings` | yes | 1–500 entries |
 | `readings[].recordedAt` | yes | when the reading was **taken** (device time), not uploaded; at most 5 minutes in the future |
 | `readings[].latitude` / `longitude` | no | both or neither; valid WGS-84 ranges |
@@ -647,7 +762,9 @@ batch is always safe.**
 | `readings[].raw` | no | any JSON — the frame as the device sent it, kept verbatim |
 
 The uploader is taken from the access token. The car must be one the caller
-may read (its owner, until sharing exists).
+may read — owner or group member — whether named by id or resolved from the
+serial. A batch that names the serial also stamps the device's `lastSeenAt`;
+one that names the car says nothing about the hardware, so it does not.
 
 **Response** `200 OK`:
 
@@ -694,8 +811,10 @@ concurrent batches. Fields the batch did not carry keep their previous value
 **Errors:** `400 Bad Request` rejects the **whole batch**, with errors keyed by
 index (`readings[2].positionComplete`, `readings[3].notFromTheFuture`) — a
 malformed reading is a serialiser bug on the phone, and half-applying a batch
-would leave its buffer state unknowable. `404 Not Found` if the car does not
-exist or is not the caller's. `401 Unauthorized` without a token. There is
+would leave its buffer state unknowable; also `400` (`exactlyOneTarget`) if
+both or neither of `carId`/`serial` are given. `404 Not Found` if the car does
+not exist or is not the caller's, or (`"No such device"`) if the serial is
+unknown or belongs to a car the caller may not see. `401 Unauthorized` without a token. There is
 deliberately no `409`: unlike a duplicate trip start, a duplicate reading is the
 normal retry path.
 
@@ -850,6 +969,10 @@ What is missing, in what order to build it, and the endpoint roadmap live in
   merges. Adding a member who is already in the group would silently rewrite
   their role. The add-member endpoint must check membership first - see
   `GroupRepositoryTest.savingAnExistingMembershipSilentlyChangesTheRole`.
+- The firmware exposes no serial yet, so pairing is by a value the person
+  types. The API side of device support is complete; the "phone knows the car
+  without asking" benefit needs the GATT Serial Number characteristic in
+  `hardware/main/main.cpp` (see *Devices* under Database).
 - Telemetry history is only readable oldest-first from a cursor. A
   newest-first view for display (`order=desc`) is not implemented; the client is
   expected to sync into its local cache and sort there.
@@ -880,9 +1003,10 @@ What is missing, in what order to build it, and the endpoint roadmap live in
   insertion order rather than by brand.
 - `GET /api/v1/models` and `POST /api/v1/models` have no tests and no smoke
   checks yet.
-- `GET /api/v1/cars/{id}`, updating and deleting a car are not implemented.
-  The `Location` header returned by create therefore points at a route that
-  does not exist yet.
+- `GET /api/v1/cars/{car_id}` exists (through `CarAccess`, so a shared car is
+  readable by group members) but answers `202 Accepted` instead of `200`, and
+  has no README section, slice test or smoke check. Updating and deleting a
+  car are not implemented.
 - `CarDTO.Read` does not yet expose the group a car is shared with, so a
   client cannot show "shared with Familia Lazzari".
 - `AuthController.logout` is still not covered by the controller slice. It reads

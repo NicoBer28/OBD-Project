@@ -5,6 +5,9 @@ import com.obd.api.car.CarAccess;
 import com.obd.api.car.CarRepository;
 import com.obd.api.model.ModelRepository;
 import com.obd.api.car.exception.CarNotFoundException;
+import com.obd.api.device.Device;
+import com.obd.api.device.DeviceRepository;
+import com.obd.api.device.exception.DeviceNotFoundException;
 import com.obd.api.group.*;
 import com.obd.api.support.RepositoryTest;
 import com.obd.api.telemetry.dto.TelemetryDTO;
@@ -57,6 +60,8 @@ class TelemetryServiceTest {
     private GroupRepository groupRepository;
     @Autowired
     private GroupMemberRepository groupMemberRepository;
+    @Autowired
+    private DeviceRepository deviceRepository;
 
     @MockitoBean
     private PasswordEncoder passwordEncoder;
@@ -92,7 +97,7 @@ class TelemetryServiceTest {
     }
 
     private TelemetryDTO.Ingest batch(Reading... readings) {
-        return new TelemetryDTO.Ingest(carId, List.of(readings));
+        return new TelemetryDTO.Ingest(carId, null, List.of(readings));
     }
 
     private Car car() {
@@ -335,6 +340,66 @@ class TelemetryServiceTest {
         assertThat(result.stored()).isEqualTo(1);
         assertThat(car().getCarFuelLevel()).isEqualTo(70);
         assertThat(telemetryService.history(graceId, query(null, null)).readings()).hasSize(1);
+    }
+
+    // --- by serial -----------------------------------------------------------
+
+    private static final String SERIAL = "A4:CF:12:8B:3C:7E";
+
+    private TelemetryDTO.Ingest bySerial(String serial, Reading... readings) {
+        return new TelemetryDTO.Ingest(null, serial, List.of(readings));
+    }
+
+    @Test
+    void aBatchMayNameTheDongleInsteadOfTheCar() {
+        deviceRepository.saveAndFlush(Device.builder().deviceCarId(carId).deviceSerial(SERIAL).build());
+
+        // The phone sends what it is connected to, in whatever case its BLE
+        // stack reports; the server resolves the car.
+        var result = telemetryService.ingest(adaId, bySerial("a4:cf:12:8b:3c:7e", reading(noon, 70)));
+
+        assertThat(result.carId()).isEqualTo(carId);
+        assertThat(result.stored()).isEqualTo(1);
+        assertThat(car().getCarFuelLevel()).isEqualTo(70);
+    }
+
+    @Test
+    void aBatchBySerialRecordsWhenTheDongleWasLastSeen() {
+        deviceRepository.saveAndFlush(Device.builder().deviceCarId(carId).deviceSerial(SERIAL).build());
+        Instant before = Instant.now();
+
+        telemetryService.ingest(adaId, bySerial(SERIAL, reading(noon, 70)));
+
+        // Server clock, not the reading's recordedAt: "when did it last talk
+        // to us", which is the diagnostic question.
+        Instant seen = deviceRepository.findByDeviceSerial(SERIAL).orElseThrow().getDeviceLastSeenAt();
+        assertThat(seen).isNotNull().isAfterOrEqualTo(before);
+    }
+
+    @Test
+    void aBatchByCarIdSaysNothingAboutTheDongle() {
+        deviceRepository.saveAndFlush(Device.builder().deviceCarId(carId).deviceSerial(SERIAL).build());
+
+        telemetryService.ingest(adaId, batch(reading(noon, 70)));
+
+        assertThat(deviceRepository.findByDeviceSerial(SERIAL).orElseThrow().getDeviceLastSeenAt()).isNull();
+    }
+
+    @Test
+    void anUnknownSerialIsRefused() {
+        assertThatThrownBy(() -> telemetryService.ingest(adaId, bySerial("00:00:00:00:00:00", reading(noon, 70))))
+                .isInstanceOf(DeviceNotFoundException.class);
+        assertThat(telemetryRepository.count()).isZero();
+    }
+
+    @Test
+    void aSerialForACarTheCallerMayNotSeeLooksUnknown() {
+        deviceRepository.saveAndFlush(Device.builder().deviceCarId(carId).deviceSerial(SERIAL).build());
+
+        // Grace is not in any group with Ada here. The dongle's existence is
+        // not confirmed to her.
+        assertThatThrownBy(() -> telemetryService.ingest(graceId, bySerial(SERIAL, reading(noon, 70))))
+                .isInstanceOf(DeviceNotFoundException.class);
     }
 
     @Test

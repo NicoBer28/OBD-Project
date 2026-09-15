@@ -122,8 +122,36 @@ class TelemetryControllerTest {
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.title").value("Validation failed"))
-                .andExpect(jsonPath("$.errors.carId").exists())
+                // Neither carId nor serial: the batch has no target.
+                .andExpect(jsonPath("$.errors.exactlyOneTarget").exists())
                 .andExpect(jsonPath("$.errors.readings").exists());
+    }
+
+    @Test
+    void ingestRejectsBothACarIdAndASerial() throws Exception {
+        // Naming the car two ways invites them to disagree; one or the other.
+        mockMvc.perform(post("/api/v1/telemetry").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_BODY.replace("\"readings\"",
+                                "\"serial\": \"A4:CF:12:8B:3C:7E\", \"readings\"")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.exactlyOneTarget").exists());
+    }
+
+    @Test
+    void ingestAcceptsASerialInsteadOfACarId() throws Exception {
+        given(telemetryService.ingest(eq(CALLER_ID), any(TelemetryDTO.Ingest.class)))
+                .willReturn(new TelemetryDTO.Ingested(CAR_ID, 2, 0, null, true,
+                        Instant.parse("2026-09-10T12:00:05Z")));
+
+        mockMvc.perform(post("/api/v1/telemetry").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_BODY.replace(
+                                "\"carId\": \"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\"",
+                                "\"serial\": \"a4:cf:12:8b:3c:7e\"")))
+                .andExpect(status().isOk())
+                // The server resolved the dongle to its car.
+                .andExpect(jsonPath("$.carId").value(CAR_ID.toString()));
     }
 
     @Test

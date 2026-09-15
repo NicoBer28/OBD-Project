@@ -4,6 +4,10 @@ import com.obd.api.car.Car;
 import com.obd.api.car.CarAccess;
 import com.obd.api.car.CarRepository;
 import com.obd.api.car.exception.CarNotFoundException;
+import com.obd.api.device.Device;
+import com.obd.api.device.DeviceRepository;
+import com.obd.api.device.DeviceService;
+import com.obd.api.device.exception.DeviceNotFoundException;
 import com.obd.api.telemetry.dto.TelemetryDTO;
 import com.obd.api.telemetry.dto.TelemetryDTO.Reading;
 import com.obd.api.trip.Trip;
@@ -13,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
@@ -26,6 +31,7 @@ public class TelemetryService {
     private final TelemetryRepository telemetryRepository;
     private final CarRepository carRepository;
     private final TripRepository tripRepository;
+    private final DeviceRepository deviceRepository;
     private final CarAccess carAccess;
 
     /**
@@ -39,8 +45,7 @@ public class TelemetryService {
      */
     @Transactional
     public TelemetryDTO.Ingested ingest(UUID userId, TelemetryDTO.Ingest request) {
-        Car car = carAccess.readableBy(userId, request.carId())
-                .orElseThrow(() -> new CarNotFoundException(request.carId()));
+        Car car = resolveCar(userId, request);
 
         // Looked up once per batch, and by car rather than by uploader: the
         // reading belongs to whoever is driving the car, which need not be
@@ -65,6 +70,12 @@ public class TelemetryService {
                 newest.fuelLevel(), newest.batteryLevel(), newest.mileage(),
                 newest.latitude(), newest.longitude());
 
+        // Only when the batch named the dongle do we know which device spoke;
+        // a batch by carId says nothing about the hardware.
+        if (request.serial() != null) {
+            deviceRepository.touch(DeviceService.normaliseSerial(request.serial()), Instant.now());
+        }
+
         return new TelemetryDTO.Ingested(
                 car.getCarId(),
                 stored,
@@ -72,6 +83,23 @@ public class TelemetryService {
                 openTrip == null ? null : openTrip.getTripId(),
                 snapshotMoved == 1,
                 newest.recordedAt());
+    }
+
+    /**
+     * The car a batch is for: by id, or by the serial of the dongle it came
+     * from. Either way the answer passes through CarAccess, and an unknown or
+     * unreadable serial looks exactly like a nonexistent one.
+     */
+    private Car resolveCar(UUID userId, TelemetryDTO.Ingest request) {
+        if (request.carId() != null) {
+            return carAccess.readableBy(userId, request.carId())
+                    .orElseThrow(() -> new CarNotFoundException(request.carId()));
+        }
+        String serial = DeviceService.normaliseSerial(request.serial());
+        Device device = deviceRepository.findByDeviceSerial(serial)
+                .orElseThrow(() -> new DeviceNotFoundException(serial));
+        return carAccess.readableBy(userId, device.getDeviceCarId())
+                .orElseThrow(() -> new DeviceNotFoundException(serial));
     }
 
     /**
