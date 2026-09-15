@@ -31,9 +31,9 @@ class _BluetoothScannerScreenState extends State<BluetoothScannerScreen> {
   // Controla el ícono de la barra superior y evita iniciar acciones duplicadas.
   bool _isScanning = false;
 
-  // Por defecto se ocultan anuncios BLE que no informan nombre.
-  // El filtro permite mostrarlos cuando sea necesario identificar un dispositivo.
-  bool _mostrarSinNombre = false;
+  bool _mostrarTodos = false;
+
+  String? _conectandoDeviceId;
 
   @override
   void initState() {
@@ -60,7 +60,7 @@ class _BluetoothScannerScreenState extends State<BluetoothScannerScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Bluetooth BLE no está disponible en esta plataforma'),
+          content: Text('Bluetooth BLE no está disponible'),
         ),
       );
       return;
@@ -94,44 +94,74 @@ class _BluetoothScannerScreenState extends State<BluetoothScannerScreen> {
   }
 
   Future<void> _conectarDispositivo(BluetoothDevice device) async {
-    // Regla de oro: detener SIEMPRE el escaneo antes de conectar.
     await FlutterBluePlus.stopScan();
+    
+    setState(() {
+      _conectandoDeviceId = device.remoteId.str;
+    });
 
-    try {
-      // `License.nonprofit` es obligatorio en esta versión del paquete. La
-      // conexión no automática espera a que este método termine correctamente.
-      await device.connect(license: License.nonprofit, autoConnect: false);
+    const int maxIntentos = 10;
+    int intentoActual = 0;
+    bool conectado = false;
+    String ultimoError = '';
 
-      if (!mounted) return;
+    // Bucle de reintentos silenciosos
+    while (intentoActual < maxIntentos && !conectado) {
+      intentoActual++;
+      try {
+        // Configuramos un timeout para que no se quede colgado eternamente
+        await device.connect(
+          license: License.nonprofit, 
+          autoConnect: false,
+          timeout: const Duration(seconds: 5),
+        );
+        conectado = true;
+      } catch (e) {
+        ultimoError = e.toString();
+        // El Error 133 requiere que el sistema operativo respire antes de reintentar
+        if (intentoActual < maxIntentos) {
+          await Future.delayed(const Duration(milliseconds: 1500));
+        }
+      }
+    }
+
+    if (!mounted) return;
+    
+    // Restauramos el estado del botón
+    setState(() {
+      _conectandoDeviceId = null;
+    });
+
+    if (conectado) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Conectado exitosamente a ${device.advName}')),
       );
-
-      // El escáner no conoce la pantalla principal: informa el éxito mediante
-      // un callback y deja que main.dart decida cómo navegar.
       widget.onConnected(device);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error de conexión: $e')));
+    } else {
+      // Solo mostramos error si fallaron todos los intentos
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error tras $maxIntentos intentos: $ultimoError'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
-
-  @override
+@override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Buscar Dispositivo'),
         actions: [
           IconButton(
-            tooltip: _mostrarSinNombre
-                ? 'Ocultar dispositivos sin nombre'
-                : 'Mostrar dispositivos sin nombre',
+            tooltip: _mostrarTodos
+                ? 'Mostrando todos'
+                : 'Mostrando solo ESP/OBD',
             icon: Icon(
-              _mostrarSinNombre ? Icons.filter_alt : Icons.filter_alt_outlined,
+              _mostrarTodos ? Icons.filter_alt_off : Icons.filter_alt,
             ),
             onPressed: () {
-              setState(() => _mostrarSinNombre = !_mostrarSinNombre);
+              setState(() => _mostrarTodos = !_mostrarTodos);
             },
           ),
           _isScanning
@@ -149,28 +179,28 @@ class _BluetoothScannerScreenState extends State<BluetoothScannerScreen> {
         children: [
           Expanded(
             child: StreamBuilder<List<ScanResult>>(
-              // StreamBuilder reconstruye la lista cada vez que llega un nuevo
-              // resultado del escaneo, sin tener que administrar una lista a mano.
               stream: FlutterBluePlus.scanResults,
               initialData: const [],
               builder: (context, snapshot) {
                 final results = snapshot.data ?? [];
-                // Se filtran solo para la interfaz; el escaneo BLE sigue
-                // detectando todos los dispositivos cercanos.
-                final visibleResults = _mostrarSinNombre
+                
+                // Filtramos la lista según el estado del botón superior
+                final visibleResults = _mostrarTodos
                     ? results
-                    : results
-                          .where((result) => result.device.advName.isNotEmpty)
-                          .toList();
+                    : results.where((result) {
+                        final nombreMayusculas = result.device.advName.toUpperCase();
+                        return nombreMayusculas.contains('ESP') || 
+                               nombreMayusculas.contains('OBD');
+                      }).toList();
 
                 if (visibleResults.isEmpty) {
                   return Center(
                     child: Padding(
                       padding: const EdgeInsets.all(24),
                       child: Text(
-                        _mostrarSinNombre
+                        _mostrarTodos
                             ? 'No se encontraron dispositivos cercanos.'
-                            : 'No hay dispositivos con nombre. Activá el filtro para ver todos.',
+                            : 'Buscando ESP o OBD...\n\nUsá el filtro para ver todos los dispositivos.',
                         textAlign: TextAlign.center,
                       ),
                     ),
@@ -184,6 +214,9 @@ class _BluetoothScannerScreenState extends State<BluetoothScannerScreen> {
                     final nombre = device.advName.isNotEmpty
                         ? device.advName
                         : 'Sin nombre (${device.remoteId})';
+                    
+                    final isConnectingToThis = _conectandoDeviceId == device.remoteId.str;
+                    final isAnyConnecting = _conectandoDeviceId != null;
 
                     return Card(
                       margin: const EdgeInsets.symmetric(
@@ -195,8 +228,17 @@ class _BluetoothScannerScreenState extends State<BluetoothScannerScreen> {
                         title: Text(nombre),
                         subtitle: Text(device.remoteId.toString()),
                         trailing: ElevatedButton(
-                          onPressed: () => _conectarDispositivo(device),
-                          child: const Text('Conectar'),
+                          // Desactiva los botones si ya hay un proceso de conexión en curso
+                          onPressed: isAnyConnecting 
+                              ? null 
+                              : () => _conectarDispositivo(device),
+                          child: isConnectingToThis
+                              ? const SizedBox(
+                                  width: 16, 
+                                  height: 16, 
+                                  child: CircularProgressIndicator(strokeWidth: 2)
+                                )
+                              : const Text('Conectar'),
                         ),
                       ),
                     );
@@ -206,14 +248,15 @@ class _BluetoothScannerScreenState extends State<BluetoothScannerScreen> {
             ),
           ),
           SafeArea(
-            // SafeArea evita que el botón quede debajo de la barra de navegación
-            // o del área reservada para gestos del teléfono.
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
               child: SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
-                  onPressed: widget.onContinueWithoutConnection,
+                  // Desactiva el botón de continuar sin conexión si está intentando conectarse
+                  onPressed: _conectandoDeviceId != null 
+                      ? null 
+                      : widget.onContinueWithoutConnection,
                   icon: const Icon(Icons.dashboard_outlined),
                   label: const Text('Continuar sin conectar (modo demo)'),
                 ),
