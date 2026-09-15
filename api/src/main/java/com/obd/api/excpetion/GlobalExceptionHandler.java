@@ -1,6 +1,7 @@
 package com.obd.api.excpetion;
 
 import com.obd.api.invitation.exception.*;
+import com.obd.api.user.exception.UserNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -56,6 +57,14 @@ public class GlobalExceptionHandler {
         var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
         p.setTitle("Not Found");
         p.setDetail("Invitation Not Found");
+        return p;
+    }
+
+    @ExceptionHandler(UserNotFoundException.class)
+    public ProblemDetail userNotFound(UserNotFoundException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        p.setTitle("Not Found");
+        p.setDetail("User not found");
         return p;
     }
 
