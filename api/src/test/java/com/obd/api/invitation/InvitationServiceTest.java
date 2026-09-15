@@ -147,6 +147,41 @@ class InvitationServiceTest {
     }
 
     @Test
+    void reinvitingAfterExpiryReplacesTheExpiredInvitation() {
+        Instant now = Instant.now();
+        UUID stale = invitationRepository.saveAndFlush(Invitation.builder()
+                .invitationGroupId(familiaId).invitationEmail("new@example.com")
+                .invitationInvitedBy(adaId)
+                .invitationCreatedAt(now.minus(10, ChronoUnit.DAYS))
+                .invitationExpiresAt(now.minus(3, ChronoUnit.DAYS)).build()).getInvitationId();
+
+        // Without the reclaim this is a unique-index violation: the expired
+        // row still has accepted_at null. With it, a fresh invitation.
+        InvitationDTO.Read fresh = invitationService.invite(adaId, "new@example.com", familiaId);
+
+        assertThat(fresh.invitationId()).isNotEqualTo(stale);
+        assertThat(fresh.invitationStatus()).isEqualTo(InvitationStatus.PENDING);
+        assertThat(invitationRepository.findById(stale)).isEmpty();
+        assertThat(invitationService.pending("new@example.com")).hasSize(1);
+    }
+
+    @Test
+    void reinvitingSomeoneWhoAlreadyAcceptedKeepsThatHistory() {
+        UUID accepted = invitationService.invite(adaId, "stranger@example.com", familiaId).invitationId();
+        invitationService.accept(strangerId, "stranger@example.com", accepted);
+        // They left (no endpoint yet - simulate) and are being invited back.
+        groupMemberRepository.deleteById(new GroupMemberId(familiaId, strangerId));
+        groupMemberRepository.flush();
+
+        invitationService.invite(adaId, "stranger@example.com", familiaId);
+
+        // The accepted row is the record of how they joined the first time;
+        // reclaim never touches it, and the partial index allows the new one.
+        assertThat(invitationRepository.findById(accepted)).isPresent();
+        assertThat(invitationRepository.count()).isEqualTo(2);
+    }
+
+    @Test
     void theSameEmailMayBeInvitedToTwoGroups() {
         UUID amigos = newGroup("Amigos");
         enrol(amigos, adaId, GroupRole.ADMIN);

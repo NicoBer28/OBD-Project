@@ -40,6 +40,11 @@ public class InvitationService {
         if(groupMember2 != null)
             throw new AlreadyAMemberException(email, groupID);
 
+        // An expired invitation for this address would still hold
+        // ux_invitations_pending and block the new one. Reclaim it now; a
+        // *live* pending one is left alone and surfaces as the 409 below.
+        invitationRepository.deleteExpiredPending(groupID, invite.getInvitationEmail(), Instant.now());
+
         Invitation save;
 
         try {

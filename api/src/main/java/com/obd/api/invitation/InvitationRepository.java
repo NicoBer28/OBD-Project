@@ -49,6 +49,34 @@ public interface InvitationRepository extends JpaRepository<Invitation, UUID> {
                @Param("email") String email,
                @Param("now") Instant now);
 
+    /**
+     * Removes an expired, never-accepted invitation for this email in this
+     * group, so a fresh one can be issued. Returns how many were removed
+     * (0 or 1 - ux_invitations_pending allows at most one pending row).
+     *
+     * This is the only place expired invitations are cleaned up, and it is
+     * enough: an expired row is harmless until someone re-invites the same
+     * address, at which point it would still occupy the unique index. Deleting
+     * it at that moment - instead of on a schedule - means no background job
+     * and nothing to forget. Accepted rows are never touched: they are the
+     * record of how someone joined.
+     *
+     * A JPQL delete executes immediately rather than at flush time, which is
+     * what the caller needs: Hibernate orders inserts before deletes within a
+     * flush, so a deferred delete would let the new row collide with the old.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            delete from Invitation i
+             where i.invitationGroupId = :groupId
+               and i.invitationEmail = :email
+               and i.invitationAcceptedAt is null
+               and i.invitationExpiresAt <= :now
+            """)
+    int deleteExpiredPending(@Param("groupId") UUID groupId,
+                             @Param("email") String email,
+                             @Param("now") Instant now);
+
     @Query("""
         select new com.obd.api.invitation.dto.InvitationDTO$Pending(
                    i.invitationId, g.groupId, g.groupName,

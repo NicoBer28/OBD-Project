@@ -116,6 +116,41 @@ class InvitationRepositoryTest {
         assertThat(invitationRepository.accept(UUID.randomUUID(), "grace@example.com", noon)).isZero();
     }
 
+    // --- deleteExpiredPending: reclaiming the unique index -----------------
+
+    @Test
+    void deletesOnlyTheExpiredPendingRowForThatEmailAndGroup() {
+        Instant now = noon.plus(10, ChronoUnit.DAYS);
+        // Expired and never accepted: the one that should go.
+        UUID expired = invitationRepository.saveAndFlush(anInviteFor("grace@example.com").build()).getInvitationId();
+        // Expired but accepted: history, stays.
+        UUID acceptedOld = invitationRepository.saveAndFlush(anInviteFor("grace@example.com")
+                .invitationAcceptedAt(noon.plusSeconds(60)).build()).getInvitationId();
+        // Same email, another group: not ours to touch.
+        UUID otherGroup = groupRepository.saveAndFlush(Group.builder().groupName("Amigos").build()).getGroupId();
+        UUID elsewhere = invitationRepository.saveAndFlush(anInviteFor("grace@example.com")
+                .invitationGroupId(otherGroup).build()).getInvitationId();
+        // Another email, same group, also expired: not ours either.
+        UUID otherEmail = invitationRepository.saveAndFlush(anInviteFor("mallory@example.com").build()).getInvitationId();
+
+        assertThat(invitationRepository.deleteExpiredPending(groupId, "grace@example.com", now)).isEqualTo(1);
+
+        assertThat(invitationRepository.findById(expired)).isEmpty();
+        assertThat(invitationRepository.findById(acceptedOld)).isPresent();
+        assertThat(invitationRepository.findById(elsewhere)).isPresent();
+        assertThat(invitationRepository.findById(otherEmail)).isPresent();
+    }
+
+    @Test
+    void leavesALivePendingInvitationAlone() {
+        UUID live = invitationRepository.saveAndFlush(anInviteFor("grace@example.com").build()).getInvitationId();
+
+        // Still within its week: not expired, so nothing to reclaim - the
+        // caller will hit the unique index and answer "already invited".
+        assertThat(invitationRepository.deleteExpiredPending(groupId, "grace@example.com", noon.plusSeconds(60))).isZero();
+        assertThat(invitationRepository.findById(live)).isPresent();
+    }
+
     // --- the table's own rules ---------------------------------------------
 
     @Test
