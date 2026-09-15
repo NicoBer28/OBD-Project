@@ -1,13 +1,13 @@
 #include "NimBLEDevice.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "driver/gpio.h"
-#include "driver/spi_master.h"
-#include "esp_twai.h"
-#include "esp_twai_mcp2515.h"
-#include "esp_log.h"
 #include <string>
 #include <time.h>
+#include "mcp2515.h"
+#include "can.h"
+
 
 // definiciones BT
 #define SERVICE_UUID           "6E400001-B5A3-F393-E0A9-E50E24DCCA9E" // identificador del servicio principal
@@ -78,10 +78,58 @@ class MyRxCallbacks: public NimBLECharacteristicCallbacks {
 };
 
 
+// data SPI y MCP
+#define MCP2515_MISO_PIN GPIO_NUM_19
+#define MCP2515_MOSI_PIN GPIO_NUM_23
+#define MCP2515_CLK_PIN  GPIO_NUM_18
+#define MCP2515_CS_PIN   GPIO_NUM_5
+#define MCP2515_INT_PIN  GPIO_NUM_4
+
+
+bool int_mcp = false;
+struct can_frame frame;
+
+// handle de la interrupt del pin del MCP
+static void IRAM_ATTR gpioInterruptCan (void *args) {
+    int_mcp = true;
+}
+
+
 extern "C" void app_main(void){
 
-    // random init, para demostraciones sin auto
-    srand(time(NULL));
+
+    // spi init
+    spi_bus_config_t buscfg = {};
+    buscfg.miso_io_num = MCP2515_MISO_PIN;
+    buscfg.mosi_io_num = MCP2515_MOSI_PIN;
+    buscfg.sclk_io_num = MCP2515_CLK_PIN;
+    buscfg.quadwp_io_num = -1;
+    buscfg.quadhd_io_num = -1;
+    
+    // spi config
+    ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO));
+
+    spi_device_interface_config_t devcfg = {};
+    devcfg.clock_speed_hz = 10000000;
+    devcfg.mode = 0;
+    devcfg.spics_io_num = MCP2515_CS_PIN;
+    devcfg.queue_size = 1;
+    
+    spi_device_handle_t spi_handle;
+    ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &devcfg, &spi_handle));
+
+    // pin interrupt del MCP
+    gpio_install_isr_service(0);
+
+    gpio_set_intr_type(MCP2515_INT_PIN, GPIO_INTR_NEGEDGE);
+    gpio_isr_handler_add(MCP2515_INT_PIN, gpioInterruptCan, NULL);
+
+
+    // mcp init
+    MCP2515 mcp2515(&spi_handle);
+    mcp2515.reset();
+    mcp2515.setBitrate(CAN_125KBPS, MCP_8MHZ);
+    mcp2515.setNormalMode();
 
 
     // init bt
@@ -138,34 +186,23 @@ extern "C" void app_main(void){
     SpeedRpmPacket currentSpeedRpm;
     EngTempFuelPacket currentEngTempFuel;
 
-    while (true){
+    while(1){
+        if(int_mcp){
+            int_mcp = false;
 
-        vTaskDelay(1000 / portTICK_PERIOD_MS); 
+            uint8_t irq = mcp2515.getInterrupts();
 
+            if (irq & MCP2515::CANINTF_RX0IF) {
+                if (mcp2515.readMessage(MCP2515::RXB0, &frame) == MCP2515::ERROR_OK) {
+                }
+            }
 
-        if (deviceConnected) {
-            
-            // velocidad random entre 40  y 60 km/h
-            int random_speed = (rand() % (60 - 50 + 1)) + 50;
-            int random_rpm = (rand() %(2500 - 2000 + 1) + 2000);
-            int random_temp = (rand() %(105 - 100 + 1) + 100);
+            if (irq & MCP2515::CANINTF_RX1IF) {
+                if (mcp2515.readMessage(MCP2515::RXB1, &frame) == MCP2515::ERROR_OK) {
+                }
+            }
 
-            currentSpeedRpm.speed = random_speed;
-            currentSpeedRpm.rpm = random_rpm;
-
-            currentEngTempFuel.temp = random_temp;
-            currentEngTempFuel.fuel_level = 90;
-
-            // el mensaje se pone en la caracteristica y se notifica a la app que esa ahi
-            pTxCharacteristic->setValue((uint8_t*)&currentSpeedRpm, sizeof(currentSpeedRpm));
-        
-            pTxCharacteristic->notify();
-
-            vTaskDelay(20 / portTICK_PERIOD_MS);
-                            
-            pTxCharacteristic->setValue((uint8_t*)&currentEngTempFuel, sizeof(currentEngTempFuel));
-        
-            pTxCharacteristic->notify();
         }
     }
+
 }

@@ -7,5 +7,6 @@
 #   - 'nvs_flash': Para guardar datos no volátiles (requerido internamente por el Bluetooth).
 #   - 'bt': El componente oficial de Bluetooth de ESP-IDF.
 idf_component_register(SRCS "main.cpp"
-                       INCLUDE_DIRS ".")
+                       INCLUDE_DIRS "."
+                       REQUIRES mcp2515)
 

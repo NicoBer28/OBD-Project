@@ -1,5 +1,4 @@
 dependencies:
   idf:
     version: '>=4.1.0'
-  espressif/esp_twai_mcp2515: '*'
   h2zero/esp-nimble-cpp: '*'
