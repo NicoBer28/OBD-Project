@@ -434,6 +434,120 @@ to read someone else's list.
 
 ---
 
+### `POST /api/v1/invitations/invite/{groupId}`
+
+An admin of `{groupId}` invites an email address to join it. Requires
+`Authorization: Bearer <accessToken>`.
+
+**Body** (`application/json`):
+
+```json
+{ "email": "Grace@Example.com" }
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `email` | yes | valid email; trimmed and lowercased before storing |
+
+Invitations are keyed by **email, not user id**, because the common case in a
+family app is inviting someone who has not installed it yet. The row waits;
+when that email registers and logs in, the invitation is simply there.
+
+Nothing is written to `group_members` here. Joining is consent — the invitee
+accepts (below); an admin cannot enrol someone by typing their address.
+
+**Response** `200 OK`:
+
+```json
+{
+  "invitationId": "dc839824-2a6a-4a6e-905b-098a90c9cca4",
+  "groupId": "fa3b6130-bee8-4523-a450-75147ef7fb19",
+  "invitationEmail": "grace@example.com",
+  "invitationBy": "00927ef1-2499-4487-b26b-601305cf1c69",
+  "invitationCreatedAt": "2026-09-15T13:04:36.832938Z",
+  "invitationExpiresAt": "2026-09-22T13:04:36.832938Z",
+  "invitationStatus": "PENDING"
+}
+```
+
+`invitationStatus` is derived from the timestamps — `ACCEPTED` if
+`accepted_at` is set, `EXPIRED` if past `expires_at`, else `PENDING` — and is
+never stored. Invitations expire 7 days after creation.
+
+**The response is identical whether or not the email has an account.** The
+only thing that changes the outcome is existing *membership* of this group,
+which implies an account anyway. Anything else would make this endpoint a free
+"is this email registered?" oracle for anyone who has created a group.
+
+**Errors:** `404 Not Found` if the caller is not a member of the group (a
+`403` would confirm the group exists); `403 Forbidden` if the caller is a
+member but not `ADMIN`; `409 Conflict` if that email already belongs to a
+member; `400 Bad Request` for a malformed email; `401 Unauthorized` without a
+token. A second *pending* invitation for the same email is rejected by
+`ux_invitations_pending` — see Known limitations for how that currently
+surfaces.
+
+---
+
+### `GET /api/v1/invitations`
+
+The caller's pending invitations — the way an invitee discovers the id they
+need to accept. Requires `Authorization: Bearer <accessToken>`.
+
+The email is always the caller's own, from the token. There is no way to ask
+for anyone else's list, which is what stops one person listing — and then
+accepting — another's invitations.
+
+**Response** `200 OK`, newest first. Accepted and expired invitations are
+filtered out, so every id returned is one the caller can accept right now:
+
+```json
+[
+  {
+    "id": "dc839824-2a6a-4a6e-905b-098a90c9cca4",
+    "groupId": "fa3b6130-bee8-4523-a450-75147ef7fb19",
+    "groupName": "Familia Lazzari",
+    "invitationCreatedAt": "2026-09-15T13:04:36.832938Z",
+    "invitationExpiresAt": "2026-09-22T13:04:36.832938Z"
+  }
+]
+```
+
+A different shape from the admin's view on purpose: the invitee sees the
+group's *name*, not the inviter's user id. Empty for most users most of the
+time — `[]`, never `404`.
+
+**Errors:** `401 Unauthorized` without a token.
+
+---
+
+### `POST /api/v1/invitations/{id}/accept`
+
+The invitee accepts an invitation addressed to their email. Requires
+`Authorization: Bearer <accessToken>`; no body.
+
+Acceptance is a single conditional `UPDATE`
+(`InvitationRepository.accept`): the row is marked accepted only if it is this
+invitation, addressed to the caller's email, still pending, and not yet
+expired — all four in the `WHERE` clause, so the check and the write are one
+atomic statement. The caller physically cannot accept an invitation that is
+not theirs, or twice, whatever happens around the call.
+
+**Response** `200 OK` — the invitation, now `"invitationStatus": "ACCEPTED"`.
+
+**Errors:** the `UPDATE` affecting zero rows means one of four things, and the
+service reads the row back to say which:
+
+| Cause | Status |
+|---|---|
+| No such invitation, **or** addressed to someone else — deliberately indistinguishable | `404 Not Found` |
+| Already accepted (a double tap, or a retry after a lost response) | `409 Conflict` |
+| Expired | `409 Conflict` |
+
+`401 Unauthorized` without a token.
+
+---
+
 ### `POST /api/v1/trips`
 
 Starts a trip ("viaje"): records that the caller is now using a car, and leaves
@@ -704,8 +818,32 @@ What is missing, in what order to build it, and the endpoint roadmap live in
   nullable `cars.group_id` column and `Car.carGroup` maps it, but nothing writes
   it: the share/unshare endpoints and the widening of `CarAccess.readableBy` to
   group members are still to do (ROADMAP Phase 4).
-- Groups can be created and listed. Reading one group, adding/removing
-  members, changing roles and invitations are not implemented.
+- **Accepting an invitation does not yet enrol the invitee.** `POST
+  /invitations/{id}/accept` marks the row accepted and returns it, but writes
+  nothing to `group_members` — the invitee still is not in the group, and it
+  vanishes from their pending list. The membership insert belongs in the same
+  transaction as the accept, after a membership check (`GroupMemberRepository
+  .save()` is an upsert), using the invitation's `groupId` and the caller's
+  user id. Pinned by nothing yet on purpose: a test asserting the current
+  behaviour would enshrine the bug.
+- A second pending invitation for the same email in the same group is
+  rejected by the database, but the service maps it to
+  `FailedInvitationException`, which has no `@ExceptionHandler` — so the client
+  gets a `500` instead of a `409`.
+- An **expired** invitation still occupies `ux_invitations_pending`, so the
+  same email cannot be re-invited to that group until the expired row is
+  removed. The invite endpoint should delete expired pending rows for
+  `(group, email)` before inserting; it does not yet. Nothing prunes expired
+  invitations otherwise, and nothing needs to — expiry is derived.
+- `POST /invitations/invite/{groupId}` answers `200` where the other creates
+  answer `201`, and expiry answers `409` where `410 Gone` would be more
+  specific. The route has a verb in it; the roadmap's shape was
+  `POST /groups/{groupId}/invitations`.
+- There is no admin-side list (`GET /groups/{id}/invitations`) and no revoke
+  (`DELETE`), so a pending invitation cannot be withdrawn — only left to
+  expire.
+- Groups can be created, listed and invited to. Reading one group,
+  removing members and changing roles are not implemented.
 - `GET /api/v1/groups` has no tests and no smoke check yet.
 - `GroupMemberRepository.save()` is an upsert, not an insert: the composite id is
   assigned by us, so Spring Data cannot tell a new row from an existing one and

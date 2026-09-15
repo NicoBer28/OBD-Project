@@ -4,7 +4,7 @@ What is missing, what to build next, and in what order. Companion to
 `README.md`, which documents what already **exists**; this file is about what
 does not.
 
-Last updated: 2026-09-10. Schema is at `V7__cars_group_id.sql`.
+Last updated: 2026-09-15. Schema is at `V8__invitations.sql`.
 
 ---
 
@@ -14,7 +14,7 @@ Last updated: 2026-09-10. Schema is at `V7__cars_group_id.sql`.
 |---|---|---|
 | Auth / users | `users`, refresh tokens | register, login, refresh, logout |
 | Cars | `cars` (now with `group_id`), `models` | `POST /cars`, `GET /cars`, `GET /models`, `POST /models` (admin) |
-| Groups | `groups`, `group_members` | `POST /groups`, `GET /groups` |
+| Groups | `groups`, `group_members`, `invitations` | `POST /groups`, `GET /groups`; invite / list pending / accept |
 | Trips | `trips` | `POST /trips` (start) only |
 | Telemetry | `telemetry`, `cars.snapshot_at` | `POST /telemetry` (batch ingest), `GET /telemetry` (sync) |
 
@@ -84,6 +84,13 @@ id is assigned by us, so Spring Data cannot tell a new row from an existing one
 and merges. Adding someone already in the group silently rewrites their role.
 The add-member path **must check membership first**. Pinned by
 `GroupRepositoryTest.savingAnExistingMembershipSilentlyChangesTheRole`.
+
+**Mostly done.** `invitations` (V8) is keyed by email so people without an
+account can be invited; invite, the invitee's pending list, and accept all
+exist and are tested. Accept is a conditional `UPDATE`
+(`InvitationRepository.accept`) — atomic, email-bound, once only. What is
+still missing is the actual enrolment on accept, plus revoke and the admin's
+list; see the README's Known limitations.
 
 ### 5. `?since=` on history reads
 
@@ -307,8 +314,11 @@ Ships together with Phase 4 as one milestone.
 
 | Endpoint | Notes |
 |---|---|
-| `POST /groups/{id}/invitations` | Admin-only. Returns a single-use code with an expiry. |
-| `POST /invitations/{code}/accept` | The invitee joins as `MEMBER`. |
+| ~~`POST /invitations/invite/{groupId}`~~ **done** | Admin-only, by email, 7-day expiry. Built at `/invitations/invite/{groupId}` rather than nested under the group. |
+| ~~`GET /invitations`~~ **done** | The invitee's pending list — how they find the id to accept. |
+| `POST /invitations/{id}/accept` **half done** | Marks the row accepted (atomic, tested). **Does not yet insert the `group_members` row** — the invitee is still not in the group. Same transaction, after the membership check. |
+| `GET /groups/{id}/invitations` | Admin's view: who was invited, status. |
+| `DELETE /groups/{id}/invitations/{invId}` | Revoke a pending invitation. Today the only way out is expiry. |
 | `GET /groups/{id}/members` | |
 | `PATCH /groups/{id}/members/{userId}` | Change role. Admin-only. |
 | `DELETE /groups/{id}/members/{userId}` | Remove, or leave when it is yourself. |
@@ -318,6 +328,10 @@ Traps:
 - **Never allow the last ADMIN to leave or be demoted** — the group becomes
   unadministrable and no endpoint can recover it.
 - The upsert trap from §4: check membership before writing it.
+- Re-inviting after expiry: an expired row still holds `ux_invitations_pending`.
+  The invite endpoint should delete expired pending rows for `(group, email)`
+  before inserting. Not done yet — today it is a `500`, since
+  `FailedInvitationException` has no handler.
 - Removing a member who is mid-trip in a group car: same question as un-sharing.
 
 ### Phase 6 — Aggregates. The payoff.

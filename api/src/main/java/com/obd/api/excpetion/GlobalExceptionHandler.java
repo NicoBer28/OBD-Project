@@ -1,5 +1,6 @@
 package com.obd.api.excpetion;
 
+import com.obd.api.invitation.exception.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -39,7 +40,52 @@ public class GlobalExceptionHandler {
         p.setDetail("That model already exists");
         return p;
     }
+    @ExceptionHandler(AlreadyAMemberException.class)
+    public ProblemDetail alreadyAMember(AlreadyAMemberException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        p.setTitle("Conflict");
+        p.setDetail("Already a Member of the Group");
+        return p;
+    }
 
+    @ExceptionHandler(InvitationNotFoundException.class)
+    public ProblemDetail invitationNotFound(InvitationNotFoundException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        p.setTitle("Not Found");
+        p.setDetail("Invitation Not Found");
+        return p;
+    }
+
+    @ExceptionHandler(InvitationAlreadyAccepted.class)
+    public ProblemDetail invitationAlreadyAccepted(InvitationAlreadyAccepted e) {
+        var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        p.setTitle("Conflict");
+        p.setDetail("Invitation already accepted");
+        return p;
+    }
+
+    @ExceptionHandler(InvitationExpiredException.class)
+    public ProblemDetail invitationExpired(InvitationExpiredException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        p.setTitle("Conflict");
+        p.setDetail("Invitation Expired");
+        return p;
+    }
+
+    @ExceptionHandler(NotAnAdminException.class)
+    public ProblemDetail notAnAdmin(NotAnAdminException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.FORBIDDEN);
+        p.setTitle("Conflict");
+        p.setDetail("Not an Admin of the Group");
+        return p;
+    }
+    @ExceptionHandler(NotAMemberException.class)
+    public ProblemDetail notAMember(NotAMemberException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        p.setTitle("Conflict");
+        p.setDetail("Not a Member of the Group");
+        return p;
+    }
     @ExceptionHandler(EmailAlreadyInUseException.class)
     public ProblemDetail emailTaken(EmailAlreadyInUseException e) {
         var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);

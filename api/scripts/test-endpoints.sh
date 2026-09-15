@@ -539,4 +539,57 @@ OTHER_LIST=$(curl -sS "$CARS" -H "Authorization: Bearer $OTHER_TOKEN")
 echo "$OTHER_LIST" | grep -q "\"id\":\"$CAR_ID\"" && fail "another owner's car leaked into the list"
 echo "ok: $(echo "$OTHER_LIST" | grep -o '"id"' | wc -l | tr -d ' ') car(s) for the other owner, none of them Carl's"
 
+# --- Invitations -------------------------------------------------------------
+# Carl (CAR_TOKEN) is ADMIN of GROUP_ID from step 18; Grace (OTHER_TOKEN) is
+# not in it. The invitee does not have an account yet when invited.
+INVITATIONS="$BASE_URL/api/v1/invitations"
+INV_EMAIL="invitee+$(date +%s)@example.com"
+
+line "45. Admin invites an email to the group (expect 200, PENDING, lowercased)"
+INV=$(curl -sS -X POST "$INVITATIONS/invite/$GROUP_ID" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"email\": \"$(echo "$INV_EMAIL" | tr '[:lower:]' '[:upper:]')\"}")
+print_json "$INV"
+INV_ID=$(extract_field "$INV" invitationId)
+[ -n "$INV_ID" ] || fail "no invitationId in the invite response"
+[ "$(extract_field "$INV" invitationEmail)" = "$INV_EMAIL" ] || fail "expected the email stored lowercased"
+[ "$(extract_field "$INV" invitationStatus)" = "PENDING" ] || fail "expected a PENDING invitation"
+
+line "46. A non-member cannot invite (expect 404, not 403)"
+INV_FOREIGN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITATIONS/invite/$GROUP_ID" \
+  -H "Authorization: Bearer $OTHER_TOKEN" -H "Content-Type: application/json" \
+  -d '{"email":"someone@example.com"}')
+echo "status: $INV_FOREIGN"
+[ "$INV_FOREIGN" = "404" ] || fail "expected 404 for a non-member, got $INV_FOREIGN"
+
+line "47. The invitee registers and finds the invitation waiting (expect 200)"
+INV_REG=$(curl -sS -X POST "$BASE/register" -H "Content-Type: application/json" \
+  -d "{\"userName\":\"Inv\",\"userLastName\":\"Itee\",\"userEMail\":\"$INV_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
+INV_TOKEN=$(extract_field "$INV_REG" accessToken)
+[ -n "$INV_TOKEN" ] || fail "could not register the invitee"
+PENDING=$(curl -sS "$INVITATIONS" -H "Authorization: Bearer $INV_TOKEN")
+print_json "$PENDING"
+echo "$PENDING" | grep -q "\"id\":\"$INV_ID\"" || fail "the invitation is not in the invitee's pending list"
+echo "$PENDING" | grep -q '"groupName":"Familia Lazzari"' || fail "expected the group's name in the pending list"
+
+line "48. Someone else cannot accept it (expect 404)"
+ACC_FOREIGN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITATIONS/$INV_ID/accept" \
+  -H "Authorization: Bearer $OTHER_TOKEN")
+echo "status: $ACC_FOREIGN"
+[ "$ACC_FOREIGN" = "404" ] || fail "expected 404 accepting someone else's invitation, got $ACC_FOREIGN"
+
+line "49. The invitee accepts (expect 200, ACCEPTED); accepting again (expect 409)"
+ACC=$(curl -sS -X POST "$INVITATIONS/$INV_ID/accept" -H "Authorization: Bearer $INV_TOKEN")
+print_json "$ACC"
+[ "$(extract_field "$ACC" invitationStatus)" = "ACCEPTED" ] || fail "expected ACCEPTED after accepting"
+ACC_AGAIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITATIONS/$INV_ID/accept" \
+  -H "Authorization: Bearer $INV_TOKEN")
+echo "second accept status: $ACC_AGAIN"
+[ "$ACC_AGAIN" = "409" ] || fail "expected 409 accepting twice, got $ACC_AGAIN"
+
+line "50. Accepted invitations leave the pending list (expect [])"
+PENDING2=$(curl -sS "$INVITATIONS" -H "Authorization: Bearer $INV_TOKEN")
+[ "$PENDING2" = "[]" ] || fail "expected an empty pending list after accepting, got: $PENDING2"
+echo "ok: []"
+
 line "All checks passed"

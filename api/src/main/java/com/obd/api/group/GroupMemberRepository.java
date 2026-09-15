@@ -28,4 +28,13 @@ public interface GroupMemberRepository extends JpaRepository<GroupMember, GroupM
          order by g.groupName
         """)
     List<GroupDTO.Read> findSummariesForUser(@Param("userId") UUID userId);
+
+    @Query("""
+        select m
+          from GroupMember m, User u
+         where u.userId = m.id.userId
+           and m.id.groupId = :groupId
+           and u.userEmail = :email
+        """)
+    Optional<GroupMember> findByGroupIdAndUserEmail(@Param("groupId") UUID groupId,  @Param("email") String email);
 }

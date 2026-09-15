@@ -1,11 +1,13 @@
 package com.obd.api.invitation;
 
+import com.obd.api.invitation.dto.InvitationDTO;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 public interface InvitationRepository extends JpaRepository<Invitation, UUID> {
@@ -46,4 +48,19 @@ public interface InvitationRepository extends JpaRepository<Invitation, UUID> {
     int accept(@Param("invitationId") UUID invitationId,
                @Param("email") String email,
                @Param("now") Instant now);
+
+    @Query("""
+        select new com.obd.api.invitation.dto.InvitationDTO$Pending(
+                   i.invitationId, g.groupId, g.groupName,
+                   i.invitationCreatedAt, i.invitationExpiresAt)
+          from Invitation i, Group g
+         where g.groupId = i.invitationGroupId
+           and i.invitationEmail = :email
+           and i.invitationAcceptedAt is null
+           and i.invitationExpiresAt > :now
+         order by i.invitationCreatedAt desc
+        """)
+    List<InvitationDTO.Pending> findPendingFor(@Param("email") String email, @Param("now") Instant now);
+
+
 }
