@@ -14,6 +14,7 @@ public class GroupService {
 
     private final GroupRepository groupRepository;
     private final GroupMemberRepository groupMemberRepository;
+    private final GroupAccess groupAccess;
 
     /**
      * Creates a group and enrols the caller as its first member, with the ADMIN
@@ -45,5 +46,10 @@ public class GroupService {
         return groupMemberRepository.findSummariesForUser(userId);
     }
 
+    public List<GroupMember> members(UUID userId, UUID groupId){
+        groupAccess.requireMember(userId, groupId);
+
+        return groupMemberRepository.findByIdGroupId(groupId);
+    }
 
 }
