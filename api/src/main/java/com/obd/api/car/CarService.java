@@ -4,6 +4,9 @@ import com.obd.api.car.dto.CarDTO;
 import com.obd.api.car.exception.CarNotFoundException;
 import com.obd.api.car.exception.LicensePlateAlreadyRegisteredException;
 import com.obd.api.car.exception.ModelNotFoundException;
+import com.obd.api.group.Group;
+import com.obd.api.group.GroupAccess;
+import com.obd.api.group.GroupRepository;
 import com.obd.api.model.Model;
 import com.obd.api.model.ModelRepository;
 import jakarta.transaction.Transactional;
@@ -20,7 +23,9 @@ public class CarService {
 
     private final CarRepository carRepository;
     private final ModelRepository modelRepository;
+    private final GroupRepository groupRepository;
     private final CarAccess carAccess;
+    private final GroupAccess groupAccess;
 
     /**
      * Registers a car owned by {@code ownerId}.
@@ -70,15 +75,36 @@ public class CarService {
         return carAccess.readableBy(ownerId, carId).map(CarDTO.Read::from).orElseThrow(() -> new CarNotFoundException(carId));
     }
 
+    @Transactional
+    public CarDTO.Read share(UUID userId, UUID carId, CarDTO.Share request) {
+        Car car = carAccess.ownedBy(userId, carId).orElseThrow(() -> new CarNotFoundException(carId));
+
+        groupAccess.requireMember(userId, request.groupId());
+
+        Group group = groupRepository.getReferenceById(request.groupId());
+        car.setCarGroup(group);
+        return CarDTO.Read.from(carRepository.saveAndFlush(car));
+    }
+
+    @Transactional
+    public void unshare(UUID userId, UUID carId) {
+        Car car = carAccess.ownedBy(userId, carId).orElseThrow(() -> new CarNotFoundException(carId));
+        car.setCarGroup(null);
+        carRepository.saveAndFlush(car);
+    }
+
+    @Transactional
+    public List<CarDTO.Read> forGroup(UUID userId, UUID groupId) {
+        groupAccess.requireMember(userId, groupId);
+        return carRepository.findByCarGroupGroupIdOrderByCarName(groupId).stream().map(CarDTO.Read::from).toList();
+    }
+
 
     private static String normalisePlate(String raw) {
         if (raw == null) {
             return null;
         }
         String trimmed = raw.trim().toUpperCase();
-        // A blank plate is "no plate", not an empty string: the unique index is
-        // partial on `license_plate is not null`, so empty strings would collide
-        // with each other while nulls correctly do not.
         return trimmed.isEmpty() ? null : trimmed;
     }
 }

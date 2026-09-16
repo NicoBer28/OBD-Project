@@ -655,4 +655,51 @@ echo "unpair: $UNP   car's device: $AFTER_DEV   resolve: $AFTER_RES"
 [ "$AFTER_DEV" = "404" ] || fail "expected 404 reading the car's device after unpair, got $AFTER_DEV"
 [ "$AFTER_RES" = "404" ] || fail "expected 404 resolving the serial after unpair, got $AFTER_RES"
 
+# --- Sharing ------------------------------------------------------------------
+# Carl owns TCAR_ID and is ADMIN of GROUP_ID; the invitee joined it as MEMBER
+# in step 49; Grace (OTHER_TOKEN) is not in it.
+
+line "57. Owner shares the car with the group (expect 200, group set)"
+SHARED=$(curl -sS -X PUT "$CARS/$TCAR_ID/group" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"groupId\": \"$GROUP_ID\"}")
+print_json "$SHARED"
+echo "$SHARED" | grep -q "\"group\":{\"id\":\"$GROUP_ID\",\"name\":\"Familia Lazzari\"}" \
+  || fail "expected the car to come back with its group"
+
+line "58. A member now sees the car in GET /cars and in the group's list"
+MEMBER_CARS=$(curl -sS "$CARS" -H "Authorization: Bearer $INV_TOKEN")
+echo "$MEMBER_CARS" | grep -q "\"id\":\"$TCAR_ID\"" || fail "the shared car is missing from the member's GET /cars"
+GROUP_CARS=$(curl -sS "$GROUPS_URL/$GROUP_ID/cars" -H "Authorization: Bearer $INV_TOKEN")
+print_json "$GROUP_CARS"
+echo "$GROUP_CARS" | grep -q "\"id\":\"$TCAR_ID\"" || fail "the shared car is missing from GET /groups/{id}/cars"
+
+line "59. A member uploads telemetry for the shared car (expect 200) - nothing in telemetry changed"
+T_M=$(iso_ago 0)
+MEMBER_ING=$(curl -sS -w '\n%{http_code}' -X POST "$TELEMETRY" \
+  -H "Authorization: Bearer $INV_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"carId\":\"$TCAR_ID\",\"readings\":[{\"recordedAt\":\"$T_M\",\"speed\":33,\"fuelLevel\":60}]}")
+MEMBER_ING_STATUS=$(echo "$MEMBER_ING" | tail -1)
+echo "status: $MEMBER_ING_STATUS"
+[ "$MEMBER_ING_STATUS" = "200" ] || fail "a group member must be able to upload for a shared car, got $MEMBER_ING_STATUS"
+
+line "60. A non-member cannot list the group's cars; a member cannot share someone else's car (expect 404, 404)"
+NM_LIST=$(curl -sS -o /dev/null -w '%{http_code}' "$GROUPS_URL/$GROUP_ID/cars" -H "Authorization: Bearer $OTHER_TOKEN")
+M_SHARE=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$CARS/$TCAR_ID/group" \
+  -H "Authorization: Bearer $INV_TOKEN" -H "Content-Type: application/json" -d "{\"groupId\": \"$GROUP_ID\"}")
+echo "non-member list: $NM_LIST   member share: $M_SHARE"
+[ "$NM_LIST" = "404" ]  || fail "expected 404 for a non-member listing the group's cars, got $NM_LIST"
+[ "$M_SHARE" = "404" ]  || fail "expected 404 for a member sharing a car they do not own, got $M_SHARE"
+
+line "61. Owner un-shares (expect 204); the member loses the car (expect absent, 404)"
+UNSH=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$CARS/$TCAR_ID/group" -H "Authorization: Bearer $CAR_TOKEN")
+[ "$UNSH" = "204" ] || fail "expected 204 from un-share, got $UNSH"
+MEMBER_CARS2=$(curl -sS "$CARS" -H "Authorization: Bearer $INV_TOKEN")
+echo "$MEMBER_CARS2" | grep -q "\"id\":\"$TCAR_ID\"" && fail "the un-shared car is still in the member's list"
+MEMBER_ING2=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TELEMETRY" \
+  -H "Authorization: Bearer $INV_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"carId\":\"$TCAR_ID\",\"readings\":[{\"recordedAt\":\"$(iso_ago 0)\",\"speed\":1}]}")
+echo "un-share: $UNSH   member upload afterwards: $MEMBER_ING2"
+[ "$MEMBER_ING2" = "404" ] || fail "expected 404 for a former member uploading, got $MEMBER_ING2"
+
 line "All checks passed"

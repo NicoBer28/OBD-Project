@@ -4,7 +4,7 @@ What is missing, what to build next, and in what order. Companion to
 `README.md`, which documents what already **exists**; this file is about what
 does not.
 
-Last updated: 2026-09-15. Schema is at `V9__devices.sql`. 203 tests, 56 smoke
+Last updated: 2026-09-15. Schema is at `V9__devices.sql`. 222 tests, 61 smoke
 checks.
 
 ---
@@ -14,7 +14,7 @@ checks.
 | Area | Schema | Endpoints |
 |---|---|---|
 | Auth / users | `users`, `refresh_tokens` | register, login, refresh, logout. **No profile endpoint** — `UserController` is still an empty class. |
-| Cars | `cars` (with `group_id`, `snapshot_at`), `models` | `POST /cars`, `GET /cars`, `GET /cars/{id}`, `GET /models`, `POST /models` (admin) |
+| Cars | `cars` (with `group_id`, `snapshot_at`), `models` | `POST /cars`, `GET /cars`, `GET /cars/{id}`, `PUT`/`DELETE /cars/{id}/group`, `GET /groups/{id}/cars`, `GET /models`, `POST /models` (admin) |
 | Groups | `groups`, `group_members` | `POST /groups`, `GET /groups` |
 | Invitations | `invitations` | `POST /invitations/invite/{groupId}`, `GET /invitations/pending`, `POST /invitations/{id}/accept` |
 | Trips | `trips` | `POST /trips` (start) only — **nothing can finish a trip** |
@@ -23,7 +23,9 @@ checks.
 
 Access is one predicate — `CarRepository.READABLE`, owner **or** member of the
 car's group — behind `CarAccess`, and every car/trip/telemetry endpoint goes
-through it. It already honours sharing; nothing can *set* `cars.group_id` yet.
+through it. **Sharing is live**: `PUT /cars/{id}/group` sets the column, and
+nothing in trips or telemetry changed to honour it. `GroupAccess` is the
+counterpart for groups (`memberOf` / `requireMember` / `requireAdmin`).
 
 One thing in the table is off and worth knowing before anything else:
 
@@ -162,8 +164,6 @@ The full path ESP32 → phone → API → Postgres can run end to end.
 Left over:
 - **`GET /cars/{car_id}` returns `202`** instead of `200`; no README section,
   no slice test, no smoke check.
-- `CarDTO.Read` has `snapshotAt` but **not the group** a car is shared with —
-  a client cannot show "shared with Familia".
 
 ### Phase 2 — The remaining reads
 
@@ -201,24 +201,13 @@ Traps:
 - Finishing is a good moment to bring `cars.mileage` up to date. Speed figures
   are **not** stored — they are computed from `telemetry` (Phase 6).
 
-### Phase 4 — Sharing. The product premise.
+### ~~Phase 4 — Sharing~~ — done
 
-The column, the mapping and the access rule all exist. **All that is left is
-writing `cars.group_id`** — the moment these land, every endpoint in Phases 1–3
-honours sharing with no further change.
-
-| Endpoint | Notes |
-|---|---|
-| **`PUT /cars/{id}/group`** | Share. `CarAccess.ownedBy` for the car **and** membership of the target group. |
-| **`DELETE /cars/{id}/group`** | Un-share. Owner only. |
-| **`GET /groups/{id}/cars`** | Cars available to this group. `ix_cars_group_id` already exists for it. |
-
-Traps:
-- Un-sharing a car that has an **active trip driven by a group member**: does
-  the trip continue or get cut off? Letting it continue is the kinder answer
-  and needs no extra code — but decide it deliberately.
-- Owner-only for share/unshare, member-level for read. Two rules on the same
-  resource; this is why `CarAccess` has two methods.
+`PUT`/`DELETE /cars/{id}/group`, `GET /groups/{id}/cars`, `group` on every car
+read, and `GroupAccess`. Every endpoint from Phases 1–3 honoured sharing the
+moment the column was written — smoke 59 is a member uploading telemetry for a
+car they do not own, with no change to telemetry code. Decided and pinned: an
+open trip survives un-sharing (`sharingLeavesAnOpenTripAlone`).
 
 ### Phase 5 — Membership
 
@@ -239,9 +228,8 @@ Traps:
 Traps:
 - **Never allow the last ADMIN to leave or be demoted** — the group becomes
   unadministrable and no endpoint can recover it.
-- A `GroupAccess` seam (`memberOf` / `adminOf`, one PK lookup answering both)
-  is worth building with the first of these, for the same reason `CarAccess`
-  was: five endpoints need the identical check.
+- `GroupAccess` now exists (`requireMember` / `requireAdmin`). `InvitationService`
+  still does the admin check inline; worth routing through it when next touched.
 - Removing a member who is mid-trip in a group car: same question as
   un-sharing.
 
@@ -391,5 +379,3 @@ In this order, each small:
 3. **`FailedInvitationException` handler** (Phase 5). One `@ExceptionHandler`
    turns a duplicate live invitation from a `500` into a `409`.
 
-Then Phase 4's two writes, which are cheap now that everything they depend on
-exists.

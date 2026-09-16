@@ -1,5 +1,6 @@
 package com.obd.api.invitation;
 
+import com.obd.api.group.GroupAccess;
 import com.obd.api.group.GroupMember;
 import com.obd.api.group.GroupMemberRepository;
 import com.obd.api.group.GroupRole;
@@ -22,7 +23,7 @@ public class InvitationService {
 
     private final InvitationRepository invitationRepository;
     private final GroupMemberRepository groupMemberRepository;
-    private final UserRepository userRepository;
+    private final GroupAccess groupAccess;
 
     @Transactional
     public InvitationDTO.Read invite(UUID userId, String email, UUID groupID){
@@ -32,17 +33,13 @@ public class InvitationService {
                 .invitationGroupId(groupID)
                 .build();
 
-        GroupMember groupMember = groupMemberRepository.findByIdGroupIdAndIdUserId(groupID, userId).orElseThrow(()-> new NotAMemberException(userId,groupID));
-        if(groupMember.getRole() != GroupRole.ADMIN)
-            throw new NotAnAdminException(groupID);
+       groupAccess.requireAdmin(userId, groupID);
 
         GroupMember groupMember2 = groupMemberRepository.findByGroupIdAndUserEmail(groupID, email.trim().toLowerCase()).orElse(null);
         if(groupMember2 != null)
             throw new AlreadyAMemberException(email, groupID);
 
-        // An expired invitation for this address would still hold
-        // ux_invitations_pending and block the new one. Reclaim it now; a
-        // *live* pending one is left alone and surfaces as the 409 below.
+
         invitationRepository.deleteExpiredPending(groupID, invite.getInvitationEmail(), Instant.now());
 
         Invitation save;

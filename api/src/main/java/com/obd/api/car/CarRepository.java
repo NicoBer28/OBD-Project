@@ -15,6 +15,9 @@ public interface CarRepository extends JpaRepository<Car, UUID> {
     // Derived from the entity property (carOwnerId), not the column (owner_id).
     List<Car> findByCarOwnerId(UUID carOwnerId);
 
+    /** Cars shared with a group, by name. Served by ix_cars_group_id (V7). */
+    List<Car> findByCarGroupGroupIdOrderByCarName(UUID groupId);
+
     /**
      * The one definition of "cars this user may use": their own, plus any
      * shared with a group they belong to. Both queries below share it verbatim,

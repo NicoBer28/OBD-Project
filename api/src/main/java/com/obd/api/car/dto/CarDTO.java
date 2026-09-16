@@ -1,6 +1,7 @@
 package com.obd.api.car.dto;
 
 import com.obd.api.car.Car;
+import com.obd.api.group.Group;
 import com.obd.api.model.Model;
 import jakarta.validation.constraints.*;
 
@@ -20,6 +21,8 @@ public class CarDTO {
             @PositiveOrZero Integer mileage
     ) {}
 
+    public record Share(@NotNull UUID groupId) {}
+
     public record Read(
             UUID id,
             String name,
@@ -30,11 +33,13 @@ public class CarDTO {
             Integer batteryLevel,
             Double latitude,
             Double longitude,
-            Instant snapshotAt
+            Instant snapshotAt,
+            // The group the car is shared with, or null - the common case.
+            GroupRef group
     ) {
         /**
          * Must be called while the persistence context is still open - it walks
-         * the lazy model association.
+         * the lazy model and group associations.
          */
         public static Read from(Car car) {
             var location = car.getCarLocation();
@@ -48,8 +53,15 @@ public class CarDTO {
                     car.getCarBatteryLevel(),
                     location == null ? null : location.getLatitude(),
                     location == null ? null : location.getLongitude(),
-                    car.getCarSnapshotAt()
+                    car.getCarSnapshotAt(),
+                    GroupRef.from(car.getCarGroup())
             );
+        }
+    }
+
+    public record GroupRef(UUID id, String name) {
+        public static GroupRef from(Group g) {
+            return g == null ? null : new GroupRef(g.getGroupId(), g.getGroupName());
         }
     }
 

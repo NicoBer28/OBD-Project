@@ -39,6 +39,30 @@ public class CarController {
         return carService.getCars(principal.getId());
     }
 
+    /**
+     * PUT, not POST: "the group this car is shared with" is a single slot the
+     * caller sets, replaces or clears - not a collection they add to.
+     */
+    @PutMapping("/cars/{carId}/group")
+    public CarDTO.Read share(@AuthenticationPrincipal UserPrincipal principal,
+                             @PathVariable UUID carId,
+                             @RequestBody @Valid CarDTO.Share request) {
+        return carService.share(principal.getId(), carId, request);
+    }
+
+    @DeleteMapping("/cars/{carId}/group")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void unshare(@AuthenticationPrincipal UserPrincipal principal,
+                        @PathVariable UUID carId) {
+        carService.unshare(principal.getId(), carId);
+    }
+
+    @GetMapping("/groups/{groupId}/cars")
+    public List<CarDTO.Read> forGroup(@AuthenticationPrincipal UserPrincipal principal,
+                                      @PathVariable UUID groupId) {
+        return carService.forGroup(principal.getId(), groupId);
+    }
+
     @GetMapping("/cars/{car_id}")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public CarDTO.Read car(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID car_id){

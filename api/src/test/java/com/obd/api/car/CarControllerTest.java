@@ -5,8 +5,10 @@ import com.obd.api.auth.JwtAuthFilter;
 import com.obd.api.auth.SecurityConfig;
 import com.obd.api.auth.UserPrincipal;
 import com.obd.api.car.dto.CarDTO;
+import com.obd.api.car.exception.CarNotFoundException;
 import com.obd.api.car.exception.LicensePlateAlreadyRegisteredException;
 import com.obd.api.car.exception.ModelNotFoundException;
+import com.obd.api.invitation.exception.NotAMemberException;
 import com.obd.api.support.SliceSecurityConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,8 +31,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.mockito.BDDMockito.then;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -71,7 +73,7 @@ class CarControllerTest {
     private static CarDTO.Read created() {
         return new CarDTO.Read(CAR_ID, "Ada's Gol", "AB123CD",
                 new CarDTO.ModelRead(MODEL_ID, "Volkswagen", "Gol", "ISO 15765-4 (CAN)"),
-                120_000, null, null, null, null, null);
+                120_000, null, null, null, null, null, null);
     }
 
     private static final String VALID_BODY = """
@@ -172,6 +174,89 @@ class CarControllerTest {
         mockMvc.perform(get("/api/v1/cars").with(caller()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isEmpty());
+    }
+
+    // --- sharing -------------------------------------------------------------
+
+    private static final UUID GROUP_ID = UUID.fromString("99999999-8888-7777-6666-555555555555");
+
+    private static CarDTO.Read shared() {
+        return new CarDTO.Read(CAR_ID, "Ada's Gol", "AB123CD",
+                new CarDTO.ModelRead(MODEL_ID, "Volkswagen", "Gol", "ISO 15765-4 (CAN)"),
+                120_000, null, null, null, null, null,
+                new CarDTO.GroupRef(GROUP_ID, "Familia Lazzari"));
+    }
+
+    @Test
+    void shareReturnsTheCarWithItsGroup() throws Exception {
+        given(carService.share(eq(OWNER_ID), eq(CAR_ID), any(CarDTO.Share.class))).willReturn(shared());
+
+        mockMvc.perform(put("/api/v1/cars/" + CAR_ID + "/group").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"groupId\": \"" + GROUP_ID + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(CAR_ID.toString()))
+                .andExpect(jsonPath("$.group.id").value(GROUP_ID.toString()))
+                .andExpect(jsonPath("$.group.name").value("Familia Lazzari"));
+    }
+
+    @Test
+    void shareRejectsAMissingGroupId() throws Exception {
+        mockMvc.perform(put("/api/v1/cars/" + CAR_ID + "/group").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.groupId").exists());
+    }
+
+    @Test
+    void shareMapsACarThatIsNotMineToNotFound() throws Exception {
+        willThrow(new CarNotFoundException(CAR_ID))
+                .given(carService).share(eq(OWNER_ID), eq(CAR_ID), any(CarDTO.Share.class));
+
+        mockMvc.perform(put("/api/v1/cars/" + CAR_ID + "/group").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"groupId\": \"" + GROUP_ID + "\"}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("No such car"));
+    }
+
+    @Test
+    void shareMapsAGroupIAmNotInToNotFound() throws Exception {
+        willThrow(new NotAMemberException(OWNER_ID, GROUP_ID))
+                .given(carService).share(eq(OWNER_ID), eq(CAR_ID), any(CarDTO.Share.class));
+
+        // Not 403: a group the caller is not in must look like no group.
+        mockMvc.perform(put("/api/v1/cars/" + CAR_ID + "/group").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"groupId\": \"" + GROUP_ID + "\"}"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void unshareReturnsNoContent() throws Exception {
+        mockMvc.perform(delete("/api/v1/cars/" + CAR_ID + "/group").with(caller()))
+                .andExpect(status().isNoContent());
+
+        then(carService).should().unshare(OWNER_ID, CAR_ID);
+    }
+
+    @Test
+    void forGroupListsTheGroupsCars() throws Exception {
+        given(carService.forGroup(OWNER_ID, GROUP_ID)).willReturn(List.of(shared()));
+
+        mockMvc.perform(get("/api/v1/groups/" + GROUP_ID + "/cars").with(caller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].group.id").value(GROUP_ID.toString()));
+    }
+
+    @Test
+    void forGroupMapsANonMemberToNotFound() throws Exception {
+        willThrow(new NotAMemberException(OWNER_ID, GROUP_ID)).given(carService).forGroup(OWNER_ID, GROUP_ID);
+
+        mockMvc.perform(get("/api/v1/groups/" + GROUP_ID + "/cars").with(caller()))
+                .andExpect(status().isNotFound());
     }
 
     @Test

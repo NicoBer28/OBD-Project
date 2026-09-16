@@ -252,7 +252,8 @@ client cannot create a car in someone else's name.
   "batteryLevel": null,
   "latitude": null,
   "longitude": null,
-  "snapshotAt": null
+  "snapshotAt": null,
+  "group": null
 }
 ```
 
@@ -283,7 +284,8 @@ belong to. Requires `Authorization: Bearer <accessToken>`.
 
 **Response** `200 OK` — an array of the same objects `POST /cars` returns,
 ordered by name. Empty for a new user, never an error. The telemetry fields
-are the cached snapshot maintained by `POST /telemetry`.
+are the cached snapshot maintained by `POST /telemetry`; `group` names the
+group a car is shared with, or is `null`.
 
 **One definition of "may use".** The list comes from `CarRepository.READABLE`,
 a JPQL predicate that `CarAccess` also uses for the per-car check every write
@@ -295,6 +297,84 @@ own family twice, and would have been a second copy of the rule to keep in
 step. See `ROADMAP.md` §2.
 
 **Errors:** `401 Unauthorized` without a token.
+
+---
+
+### `PUT /api/v1/cars/{carId}/group`
+
+Shares a car the caller **owns** with a group the caller **belongs to**. From
+then on every member of that group sees it in `GET /cars`, can start a trip on
+it and can upload telemetry for it. Requires
+`Authorization: Bearer <accessToken>`.
+
+**Body** (`application/json`):
+
+```json
+{ "groupId": "937bcb73-203e-44c8-8f6d-8adc2f4a2994" }
+```
+
+`PUT`, not `POST`: "the group this car is shared with" is a single slot the
+owner sets, replaces or clears — a car is in **at most one group at a time**,
+so sharing with a second group moves it. Sharing with the group it is already
+in is a no-op.
+
+**Response** `200 OK` — the car, now with a `group`:
+
+```json
+{
+  "id": "25d7971f-0aee-4bb0-887d-a607800a4b75",
+  "name": "Telemetry car",
+  "...": "...",
+  "snapshotAt": "2026-09-16T18:35:22Z",
+  "group": { "id": "937bcb73-203e-44c8-8f6d-8adc2f4a2994", "name": "Familia Lazzari" }
+}
+```
+
+`group` is present on every car read (`GET /cars`, `GET /cars/{id}`), `null`
+for an unshared car.
+
+**Nothing else had to change for sharing to work.** Access was already one
+predicate — `CarRepository.READABLE`, owner *or* member of the car's group —
+behind `CarAccess`, and `TripService` and `TelemetryService` already went
+through it. This endpoint is only the write that makes the predicate true.
+Smoke check 59 is a group member uploading telemetry for a car they do not
+own, against telemetry code that never learned groups exist.
+
+**An open trip is left alone.** If a member is driving when the owner
+un-shares (or moves) the car, the trip stays open and stays theirs — a trip is
+a record of what happened, not a permission. They just cannot start the *next*
+one. Pinned by `CarServiceTest.sharingLeavesAnOpenTripAlone`.
+
+**Errors:** `404 Not Found` if the car is not the caller's — a member who may
+drive it gets the same answer as a stranger, since which group a car is in is
+the owner's decision — **or** if the caller is not a member of the target
+group, so the endpoint cannot be used to probe group ids; `400 Bad Request`
+without a `groupId`; `401 Unauthorized` without a token.
+
+---
+
+### `DELETE /api/v1/cars/{carId}/group`
+
+Un-shares the car. Owner-only, idempotent.
+
+**Response** `204 No Content`. Members lose access at once (their next
+`GET /cars` no longer lists it, their next upload is a `404`); an open trip is
+unaffected, as above.
+
+**Errors:** `404 Not Found` if the car is not the caller's; `401 Unauthorized`
+without a token.
+
+---
+
+### `GET /api/v1/groups/{groupId}/cars`
+
+The cars shared with a group, ordered by name, for any member of it.
+
+**Response** `200 OK` — an array of car objects, each with `group` set to this
+group. `[]` for a group nobody has shared a car with yet.
+
+**Errors:** `404 Not Found` if the caller is not a member (the group's
+existence is not confirmed to outsiders); `401 Unauthorized` without a token.
 
 ---
 
@@ -946,47 +1026,6 @@ TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
 What is missing, in what order to build it, and the endpoint roadmap live in
 [`ROADMAP.md`](ROADMAP.md). This list is the short version.
 
-- Cars cannot yet be shared with a group. `V7__cars_group_id.sql` adds the
-  nullable `cars.group_id` column and `Car.carGroup` maps it, but nothing writes
-  it: the share/unshare endpoints and the widening of `CarAccess.readableBy` to
-  group members are still to do (ROADMAP Phase 4).
-- A second pending invitation for the same email in the same group is
-  rejected by the database, but the service maps it to
-  `FailedInvitationException`, which has no `@ExceptionHandler` — so the client
-  gets a `500` instead of a `409`.
-- `POST /invitations/invite/{groupId}` answers `200` where the other creates
-  answer `201`, and expiry answers `409` where `410 Gone` would be more
-  specific. The route has a verb in it; the roadmap's shape was
-  `POST /groups/{groupId}/invitations`.
-- There is no admin-side list (`GET /groups/{id}/invitations`) and no revoke
-  (`DELETE`), so a pending invitation cannot be withdrawn — only left to
-  expire.
-- Groups can be created, listed and invited to. Reading one group,
-  removing members and changing roles are not implemented.
-- `GET /api/v1/groups` has no tests and no smoke check yet.
-- `GroupMemberRepository.save()` is an upsert, not an insert: the composite id is
-  assigned by us, so Spring Data cannot tell a new row from an existing one and
-  merges. Adding a member who is already in the group would silently rewrite
-  their role. The add-member endpoint must check membership first - see
-  `GroupRepositoryTest.savingAnExistingMembershipSilentlyChangesTheRole`.
-- The firmware exposes no serial yet, so pairing is by a value the person
-  types. The API side of device support is complete; the "phone knows the car
-  without asking" benefit needs the GATT Serial Number characteristic in
-  `hardware/main/main.cpp` (see *Devices* under Database).
-- Telemetry history is only readable oldest-first from a cursor. A
-  newest-first view for display (`order=desc`) is not implemented; the client is
-  expected to sync into its local cache and sort there.
-- Telemetry grows without bound and nothing prunes it. At real volume this wants
-  a retention window or monthly partitioning; neither is worth building before
-  there is a device actually reporting.
-- Only *starting* a trip exists. Finishing one, the active-trip lookup, trip
-  history per car and per user, and the aggregated fuel expense per user are not
-  implemented.
-- Access is already "owner **or** member of the group the car is shared with"
-  (`CarRepository.READABLE`, via `CarAccess`), for the car list, starting a
-  trip and uploading telemetry alike - but no endpoint can *set*
-  `cars.group_id` yet, so in practice every car is still owner-only until
-  share/unshare exist.
 - Deleting a car deletes its trips (`on delete cascade`), unlike deleting a user,
   which orphans them. There is no delete-car endpoint yet, so this is still free
   to change if trip history should outlive the car.
@@ -1007,8 +1046,6 @@ What is missing, in what order to build it, and the endpoint roadmap live in
   readable by group members) but answers `202 Accepted` instead of `200`, and
   has no README section, slice test or smoke check. Updating and deleting a
   car are not implemented.
-- `CarDTO.Read` does not yet expose the group a car is shared with, so a
-  client cannot show "shared with Familia Lazzari".
 - `AuthController.logout` is still not covered by the controller slice. It reads
   `@AuthenticationPrincipal`, so `SliceSecurityConfig` would now make this
   straightforward.
