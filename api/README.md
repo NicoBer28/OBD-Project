@@ -593,11 +593,20 @@ only thing that changes the outcome is existing *membership* of this group,
 which implies an account anyway. Anything else would make this endpoint a free
 "is this email registered?" oracle for anyone who has created a group.
 
+**Expired invitations are reclaimed here.** An invitation that lapsed
+unaccepted still occupies `ux_invitations_pending`; inviting the same email
+again deletes it first, then issues a fresh one. That is the only cleanup
+expired invitations get, and it is enough: an expired row is harmless until
+someone re-invites that address, and then it is gone. No scheduled job,
+nothing to forget. Accepted rows are never removed — they are the record of
+how someone joined — and the partial unique index lets a re-invite coexist
+with them.
+
 **Errors:** `404 Not Found` if the caller is not a member of the group (a
 `403` would confirm the group exists); `403 Forbidden` if the caller is a
 member but not `ADMIN`; `409 Conflict` if that email already belongs to a
 member; `400 Bad Request` for a malformed email; `401 Unauthorized` without a
-token. A second *pending* invitation for the same email is rejected by
+token. A second *live* pending invitation for the same email is rejected by
 `ux_invitations_pending` — see Known limitations for how that currently
 surfaces.
 
@@ -945,11 +954,6 @@ What is missing, in what order to build it, and the endpoint roadmap live in
   rejected by the database, but the service maps it to
   `FailedInvitationException`, which has no `@ExceptionHandler` — so the client
   gets a `500` instead of a `409`.
-- An **expired** invitation still occupies `ux_invitations_pending`, so the
-  same email cannot be re-invited to that group until the expired row is
-  removed. The invite endpoint should delete expired pending rows for
-  `(group, email)` before inserting; it does not yet. Nothing prunes expired
-  invitations otherwise, and nothing needs to — expiry is derived.
 - `POST /invitations/invite/{groupId}` answers `200` where the other creates
   answer `201`, and expiry answers `409` where `410 Gone` would be more
   specific. The route has a verb in it; the roadmap's shape was

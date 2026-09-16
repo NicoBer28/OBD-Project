@@ -4,7 +4,7 @@ What is missing, what to build next, and in what order. Companion to
 `README.md`, which documents what already **exists**; this file is about what
 does not.
 
-Last updated: 2026-09-15. Schema is at `V9__devices.sql`. 197 tests, 56 smoke
+Last updated: 2026-09-15. Schema is at `V9__devices.sql`. 203 tests, 56 smoke
 checks.
 
 ---
@@ -228,7 +228,7 @@ Traps:
 | ~~`GET /invitations/pending`~~ | The invitee's list — how they find the id to accept. |
 | ~~`POST /invitations/{id}/accept`~~ | Atomic accept + `group_members` insert in one transaction. Pinned by `acceptingJoinsTheGroupAsAMember` and smoke 50. No membership guard before the insert — unreachable today (invite already refuses members), reachable once add-member exists. |
 | **`FailedInvitationException` handler** | A duplicate pending invitation is a `500` today. One `@ExceptionHandler` → `409`. |
-| **Reclaim expired rows on invite** | An expired invitation still holds `ux_invitations_pending`, so that email can never be re-invited. Delete expired pending rows for `(group, email)` before inserting. |
+| ~~Reclaim expired rows on invite~~ | `deleteExpiredPending` before the insert; accepted rows untouched. |
 | **`GET /groups/{id}/invitations`** | Admin's view: who was invited, status. |
 | **`DELETE /groups/{id}/invitations/{invId}`** | Revoke. Today the only way out of a pending invitation is expiry. |
 | **`GET /groups/{id}/members`** | |
@@ -388,8 +388,8 @@ In this order, each small:
    until trips can end.
 2. **`GET /users/me`** (Phase 2). The empty `UserController` is the oldest
    stub in the codebase and the first call every app makes.
-3. **`FailedInvitationException` handler + expired-row reclaim** (Phase 5).
-   Both are small, and both turn a `500` into the right answer.
+3. **`FailedInvitationException` handler** (Phase 5). One `@ExceptionHandler`
+   turns a duplicate live invitation from a `500` into a `409`.
 
 Then Phase 4's two writes, which are cheap now that everything they depend on
 exists.
