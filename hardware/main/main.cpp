@@ -87,11 +87,29 @@ class MyRxCallbacks: public NimBLECharacteristicCallbacks {
 
 
 bool int_mcp = false;
-struct can_frame frame;
+can_frame frame;
 
 // handle de la interrupt del pin del MCP
 static void IRAM_ATTR gpioInterruptCan (void *args) {
     int_mcp = true;
+}
+
+
+void getSpeed(MCP2515 *mcp) {
+    struct can_frame tx_frame;
+    tx_frame.can_id = 0x7DF; // id de pregunta a ECU
+    tx_frame.can_dlc = 8;   // paquete de 8 bytes
+    
+    tx_frame.data[0] = 0x02;    // espacio de data
+    tx_frame.data[1] = 0x01;    // pedir datos actuales
+    tx_frame.data[2] = 0x0D;    // PID de la velocidad
+    
+    // se rellena con ceros
+    for(int i = 3; i < 8; i++) {
+        tx_frame.data[i] = 0x00;
+    }
+
+    mcp->sendMessage(&tx_frame);
 }
 
 
@@ -186,7 +204,16 @@ extern "C" void app_main(void){
     SpeedRpmPacket currentSpeedRpm;
     EngTempFuelPacket currentEngTempFuel;
 
+    TickType_t last_call = xTaskGetTickCount();
+    const TickType_t every_ms = 1000 / portTICK_PERIOD_MS;
+
     while(1){
+
+        if ((xTaskGetTickCount() - last_call) >= every_ms) {
+            getSpeed(&mcp2515);
+            last_call = xTaskGetTickCount();
+        }
+
         if(int_mcp){
             int_mcp = false;
 
@@ -194,15 +221,32 @@ extern "C" void app_main(void){
 
             if (irq & MCP2515::CANINTF_RX0IF) {
                 if (mcp2515.readMessage(MCP2515::RXB0, &frame) == MCP2515::ERROR_OK) {
+                    if (frame.can_id == 0x7E8) {
+                        if (frame.data[1] == 0x41 && frame.data[2] == 0x0D) {
+                            
+                            uint8_t speed_kmh = frame.data[3];
+                            
+                            ESP_LOGI("OBD2", "Velocidad actual: %d km/h", speed_kmh);
+                        }
+                    }   
                 }
             }
 
             if (irq & MCP2515::CANINTF_RX1IF) {
                 if (mcp2515.readMessage(MCP2515::RXB1, &frame) == MCP2515::ERROR_OK) {
+                    if (frame.can_id == 0x7E8) {
+                        if (frame.data[1] == 0x41 && frame.data[2] == 0x0D) {
+                            
+                            uint8_t speed_kmh = frame.data[3];
+                            
+                            ESP_LOGI("OBD2", "Velocidad actual: %d km/h", speed_kmh);
+                        }
+                    } 
                 }
             }
-
         }
+
+        vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 
 }
