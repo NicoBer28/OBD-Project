@@ -5,6 +5,10 @@ import com.obd.api.car.CarAccess;
 import com.obd.api.car.CarRepository;
 import com.obd.api.model.ModelRepository;
 import com.obd.api.car.exception.CarNotFoundException;
+import com.obd.api.trip.exception.CannotDeleteTripException;
+import com.obd.api.trip.exception.CarNotReadableException;
+import com.obd.api.trip.exception.TripAlreadyEndedException;
+import com.obd.api.trip.exception.TripNotFoundException;
 import com.obd.api.group.*;
 import com.obd.api.support.RepositoryTest;
 import com.obd.api.trip.dto.TripDTO;
@@ -111,6 +115,169 @@ class TripServiceTest {
     void aStrangerIsToldTheCarDoesNotExist() {
         assertThatThrownBy(() -> tripService.start(strangerId, startOn(adasCar)))
                 .isInstanceOf(CarNotFoundException.class);
+    }
+
+    // --- reads -------------------------------------------------------------------
+
+    @Autowired
+    private TripRepository tripRepository;
+
+    private UUID finishedTrip(UUID carId, UUID driverId) {
+        Trip t = tripRepository.saveAndFlush(Trip.builder().tripCarId(carId).tripDriverId(driverId).build());
+        t.setTripEndedAt(java.time.Instant.now());
+        return tripRepository.saveAndFlush(t).getTripId();
+    }
+
+    @Test
+    void getTripsListsOnlyTheCallersTrips() {
+        UUID mine = finishedTrip(adasCar.getCarId(), adaId);
+        UUID graces = finishedTrip(adasCar.getCarId(), graceId);
+
+        assertThat(tripService.getTrips(adaId)).extracting(TripDTO.Read::id).containsExactly(mine);
+        assertThat(tripService.getTrips(graceId)).extracting(TripDTO.Read::id).containsExactly(graces);
+        assertThat(tripService.getTrips(strangerId)).isEmpty();
+    }
+
+    @Test
+    void getCarTripsIsTheCarsWholeHistoryForAnyoneWhoMayReadIt() {
+        UUID adasTrip = finishedTrip(adasCar.getCarId(), adaId);
+        UUID gracesTrip = finishedTrip(adasCar.getCarId(), graceId);
+        finishedTrip(carRepository.saveAndFlush(Car.builder()
+                .carOwnerId(adaId).carName("Other")
+                .carModel(modelRepository.findById(SEEDED_GOL).orElseThrow()).build()).getCarId(), adaId);
+
+        // The owner sees who drove their car; a member sees the same. That is
+        // what a shared car's history is for.
+        assertThat(tripService.getCarTrips(adaId, adasCar.getCarId()))
+                .extracting(TripDTO.Read::id).containsExactlyInAnyOrder(adasTrip, gracesTrip);
+        assertThat(tripService.getCarTrips(graceId, adasCar.getCarId()))
+                .extracting(TripDTO.Read::driverId).containsExactlyInAnyOrder(adaId, graceId);
+    }
+
+    @Test
+    void getCarTripsIsRefusedForACarTheCallerMayNotSee() {
+        finishedTrip(adasCar.getCarId(), adaId);
+
+        assertThatThrownBy(() -> tripService.getCarTrips(strangerId, adasCar.getCarId()))
+                .isInstanceOf(CarNotReadableException.class);
+    }
+
+    @Test
+    void historiesAreNewestFirst() throws InterruptedException {
+        UUID older = finishedTrip(adasCar.getCarId(), adaId);
+        Thread.sleep(5);
+        UUID newer = finishedTrip(adasCar.getCarId(), adaId);
+
+        assertThat(tripService.getTrips(adaId)).extracting(TripDTO.Read::id).containsExactly(newer, older);
+        assertThat(tripService.getCarTrips(adaId, adasCar.getCarId())).extracting(TripDTO.Read::id).containsExactly(newer, older);
+    }
+
+    @Test
+    void activeReturnsTheOpenTripToAnyMember() {
+        TripDTO.Read open = tripService.start(graceId, startOn(adasCar));
+
+        // Ada (owner) and Grace (member) both see who has the car right now.
+        assertThat(tripService.active(adaId, adasCar.getCarId()))
+                .get().extracting(TripDTO.Read::id).isEqualTo(open.id());
+        assertThat(tripService.active(graceId, adasCar.getCarId()))
+                .get().extracting(TripDTO.Read::driverId).isEqualTo(graceId);
+    }
+
+    @Test
+    void activeIsEmptyForAnIdleCar() {
+        finishedTrip(adasCar.getCarId(), adaId);   // history, not an open trip
+
+        // The usual case, and not an error.
+        assertThat(tripService.active(adaId, adasCar.getCarId())).isEmpty();
+    }
+
+    @Test
+    void activeIsRefusedForACarTheCallerMayNotSee() {
+        tripService.start(adaId, startOn(adasCar));
+
+        assertThatThrownBy(() -> tripService.active(strangerId, adasCar.getCarId()))
+                .isInstanceOf(CarNotReadableException.class);
+    }
+
+    // --- finish / cancel ---------------------------------------------------------
+
+    private static TripDTO.finish result(Integer finalFuel, Integer distance) {
+        return new TripDTO.finish(finalFuel, distance);
+    }
+
+    @Test
+    void theDriverFinishesAndTheExpenseIsDerived() {
+        TripDTO.Read open = tripService.start(graceId, new TripDTO.Create(adasCar.getCarId(), 70));
+
+        TripDTO.Read done = tripService.finish(graceId, open.id(), result(52, 140));
+
+        assertThat(done.active()).isFalse();
+        assertThat(done.endedAt()).isNotNull();
+        assertThat(done.finalFuel()).isEqualTo(52);
+        assertThat(done.distance()).isEqualTo(140);
+        // 70 - 52, computed on read - never stored.
+        assertThat(done.fuelUsed()).isEqualTo(18);
+        assertThat(tripService.active(adaId, adasCar.getCarId())).isEmpty();
+    }
+
+    @Test
+    void refuellingMakesTheExpenseNegativeAndThatIsAllowed() {
+        TripDTO.Read open = tripService.start(adaId, new TripDTO.Create(adasCar.getCarId(), 20));
+
+        TripDTO.Read done = tripService.finish(adaId, open.id(), result(60, 30));
+
+        assertThat(done.fuelUsed()).isEqualTo(-40);   // filled up on the way
+    }
+
+    @Test
+    void theOwnerMayNotFinishAMembersTrip() {
+        TripDTO.Read open = tripService.start(graceId, startOn(adasCar));
+
+        // Same answer as a trip that does not exist.
+        assertThatThrownBy(() -> tripService.finish(adaId, open.id(), result(52, 140)))
+                .isInstanceOf(TripNotFoundException.class);
+        assertThat(tripService.active(adaId, adasCar.getCarId())).isPresent();
+    }
+
+    @Test
+    void finishingTwiceIsRefused() {
+        TripDTO.Read open = tripService.start(adaId, startOn(adasCar));
+        tripService.finish(adaId, open.id(), result(52, 140));
+
+        assertThatThrownBy(() -> tripService.finish(adaId, open.id(), result(10, 999)))
+                .isInstanceOf(TripAlreadyEndedException.class);
+    }
+
+    @Test
+    void finishingAnUnknownTripIsNotFound() {
+        assertThatThrownBy(() -> tripService.finish(adaId, UUID.randomUUID(), result(52, 140)))
+                .isInstanceOf(TripNotFoundException.class);
+    }
+
+    @Test
+    void theDriverCancelsATripStartedByMistake() {
+        TripDTO.Read open = tripService.start(graceId, startOn(adasCar));
+
+        TripDTO.Read removed = tripService.delete(graceId, open.id());
+
+        assertThat(removed.id()).isEqualTo(open.id());
+        assertThat(tripRepository.findById(open.id())).isEmpty();
+        assertThat(tripService.active(adaId, adasCar.getCarId())).isEmpty();
+    }
+
+    @Test
+    void cancelIsRefusedForAFinishedTripSomeoneElsesTripAndAnUnknownOne() {
+        TripDTO.Read finished = tripService.start(adaId, startOn(adasCar));
+        tripService.finish(adaId, finished.id(), result(52, 140));
+        TripDTO.Read graces = tripService.start(graceId, startOn(adasCar));
+
+        assertThatThrownBy(() -> tripService.delete(adaId, finished.id()))
+                .isInstanceOf(CannotDeleteTripException.class);
+        assertThatThrownBy(() -> tripService.delete(adaId, graces.id()))
+                .isInstanceOf(CannotDeleteTripException.class);
+        assertThatThrownBy(() -> tripService.delete(adaId, UUID.randomUUID()))
+                .isInstanceOf(CannotDeleteTripException.class);
+        assertThat(tripRepository.count()).isEqualTo(2);
     }
 
     @Test

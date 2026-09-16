@@ -27,7 +27,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * for the accept statement on its own.
  */
 @RepositoryTest
-@Import(InvitationService.class)
+@Import({InvitationService.class, GroupAccess.class})
 class InvitationServiceTest {
 
     @Autowired

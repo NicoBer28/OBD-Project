@@ -208,6 +208,31 @@ refresh tokens for the current user and clears the `refreshToken` cookie.
 
 ---
 
+### `GET /api/v1/users/me`
+
+The caller's own profile. Requires `Authorization: Bearer <accessToken>`.
+The user is the token holder; there is no `GET /users/{id}`.
+
+**Response** `200 OK`:
+
+```json
+{
+  "id": "8f14e...-...",
+  "userName": "Ada",
+  "userLastName": "Lovelace",
+  "userMail": "ada@example.com",
+  "userPhone": "+39 320 1234567"
+}
+```
+
+`userName` is the first name (the same field `register` takes), not a
+username. No password hash, no role.
+
+**Errors:** `404 Not Found` if the account behind a still-valid token no
+longer exists; `401 Unauthorized` without a token.
+
+---
+
 ### `POST /api/v1/cars`
 
 Registers a car owned by the caller. Requires
@@ -778,7 +803,8 @@ the trip open until it is finished. Requires
 The driver is always taken from the access token and the start time from the
 server clock, so a trip cannot be logged in someone else's name or backdated.
 
-**Response** `201 Created`, with a `Location` header:
+**Response** `201 Created`. No `Location` header: there is no
+`GET /trips/{id}` for it to point at.
 
 ```json
 {
@@ -814,6 +840,117 @@ else** — the two are deliberately indistinguishable, since a `403` would confi
 that an id is real; `409 Conflict` if the car is already on a trip; `400 Bad
 Request` with a per-field error map if validation fails; `401 Unauthorized`
 without a valid access token.
+
+---
+
+---
+
+### `GET /api/v1/trips`
+
+The caller's trips — every trip they drove, in any car. Requires
+`Authorization: Bearer <accessToken>`. The driver is always the token holder;
+there is no way to ask for someone else's history.
+
+**Response** `200 OK` — an array of the trip objects `POST /trips` returns,
+open and finished alike (`active` tells them apart), newest first. `[]` for
+someone who has never driven; never an error. Unpaged for now.
+
+---
+
+### `GET /api/v1/cars/{carId}/trips`
+
+**The car's history** — every trip on it, by every driver, newest first — for
+anyone who may read the car (owner or group member). This is what a shared
+car's history is for: who used it, and who used the fuel.
+
+**Response** `200 OK`, `[]` for a car nobody has driven yet.
+
+**Errors:** `404 Not Found` if the car does not exist or the caller may not
+read it; `401 Unauthorized` without a token.
+
+---
+
+### `GET /api/v1/cars/{carId}/trips/active`
+
+**"Who has the car right now?"** — the car's open trip, for anyone who may read
+the car (owner or group member). Derived from the one row with
+`ended_at is null`; the car itself stores no pointer, so this can never
+disagree with the trip table.
+
+**Response** `200 OK` with the open trip, or **`204 No Content` when the car is
+idle** — which is its usual state, so that is a normal answer, not an error.
+`204` rather than `404` because `404` here means "no such car".
+
+**Errors:** `404 Not Found` if the car does not exist or the caller may not
+read it; `401 Unauthorized` without a token.
+
+
+### `POST /api/v1/trips/{tripId}/finish`
+
+The driver ends their trip. Requires `Authorization: Bearer <accessToken>`.
+
+**Body** (`application/json`):
+
+```json
+{ "tripFinalFuel": 50, "tripDistance": 140 }
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `tripFinalFuel` | no | fuel reading at the end, ≥ 0. Absent means the expense is unknown (`fuelUsed: null`), not zero. |
+| `tripDistance` | no | > 0 |
+
+The end time is the **server clock** — an `endedAt` in the body is ignored, so
+a trip cannot be backdated any more than it can be pre-dated at start.
+`tripFinalFuel` may exceed `initialFuel`: the driver refuelled, and `fuelUsed`
+comes out negative rather than being "validated" away.
+
+**Response** `200 OK` — the trip, now with `endedAt`, `active: false`, and
+`fuelUsed` computed as `initialFuel - tripFinalFuel`:
+
+```json
+{
+  "id": "4d405fed-973a-4f20-bfa5-d486fd221a74",
+  "carId": "060200ce-b92f-4917-a0bb-c53afdf50bd3",
+  "driverId": "b7a60789-bdb2-4e86-a617-3fae2266e746",
+  "startedAt": "2026-09-16T20:45:59.940386Z",
+  "endedAt": "2026-09-16T20:46:04.746519Z",
+  "initialFuel": 68,
+  "finalFuel": 50,
+  "fuelUsed": 18,
+  "distance": 140,
+  "active": false
+}
+```
+
+**One conditional `UPDATE`** (`TripRepository.finish`): the row is closed only
+if it is this trip, driven by the caller, and still open — all in the `WHERE`,
+so the check and the write are one atomic statement. That gives three things
+for free: only the driver can finish their trip (the owner cannot close a
+member's trip out from under them); a double tap or a retry cannot overwrite
+the first result with a second fuel reading; and `ended_at`, `final_fuel` and
+`distance` land together, which is what `ck_trips_open_has_no_result`
+requires. The car is free the instant the statement runs — a new trip can
+start immediately (smoke 66).
+
+**Errors:** `404 Not Found` if the trip does not exist **or is someone
+else's** — indistinguishable on purpose; `409 Conflict` if it has already
+ended; `400 Bad Request` for negative fuel or non-positive distance; `401
+Unauthorized` without a token.
+
+---
+
+### `DELETE /api/v1/trips/{tripId}`
+
+Cancels a trip the caller started by mistake. Only an **open** trip of the
+caller's own can be cancelled: a finished trip is history and stays.
+
+**Response** `200 OK` with the removed trip.
+
+**Errors:** `409 Conflict` — one answer for "unknown", "not yours" and
+"already finished", since the service does not tell them apart; the detail,
+*Only an open trip of your own can be cancelled*, is true in all three cases
+and confirms nothing. `401 Unauthorized` without a token.
 
 ---
 
@@ -1026,14 +1163,19 @@ TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
 What is missing, in what order to build it, and the endpoint roadmap live in
 [`ROADMAP.md`](ROADMAP.md). This list is the short version.
 
+- `GET /trips` and `GET /cars/{carId}/trips` are unpaged.
+- `DELETE /trips/{id}` answers `409` for an unknown or foreign trip where the
+  other endpoints answer `404`; the service uses one exception for all three
+  refusals. Splitting it the way `finish` does (`TripNotFound` → 404,
+  `TripAlreadyEnded` → 409) is a small change. It also answers `200` with a
+  body where `204` would match the other deletes.
+- `CarNotReadableException` maps to `404` but its detail, `"Car not
+  Readable"`, tells the caller the car *exists* — the distinction
+  `CarNotFoundException` was built to hide. `NoActiveTripsException` and its
+  handler are unused since the active lookup went to `204`.
 - Deleting a car deletes its trips (`on delete cascade`), unlike deleting a user,
   which orphans them. There is no delete-car endpoint yet, so this is still free
   to change if trip history should outlive the car.
-- Finishing a trip will have to flush the closing `UPDATE` before inserting the
-  next trip on that car: Hibernate orders inserts ahead of updates within one
-  flush, so a start-immediately-after-finish would otherwise collide with the
-  trip it just closed. Pinned by
-  `TripRepositoryTest.allowsANewTripOnceThePreviousOneIsFinished`.
 - Whether `fuel_level` and `battery_level` are percentages or absolute units is
   undecided, so V2 constrains them to `>= 0` rather than `0..100`. Tighten in a
   later migration once the firmware settles what it reports.

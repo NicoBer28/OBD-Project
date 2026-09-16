@@ -2,6 +2,7 @@ package com.obd.api.trip.dto;
 
 import com.obd.api.trip.Trip;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 
 import java.time.Instant;
@@ -57,4 +58,9 @@ public class TripDTO {
             return initial == null || last == null ? null : initial - last;
         }
     }
+
+    public record finish(
+            @PositiveOrZero Integer tripFinalFuel,
+            @Positive Integer tripDistance
+    ){}
 }

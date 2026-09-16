@@ -180,6 +180,99 @@ class TripRepositoryTest {
         assertThat(tripRepository.findById(saved.getTripId())).isEmpty();
     }
 
+    // --- finish: the one way a trip closes --------------------------------------
+
+    @Test
+    void finishClosesAnOpenTripWithItsResult() {
+        UUID id = tripRepository.saveAndFlush(aTrip().tripInitialFuel(70).build()).getTripId();
+        Instant at = Instant.now();
+
+        assertThat(tripRepository.finish(id, adaId, at, 52, 140)).isEqualTo(1);
+
+        Trip found = tripRepository.findById(id).orElseThrow();
+        assertThat(found.getTripEndedAt()).isEqualTo(at);
+        assertThat(found.getTripFinalFuel()).isEqualTo(52);
+        assertThat(found.getTripDistance()).isEqualTo(140);
+        assertThat(found.isActive()).isFalse();
+        // The car is free again.
+        assertThat(tripRepository.findByTripCarIdAndTripEndedAtIsNull(carId)).isEmpty();
+    }
+
+    @Test
+    void finishRefusesSomeoneWhoIsNotTheDriver() {
+        UUID id = tripRepository.saveAndFlush(aTrip().build()).getTripId();
+
+        // Grace may be the owner, a member, anyone: only the driver closes
+        // their own trip.
+        assertThat(tripRepository.finish(id, graceId, Instant.now(), 52, 140)).isZero();
+        assertThat(tripRepository.findById(id).orElseThrow().isActive()).isTrue();
+    }
+
+    @Test
+    void finishRefusesToFinishTwice() {
+        UUID id = tripRepository.saveAndFlush(aTrip().build()).getTripId();
+        tripRepository.finish(id, adaId, Instant.now(), 52, 140);
+
+        // A double tap must not overwrite the first result with a second
+        // fuel reading - that would silently change the expense.
+        assertThat(tripRepository.finish(id, adaId, Instant.now(), 10, 999)).isZero();
+        assertThat(tripRepository.findById(id).orElseThrow().getTripFinalFuel()).isEqualTo(52);
+    }
+
+    @Test
+    void finishRefusesAnUnknownTrip() {
+        assertThat(tripRepository.finish(UUID.randomUUID(), adaId, Instant.now(), 52, 140)).isZero();
+    }
+
+    @Test
+    void finishWithNoReadingsStillClosesTheTrip() {
+        UUID id = tripRepository.saveAndFlush(aTrip().tripInitialFuel(70).build()).getTripId();
+
+        // The driver could not read the gauge. The trip ends; its expense is
+        // simply unknown (fuelUsed null), not zero.
+        assertThat(tripRepository.finish(id, adaId, Instant.now(), null, null)).isEqualTo(1);
+        Trip found = tripRepository.findById(id).orElseThrow();
+        assertThat(found.isActive()).isFalse();
+        assertThat(found.getTripFinalFuel()).isNull();
+    }
+
+    @Test
+    void aFinishedCarCanStartAgainImmediately() {
+        UUID first = tripRepository.saveAndFlush(aTrip().build()).getTripId();
+        tripRepository.finish(first, adaId, Instant.now(), 52, 140);
+
+        // A JPQL update runs at once, so the insert that follows sees the
+        // closed row - no flush-ordering trap here.
+        assertThat(tripRepository.saveAndFlush(aTrip().build()).getTripId()).isNotNull();
+    }
+
+    // --- cancel ------------------------------------------------------------------
+
+    @Test
+    void cancelRemovesAnOpenTripOfTheDriver() {
+        UUID id = tripRepository.saveAndFlush(aTrip().build()).getTripId();
+
+        var removed = tripRepository.deleteTripByTripIdAndTripDriverIdAndTripEndedAtIsNull(id, adaId);
+        entityManager.flush();
+
+        assertThat(removed).get().extracting(Trip::getTripId).isEqualTo(id);
+        assertThat(tripRepository.findById(id)).isEmpty();
+    }
+
+    @Test
+    void cancelRefusesAFinishedTripAndSomeoneElsesTrip() {
+        UUID finished = tripRepository.saveAndFlush(aTrip().build()).getTripId();
+        tripRepository.finish(finished, adaId, Instant.now(), 52, 140);
+        UUID open = tripRepository.saveAndFlush(aTrip().build()).getTripId();
+
+        // A finished trip is history and stays; an open one is only the
+        // driver's to cancel.
+        assertThat(tripRepository.deleteTripByTripIdAndTripDriverIdAndTripEndedAtIsNull(finished, adaId)).isEmpty();
+        assertThat(tripRepository.deleteTripByTripIdAndTripDriverIdAndTripEndedAtIsNull(open, graceId)).isEmpty();
+        entityManager.flush();
+        assertThat(tripRepository.count()).isEqualTo(2);
+    }
+
     @Test
     void refusesASecondActiveTripOnTheSameCar() {
         tripRepository.saveAndFlush(aTrip().build());

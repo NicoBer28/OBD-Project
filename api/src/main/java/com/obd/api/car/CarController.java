@@ -64,7 +64,7 @@ public class CarController {
     }
 
     @GetMapping("/cars/{car_id}")
-    @ResponseStatus(HttpStatus.ACCEPTED)
+    @ResponseStatus(HttpStatus.OK)
     public CarDTO.Read car(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID car_id){
         return carService.getCar(principal.getId(), car_id);
     }

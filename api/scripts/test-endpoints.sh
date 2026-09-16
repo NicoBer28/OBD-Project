@@ -267,7 +267,7 @@ echo "status: $G_SPOOF"
 # --- Trips ------------------------------------------------------------------
 TRIPS="$BASE_URL/api/v1/trips"
 
-line "23. Start a trip (expect 201 + Location)"
+line "23. Start a trip (expect 201, no Location)"
 TRIP_HEADERS=$(mktemp)
 trap 'rm -f "$JAR" "$CREATE_HEADERS" "$GROUP_HEADERS" "$TRIP_HEADERS"' EXIT
 TRIP_BODY=$(curl -sS -D "$TRIP_HEADERS" -X POST "$TRIPS" \
@@ -278,8 +278,8 @@ print_json "$TRIP_BODY"
 grep -qi "^HTTP/1.1 201" "$TRIP_HEADERS" || fail "expected 201 from start trip"
 TRIP_ID=$(extract_field "$TRIP_BODY" id)
 [ -n "$TRIP_ID" ] || fail "no id in start-trip response"
-grep -qi "^location:.*/api/v1/trips/$TRIP_ID" "$TRIP_HEADERS" \
-  || fail "Location header missing or does not point at the new trip"
+# No Location: there is no GET /trips/{id} for it to point at.
+grep -qi "^location:" "$TRIP_HEADERS" && fail "start trip must not send a Location it cannot honour"
 # The driver is the token holder, and the trip is left open - that open row is
 # what "this car is in use right now" means.
 [ "$(extract_field "$TRIP_BODY" driverId)" = "$CAR_USER_ID" ] \
@@ -701,5 +701,86 @@ MEMBER_ING2=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TELEMETRY" \
   -d "{\"carId\":\"$TCAR_ID\",\"readings\":[{\"recordedAt\":\"$(iso_ago 0)\",\"speed\":1}]}")
 echo "un-share: $UNSH   member upload afterwards: $MEMBER_ING2"
 [ "$MEMBER_ING2" = "404" ] || fail "expected 404 for a former member uploading, got $MEMBER_ING2"
+
+# --- Trip reads --------------------------------------------------------------
+# Carl (CAR_TOKEN) started TRIP_ID on CAR_ID (step 23) and TRIP2_ID on TCAR_ID
+# (step 32); both are still open.
+
+line "62. GET /trips lists the caller's trips (expect both, none of anyone else's)"
+MY_TRIPS=$(curl -sS "$TRIPS" -H "Authorization: Bearer $CAR_TOKEN")
+echo "$MY_TRIPS" | grep -q "\"id\":\"$TRIP_ID\""  || fail "TRIP_ID missing from GET /trips"
+echo "$MY_TRIPS" | grep -q "\"id\":\"$TRIP2_ID\"" || fail "TRIP2_ID missing from GET /trips"
+OTHER_TRIPS=$(curl -sS "$TRIPS" -H "Authorization: Bearer $OTHER_TOKEN")
+[ "$OTHER_TRIPS" = "[]" ] || fail "someone who never drove must get an empty list, got: $OTHER_TRIPS"
+echo "ok: $(echo "$MY_TRIPS" | grep -o '"id"' | wc -l | tr -d ' ') trip(s) for Carl, none for Grace"
+
+line "63. GET /cars/{id}/trips (expect the caller's trips in that car)"
+CAR_TRIPS=$(curl -sS "$CARS/$CAR_ID/trips" -H "Authorization: Bearer $CAR_TOKEN")
+echo "$CAR_TRIPS" | grep -q "\"id\":\"$TRIP_ID\""    || fail "TRIP_ID missing from the car's trips"
+echo "$CAR_TRIPS" | grep -q "\"id\":\"$TRIP2_ID\""   && fail "a trip on another car leaked into this car's list"
+echo "ok"
+
+line "64. Active trip: 200 with the open trip, 204 for an idle car, 404 for a stranger"
+ACTIVE=$(curl -sS -w '\n%{http_code}' "$CARS/$TCAR_ID/trips/active" -H "Authorization: Bearer $CAR_TOKEN")
+ACTIVE_STATUS=$(echo "$ACTIVE" | tail -1); ACTIVE_BODY=$(echo "$ACTIVE" | sed '$d')
+print_json "$ACTIVE_BODY"
+[ "$ACTIVE_STATUS" = "200" ] || fail "expected 200 for a car with an open trip, got $ACTIVE_STATUS"
+[ "$(extract_field "$ACTIVE_BODY" id)" = "$TRIP2_ID" ] || fail "expected the open trip to be $TRIP2_ID"
+# FRESH_CAR_ID got a trip in step 29, so a genuinely idle car is made here.
+IDLE_CAR_ID=$(curl -sS -X POST "$CARS" -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"name\":\"Idle car\",\"modelId\":\"$MODEL_GOL\"}" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+IDLE=$(curl -sS -o /dev/null -w '%{http_code}' "$CARS/$IDLE_CAR_ID/trips/active" -H "Authorization: Bearer $CAR_TOKEN")
+STRANGER=$(curl -sS -o /dev/null -w '%{http_code}' "$CARS/$TCAR_ID/trips/active" -H "Authorization: Bearer $OTHER_TOKEN")
+echo "idle: $IDLE   stranger: $STRANGER"
+[ "$IDLE" = "204" ]     || fail "expected 204 for an idle car, got $IDLE"
+[ "$STRANGER" = "404" ] || fail "expected 404 for a car the caller may not see, got $STRANGER"
+
+# --- Finish / cancel ---------------------------------------------------------
+# TRIP2_ID on TCAR_ID was started in step 32 with initialFuel 68 (from the
+# snapshot). Carl is its driver.
+
+line "65. The driver finishes the trip (expect 200, fuelUsed derived)"
+FIN=$(curl -sS -X POST "$TRIPS/$TRIP2_ID/finish" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d '{"tripFinalFuel": 50, "tripDistance": 140}')
+print_json "$FIN"
+expect_json "$FIN" active false
+expect_json "$FIN" finalFuel 50
+expect_json "$FIN" distance 140
+# 68 - 50: computed on read, never stored.
+expect_json "$FIN" fuelUsed 18
+[ -n "$(extract_field "$FIN" endedAt)" ] || fail "expected endedAt to be set"
+
+line "66. The car is idle again (expect 204), and can start a new trip at once (expect 201)"
+IDLE2=$(curl -sS -o /dev/null -w '%{http_code}' "$CARS/$TCAR_ID/trips/active" -H "Authorization: Bearer $CAR_TOKEN")
+[ "$IDLE2" = "204" ] || fail "expected 204 after finishing, got $IDLE2"
+NEXT=$(curl -sS -w '\n%{http_code}' -X POST "$TRIPS" -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"carId\":\"$TCAR_ID\"}")
+NEXT_STATUS=$(echo "$NEXT" | tail -1); NEXT_BODY=$(echo "$NEXT" | sed '$d')
+echo "idle: $IDLE2   next start: $NEXT_STATUS"
+[ "$NEXT_STATUS" = "201" ] || fail "expected to start a new trip right after finishing, got $NEXT_STATUS"
+TRIP3_ID=$(extract_field "$NEXT_BODY" id)
+
+line "67. Finishing twice (expect 409); someone else finishing (expect 404)"
+TWICE=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TRIPS/$TRIP2_ID/finish" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" -d '{"tripFinalFuel": 10, "tripDistance": 1}')
+FOREIGN_FIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TRIPS/$TRIP3_ID/finish" \
+  -H "Authorization: Bearer $OTHER_TOKEN" -H "Content-Type: application/json" -d '{"tripFinalFuel": 10, "tripDistance": 1}')
+echo "twice: $TWICE   someone else: $FOREIGN_FIN"
+[ "$TWICE" = "409" ]       || fail "expected 409 finishing an ended trip, got $TWICE"
+[ "$FOREIGN_FIN" = "404" ] || fail "expected 404 for a non-driver finishing, got $FOREIGN_FIN"
+# ...and the first result was not overwritten.
+STILL=$(curl -sS "$CARS/$TCAR_ID/trips" -H "Authorization: Bearer $CAR_TOKEN")
+echo "$STILL" | grep -q "\"id\":\"$TRIP2_ID\",[^}]*\"finalFuel\":50" || fail "the second finish must not overwrite the first result"
+
+line "68. The driver cancels a trip started by mistake (expect 200); a finished one cannot be (expect 409)"
+CANCEL=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$TRIPS/$TRIP3_ID" -H "Authorization: Bearer $CAR_TOKEN")
+CANCEL_DONE=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$TRIPS/$TRIP2_ID" -H "Authorization: Bearer $CAR_TOKEN")
+GONE=$(curl -sS "$CARS/$TCAR_ID/trips" -H "Authorization: Bearer $CAR_TOKEN")
+echo "cancel open: $CANCEL   cancel finished: $CANCEL_DONE"
+[ "$CANCEL" = "200" ]      || fail "expected 200 cancelling an open trip, got $CANCEL"
+[ "$CANCEL_DONE" = "409" ] || fail "expected 409 cancelling a finished trip, got $CANCEL_DONE"
+echo "$GONE" | grep -q "\"id\":\"$TRIP3_ID\"" && fail "the cancelled trip is still in the car's history"
+echo "$GONE" | grep -q "\"id\":\"$TRIP2_ID\"" || fail "the finished trip must stay in the car's history"
 
 line "All checks passed"

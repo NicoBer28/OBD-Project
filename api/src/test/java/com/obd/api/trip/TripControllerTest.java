@@ -8,6 +8,10 @@ import com.obd.api.car.exception.CarNotFoundException;
 import com.obd.api.support.SliceSecurityConfig;
 import com.obd.api.trip.dto.TripDTO;
 import com.obd.api.trip.exception.CarAlreadyOnATripException;
+import com.obd.api.trip.exception.CannotDeleteTripException;
+import com.obd.api.trip.exception.CarNotReadableException;
+import com.obd.api.trip.exception.TripAlreadyEndedException;
+import com.obd.api.trip.exception.TripNotFoundException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -23,6 +27,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -30,7 +35,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -78,15 +84,15 @@ class TripControllerTest {
             """;
 
     @Test
-    void startReturns201WithTheTripAndItsLocation() throws Exception {
+    void startReturns201WithTheTrip() throws Exception {
         given(tripService.start(eq(DRIVER_ID), any(TripDTO.Create.class))).willReturn(started());
 
         mockMvc.perform(post("/api/v1/trips").with(caller())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(VALID_BODY))
                 .andExpect(status().isCreated())
-                .andExpect(header().string("Location",
-                        "http://localhost/api/v1/trips/" + TRIP_ID))
+                // No Location: there is no GET /trips/{id} for it to point at.
+                .andExpect(header().doesNotExist("Location"))
                 .andExpect(jsonPath("$.id").value(TRIP_ID.toString()))
                 .andExpect(jsonPath("$.carId").value(CAR_ID.toString()))
                 .andExpect(jsonPath("$.driverId").value(DRIVER_ID.toString()))
@@ -99,6 +105,153 @@ class TripControllerTest {
                 .andExpect(jsonPath("$.fuelUsed").doesNotExist())
                 .andExpect(jsonPath("$.distance").doesNotExist())
                 .andExpect(jsonPath("$.active").value(true));
+    }
+
+    // --- GET /trips, GET /cars/{id}/trips, GET /cars/{id}/trips/active ------
+
+    @Test
+    void tripsListsTheCallersTrips() throws Exception {
+        given(tripService.getTrips(DRIVER_ID)).willReturn(List.of(started()));
+
+        // Driver from the token; there is no way to ask for someone else's.
+        mockMvc.perform(get("/api/v1/trips").with(caller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(TRIP_ID.toString()))
+                .andExpect(jsonPath("$[0].driverId").value(DRIVER_ID.toString()));
+    }
+
+    @Test
+    void tripsIsEmptyNotAnErrorForSomeoneWhoNeverDrove() throws Exception {
+        given(tripService.getTrips(DRIVER_ID)).willReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/trips").with(caller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
+    }
+
+    @Test
+    void carTripsListsTripsForThatCar() throws Exception {
+        given(tripService.getCarTrips(DRIVER_ID, CAR_ID)).willReturn(List.of(started()));
+
+        mockMvc.perform(get("/api/v1/cars/" + CAR_ID + "/trips").with(caller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].carId").value(CAR_ID.toString()));
+    }
+
+    @Test
+    void activeReturnsTheOpenTrip() throws Exception {
+        given(tripService.active(DRIVER_ID, CAR_ID)).willReturn(Optional.of(started()));
+
+        mockMvc.perform(get("/api/v1/cars/" + CAR_ID + "/trips/active").with(caller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(TRIP_ID.toString()))
+                .andExpect(jsonPath("$.active").value(true));
+    }
+
+    @Test
+    void activeIs204WhenTheCarIsIdle() throws Exception {
+        given(tripService.active(DRIVER_ID, CAR_ID)).willReturn(Optional.empty());
+
+        // The usual state of a car. Not an error, and not a 404 - that one
+        // means "no such car".
+        mockMvc.perform(get("/api/v1/cars/" + CAR_ID + "/trips/active").with(caller()))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+    }
+
+    @Test
+    void activeMapsACarTheCallerMayNotSeeToNotFound() throws Exception {
+        willThrow(new CarNotReadableException()).given(tripService).active(DRIVER_ID, CAR_ID);
+
+        mockMvc.perform(get("/api/v1/cars/" + CAR_ID + "/trips/active").with(caller()))
+                .andExpect(status().isNotFound());
+    }
+
+    // --- POST /trips/{id}/finish, DELETE /trips/{id} -----------------------------
+
+    private static TripDTO.Read finished() {
+        return new TripDTO.Read(TRIP_ID, CAR_ID, DRIVER_ID,
+                Instant.parse("2026-09-08T12:00:00Z"), Instant.parse("2026-09-08T13:30:00Z"),
+                70, 52, 18, 140, false);
+    }
+
+    @Test
+    void finishReturnsTheClosedTripWithItsExpense() throws Exception {
+        given(tripService.finish(eq(DRIVER_ID), eq(TRIP_ID), any(TripDTO.finish.class))).willReturn(finished());
+
+        mockMvc.perform(post("/api/v1/trips/" + TRIP_ID + "/finish").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tripFinalFuel\": 52, \"tripDistance\": 140}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(false))
+                .andExpect(jsonPath("$.endedAt").exists())
+                .andExpect(jsonPath("$.finalFuel").value(52))
+                .andExpect(jsonPath("$.fuelUsed").value(18))
+                .andExpect(jsonPath("$.distance").value(140));
+    }
+
+    @Test
+    void finishRejectsNegativeFuelAndZeroDistance() throws Exception {
+        mockMvc.perform(post("/api/v1/trips/" + TRIP_ID + "/finish").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tripFinalFuel\": -1, \"tripDistance\": 0}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.tripFinalFuel").exists())
+                .andExpect(jsonPath("$.errors.tripDistance").exists());
+    }
+
+    @Test
+    void finishIgnoresAnEndTimeInTheBody() throws Exception {
+        given(tripService.finish(eq(DRIVER_ID), eq(TRIP_ID), any(TripDTO.finish.class))).willReturn(finished());
+
+        // The end time is the server clock; a client cannot backdate a trip.
+        mockMvc.perform(post("/api/v1/trips/" + TRIP_ID + "/finish").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tripFinalFuel\": 52, \"tripDistance\": 140, \"endedAt\": \"2020-01-01T00:00:00Z\"}"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void finishMapsNotFoundAndNotMineToNotFound() throws Exception {
+        willThrow(new TripNotFoundException(TRIP_ID))
+                .given(tripService).finish(eq(DRIVER_ID), eq(TRIP_ID), any(TripDTO.finish.class));
+
+        mockMvc.perform(post("/api/v1/trips/" + TRIP_ID + "/finish").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tripFinalFuel\": 52, \"tripDistance\": 140}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("No such trip"));
+    }
+
+    @Test
+    void finishMapsAlreadyEndedToConflict() throws Exception {
+        willThrow(new TripAlreadyEndedException(TRIP_ID))
+                .given(tripService).finish(eq(DRIVER_ID), eq(TRIP_ID), any(TripDTO.finish.class));
+
+        mockMvc.perform(post("/api/v1/trips/" + TRIP_ID + "/finish").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"tripFinalFuel\": 52, \"tripDistance\": 140}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("That trip has already ended"));
+    }
+
+    @Test
+    void cancelReturnsTheRemovedTrip() throws Exception {
+        given(tripService.delete(DRIVER_ID, TRIP_ID)).willReturn(started());
+
+        mockMvc.perform(delete("/api/v1/trips/" + TRIP_ID).with(caller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(TRIP_ID.toString()));
+    }
+
+    @Test
+    void cancelMapsARefusalToConflict() throws Exception {
+        willThrow(new CannotDeleteTripException(TRIP_ID)).given(tripService).delete(DRIVER_ID, TRIP_ID);
+
+        mockMvc.perform(delete("/api/v1/trips/" + TRIP_ID).with(caller()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("Only an open trip of your own can be cancelled"));
     }
 
     @Test

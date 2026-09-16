@@ -4,7 +4,7 @@ What is missing, what to build next, and in what order. Companion to
 `README.md`, which documents what already **exists**; this file is about what
 does not.
 
-Last updated: 2026-09-15. Schema is at `V9__devices.sql`. 222 tests, 61 smoke
+Last updated: 2026-09-15. Schema is at `V9__devices.sql`. 257 tests, 68 smoke
 checks.
 
 ---
@@ -13,11 +13,11 @@ checks.
 
 | Area | Schema | Endpoints |
 |---|---|---|
-| Auth / users | `users`, `refresh_tokens` | register, login, refresh, logout. **No profile endpoint** — `UserController` is still an empty class. |
+| Auth / users | `users`, `refresh_tokens` | register, login, refresh, logout, `GET /users/me` |
 | Cars | `cars` (with `group_id`, `snapshot_at`), `models` | `POST /cars`, `GET /cars`, `GET /cars/{id}`, `PUT`/`DELETE /cars/{id}/group`, `GET /groups/{id}/cars`, `GET /models`, `POST /models` (admin) |
 | Groups | `groups`, `group_members` | `POST /groups`, `GET /groups` |
 | Invitations | `invitations` | `POST /invitations/invite/{groupId}`, `GET /invitations/pending`, `POST /invitations/{id}/accept` |
-| Trips | `trips` | `POST /trips` (start) only — **nothing can finish a trip** |
+| Trips | `trips` | start, finish, cancel, `GET /trips`, `GET /cars/{id}/trips`, `GET /cars/{id}/trips/active` |
 | Telemetry | `telemetry` | `POST /telemetry` (batch ingest, by `carId` or by dongle `serial`), `GET /telemetry` (cursor sync) |
 | Devices | `devices` | `PUT`/`GET`/`DELETE /cars/{id}/device`, `GET /devices/{serial}` |
 
@@ -161,32 +161,25 @@ tested; **bold** notes are what is left.
 `GET /telemetry` (cursor sync), `GET /cars`, `GET /cars/{id}`, and `CarAccess`.
 The full path ESP32 → phone → API → Postgres can run end to end.
 
-Left over:
-- **`GET /cars/{car_id}` returns `202`** instead of `200`; no README section,
-  no slice test, no smoke check.
-
 ### Phase 2 — The remaining reads
 
 | Endpoint | Notes |
 |---|---|
-| **`GET /users/me`** | `UserController`/`UserService` are still empty classes. Every app needs this on launch. |
-| **`GET /cars/{id}/trips/active`** | "Who has the car right now." Derived from `ended_at is null`. 204 or `null` when idle — pick one and document it. |
+| ~~`GET /users/me`~~ | The profile, from the token. No tests, smoke check or README section yet. |
+| ~~`GET /cars/{id}/trips/active`~~ | Through `CarAccess.readableBy`; `204` when idle. |
 | **`GET /groups/{id}`** | One group, with its members (or a separate `/members`). `GroupAccess.memberOf` for the check. |
-| **`GET /trips/{id}`** | The route `POST /trips` already advertises in `Location`. |
-| **`GET /trips`** | The caller's history, paged, newest first. |
-| **`GET /cars/{id}/trips`** | One car's history, paged. |
+| **`GET /trips/{id}`** | `POST /trips` no longer sends a `Location`, so this is optional now. |
+| ~~`GET /trips`~~ | Newest first. Paging still to do. |
+| ~~`GET /cars/{id}/trips`~~ | The car's full history, every driver, newest first, for anyone who may read it. |
 | ~~`GET /models`~~ | Plus an admin-only `POST /models`. Answers `200` where other creates answer `201`; `findAll()` is unordered. |
 | ~~`GET /groups`~~ | One JPQL query building the DTO directly; `memberCount` as a correlated subquery. No tests or smoke check yet. |
 
-### Phase 3 — Finish the trip lifecycle
-
-**Nothing here exists.** Until it does, `fuelUsed` is always `null` and the
-expense feature is dead.
+### Phase 3 — Finish the trip lifecycle — mostly done
 
 | Endpoint | Notes |
 |---|---|
-| **`POST /trips/{id}/finish`** | Body: `finalFuel?`, `distance?`. Sets `ended_at` = server clock. |
-| **`DELETE /trips/{id}`** | Cancel a trip started by mistake. Only while active. |
+| ~~`POST /trips/{id}/finish`~~ | One conditional `UPDATE`: driver-only, once, server clock. `fuelUsed` is live. |
+| ~~`DELETE /trips/{id}`~~ | Open trips of the caller's own. Answers `409` for every refusal and `200` with a body — see README limitations. |
 | **`GET /trips/{id}/route`** | Readings stamped with this trip, oldest first. `findByTelemetryTripIdOrderByTelemetryRecordedAtAsc` already exists. |
 
 Traps:
@@ -194,10 +187,8 @@ Traps:
   else's trip out from under them.
 - `finalFuel > initialFuel` is legal — the driver refuelled. Do not "validate"
   it away.
-- Finishing must **flush the `UPDATE` before any subsequent `INSERT`** on that
-  car: Hibernate orders inserts ahead of updates within one flush, so a
-  start-immediately-after-finish collides with the trip it just closed. Pinned
-  by `TripRepositoryTest.allowsANewTripOnceThePreviousOneIsFinished`.
+- ~~Flush the closing `UPDATE` before the next `INSERT`~~ — moot: `finish` is a
+  JPQL update, which runs immediately. `aFinishedCarCanStartAgainImmediately`.
 - Finishing is a good moment to bring `cars.mileage` up to date. Speed figures
   are **not** stored — they are computed from `telemetry` (Phase 6).
 
@@ -237,7 +228,7 @@ Traps:
 
 | Endpoint | Notes |
 |---|---|
-| **`GET /users/me/expenses?from=&to=`** | `sum(initial_fuel - final_fuel)`, in SQL. Needs Phase 3 first — there are no finished trips to sum. |
+| **`GET /users/me/expenses?from=&to=`** | `sum(initial_fuel - final_fuel)`, in SQL. Unblocked: trips can end. |
 | **`GET /groups/{id}/expenses`** | Per member, over a range. |
 | **`GET /cars/{id}/stats`** | Total distance, `max(speed)`/`avg(speed)`, trip count — from `telemetry` and `trips`. |
 
@@ -371,11 +362,10 @@ one place (`TelemetryService`), is easier to reason about.
 
 In this order, each small:
 
-1. **`POST /trips/{id}/finish`** (Phase 3). Every trip ever started is still
-   open; nothing downstream — expenses, stats, the car's mileage — can exist
-   until trips can end.
-2. **`GET /users/me`** (Phase 2). The empty `UserController` is the oldest
-   stub in the codebase and the first call every app makes.
-3. **`FailedInvitationException` handler** (Phase 5). One `@ExceptionHandler`
+1. **`GET /users/me/expenses`** (Phase 6). Trips can end now, so there is
+   finally something to sum — one SQL aggregate.
+2. **`FailedInvitationException` handler** (Phase 5). One `@ExceptionHandler`
    turns a duplicate live invitation from a `500` into a `409`.
+3. **`GET /trips/{id}/route`** (Phase 3). The last piece of the trip
+   lifecycle; the repository query already exists.
 

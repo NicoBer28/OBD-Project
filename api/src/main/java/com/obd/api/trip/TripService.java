@@ -4,12 +4,16 @@ import com.obd.api.car.Car;
 import com.obd.api.car.CarAccess;
 import com.obd.api.car.exception.CarNotFoundException;
 import com.obd.api.trip.dto.TripDTO;
-import com.obd.api.trip.exception.CarAlreadyOnATripException;
+import com.obd.api.trip.exception.*;
 import jakarta.transaction.Transactional;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -29,15 +33,9 @@ public class TripService {
      */
     @Transactional
     public TripDTO.Read start(UUID driverId, TripDTO.Create request) {
-        // Read-level access is what driving needs: once cars can be shared, a
-        // group member may start a trip without owning the car. CarAccess is
-        // where that rule lives and where it will change.
         Car car = carAccess.readableBy(driverId, request.carId())
                 .orElseThrow(() -> new CarNotFoundException(request.carId()));
 
-        // Checked here for the sake of a clear 409 rather than a 500 - the
-        // actual guarantee is ux_trips_one_active_per_car, which is what stops
-        // two simultaneous requests from both opening a trip.
         tripRepository.findByTripCarIdAndTripEndedAtIsNull(car.getCarId())
                 .ifPresent(active -> {
                     throw new CarAlreadyOnATripException(car.getCarId());
@@ -46,9 +44,6 @@ public class TripService {
         Trip trip = Trip.builder()
                 .tripCarId(car.getCarId())
                 .tripDriverId(driverId)
-                // Falls back to the car's cached fuel level so a client that
-                // cannot read the gauge still gets a usable expense, instead of
-                // a trip whose consumption is permanently unknowable.
                 .tripInitialFuel(request.initialFuel() != null
                         ? request.initialFuel()
                         : car.getCarFuelLevel())
@@ -56,17 +51,52 @@ public class TripService {
 
         Trip saved;
         try {
-            // saveAndFlush (not save): the INSERT has to hit the database inside
-            // this try block, or a lost race for the unique index would surface
-            // at commit time, outside the catch.
             saved = tripRepository.saveAndFlush(trip);
         } catch (DataIntegrityViolationException e) {
-            // The car was checked above and every value written here is already
-            // validated, so the only constraint left to lose is the one-active-
-            // trip index - another request opened a trip in between.
             throw new CarAlreadyOnATripException(car.getCarId());
         }
 
         return TripDTO.Read.from(saved);
+    }
+
+    public List<TripDTO.Read> getTrips(UUID userId ){
+        return tripRepository.findByTripDriverIdOrderByTripStartedAtDesc(userId).stream().map(TripDTO.Read::from).toList();
+    }
+
+    public List<TripDTO.Read> getCarTrips(UUID userId, UUID carId){
+        Car car = carAccess.readableBy(userId, carId).orElseThrow(CarNotReadableException::new);
+
+        return tripRepository.findByTripCarIdOrderByTripStartedAtDesc(carId).stream().map(TripDTO.Read::from).toList();
+    }
+
+    /**
+     * The car's open trip, if any. Empty is the normal answer - a parked car
+     * has none - so it is an Optional the controller turns into 204, not an
+     * exception. Whoever may read the car may see who is driving it.
+     */
+    public Optional<TripDTO.Read> active(UUID userId, UUID carId){
+
+        Car car = carAccess.readableBy(userId, carId).orElseThrow(CarNotReadableException::new);
+
+        return tripRepository.findByTripCarIdAndTripEndedAtIsNull(car.getCarId()).map(TripDTO.Read::from);
+    }
+
+    @Transactional
+    public TripDTO.Read finish(UUID userId, UUID tripId, TripDTO.@Valid finish tripFinish) {
+        if(tripRepository.finish(tripId, userId, Instant.now(), tripFinish.tripFinalFuel(), tripFinish.tripDistance()) == 0){
+            Trip trip = tripRepository.findById(tripId)
+                    .filter(t -> t.getTripDriverId().equals(userId))
+                    .orElseThrow(()-> new TripNotFoundException(tripId));
+
+            throw new TripAlreadyEndedException(tripId);
+        }
+
+        return TripDTO.Read.from(tripRepository.findById(tripId).orElse(new Trip()));
+    }
+
+
+    @Transactional
+    public TripDTO.Read delete(UUID userId, UUID tripId){
+        return tripRepository.deleteTripByTripIdAndTripDriverIdAndTripEndedAtIsNull(tripId, userId).map(TripDTO.Read::from).orElseThrow(()-> new CannotDeleteTripException(tripId));
     }
 }

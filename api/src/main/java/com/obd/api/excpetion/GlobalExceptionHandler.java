@@ -1,6 +1,11 @@
 package com.obd.api.excpetion;
 
 import com.obd.api.invitation.exception.*;
+import com.obd.api.trip.exception.CannotDeleteTripException;
+import com.obd.api.trip.exception.CarNotReadableException;
+import com.obd.api.trip.exception.TripAlreadyEndedException;
+import com.obd.api.trip.exception.TripNotFoundException;
+import com.obd.api.trip.exception.NoActiveTripsException;
 import com.obd.api.user.exception.UserNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,6 +86,49 @@ public class GlobalExceptionHandler {
         var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
         p.setTitle("Conflict");
         p.setDetail("Invitation Expired");
+        return p;
+    }
+
+    @ExceptionHandler(CarNotReadableException.class)
+    public ProblemDetail carNotReadable(CarNotReadableException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        p.setTitle("Not Found");
+        p.setDetail("Car not Readable");
+        return p;
+    }
+
+    @ExceptionHandler(TripNotFoundException.class)
+    public ProblemDetail tripNotFound(TripNotFoundException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        p.setTitle("Not Found");
+        // Also the answer for a trip that exists but is someone else's.
+        p.setDetail("No such trip");
+        return p;
+    }
+
+    @ExceptionHandler(TripAlreadyEndedException.class)
+    public ProblemDetail tripAlreadyEnded(TripAlreadyEndedException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        p.setTitle("Conflict");
+        p.setDetail("That trip has already ended");
+        return p;
+    }
+
+    @ExceptionHandler(CannotDeleteTripException.class)
+    public ProblemDetail cannotDeleteTrip(CannotDeleteTripException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        p.setTitle("Conflict");
+        // One answer for unknown, not yours, and already ended - the service
+        // does not tell them apart. True in all three cases, leaks in none.
+        p.setDetail("Only an open trip of your own can be cancelled");
+        return p;
+    }
+
+    @ExceptionHandler(NoActiveTripsException.class)
+    public ProblemDetail notActiveTrips(NoActiveTripsException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        p.setTitle("Not Found");
+        p.setDetail("No active trips");
         return p;
     }
 
