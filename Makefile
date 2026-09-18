@@ -1,3 +1,25 @@
+.PHONY: format check test
+
+format:
+	@echo "Formatting Flutter..."
+	cd app/obd_app && dart format .
+
+	@echo "Formatting firmware..."
+	cd hardware && clang-format -i main/*.cpp
+
+check:
+	@echo "Checking Flutter..."
+	cd app/obd_app && dart format --output=none --set-exit-if-changed .
+	cd app/obd_app && flutter analyze
+	cd app/obd_app && flutter test
+
+	@echo "Checking firmware formatting..."
+	cd hardware && clang-format --dry-run --Werror main/*.cpp
+
+test:
+	@echo "Running Flutter tests..."
+	cd app/obd_app && flutter test
+
 setup:
 	chmod -R u+x ./.githooks 
 	git config core.hooksPath .githooks
