@@ -44,8 +44,7 @@ class _LoginScreenState extends State<LoginScreen> {
               // Reemplazar la ruta evita volver al login con el botón Atrás.
               navigator.pushReplacement(
                 MaterialPageRoute(
-                  builder: (context) =>
-                      MainScreen(nombreUsuario: nombreUsuario, device: device),
+                  builder: (context) => MainScreen(nombreUsuario: nombreUsuario, device: device),
                 ),
               );
             },
@@ -53,8 +52,7 @@ class _LoginScreenState extends State<LoginScreen> {
               // Este camino conserva el simulador para pruebas sin hardware.
               navigator.pushReplacement(
                 MaterialPageRoute(
-                  builder: (context) =>
-                      MainScreen(nombreUsuario: nombreUsuario),
+                  builder: (context) => MainScreen(nombreUsuario: nombreUsuario),
                 ),
               );
             },
@@ -120,7 +118,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     return null;
                   },
                 ),
-                
+
                 const SizedBox(height: 32),
                 // Botón de Ingreso
                 SizedBox(

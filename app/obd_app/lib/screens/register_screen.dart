@@ -32,11 +32,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
     if (_formKey.currentState!.validate()) {
       final nombre = _nombreController.text.trim();
       final email = _emailController.text.trim();
-      
+
       // Acá a futuro iría la lógica de tu grupo para guardar en base de datos.
       print('¡Registro validado para: $nombre con email $email!');
 
-      // Como venimos desde la pantalla de Login usando Navigator.push, 
+      // Como venimos desde la pantalla de Login usando Navigator.push,
       // Navigator.pop(context) simplemente "cierra" esta pantalla y nos devuelve al Login.
       Navigator.pop(context);
     }

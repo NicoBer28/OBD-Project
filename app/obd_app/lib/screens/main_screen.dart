@@ -64,9 +64,7 @@ class _MainScreenState extends State<MainScreen> {
       _connectionSubscription = device.connectionState.listen((state) {
         if (!mounted) return;
         setState(() {
-          _connectionStatus = state == BluetoothConnectionState.connected
-              ? 'Conectado'
-              : 'Desconectado';
+          _connectionStatus = state == BluetoothConnectionState.connected ? 'Conectado' : 'Desconectado';
         });
       });
       _prepareBleConnection();
@@ -107,8 +105,7 @@ class _MainScreenState extends State<MainScreen> {
 
       final receiveCharacteristic = _notifyCharacteristic;
       if (receiveCharacteristic != null &&
-          (receiveCharacteristic.properties.notify ||
-              receiveCharacteristic.properties.indicate)) {
+          (receiveCharacteristic.properties.notify || receiveCharacteristic.properties.indicate)) {
         // READ requiere una acción manual; NOTIFY permite que la ESP32 envíe
         // datos espontáneamente. Activamos la suscripción solo si está soportada.
         await receiveCharacteristic.setNotifyValue(true);
@@ -153,15 +150,12 @@ class _MainScreenState extends State<MainScreen> {
       // interpretar esos bytes con el mismo formato y protocolo de mensajes.
       await activeCharacteristic.write(
         utf8.encode(text),
-        withoutResponse:
-            activeCharacteristic.properties.writeWithoutResponse &&
-            !activeCharacteristic.properties.write,
+        withoutResponse: activeCharacteristic.properties.writeWithoutResponse && !activeCharacteristic.properties.write,
       );
       _sendController.clear();
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('No se pudo enviar: $error')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo enviar: $error')));
     } finally {
       if (mounted) setState(() => _isSending = false);
     }
@@ -180,8 +174,7 @@ class _MainScreenState extends State<MainScreen> {
       });
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('No se pudo leer: $error')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo leer: $error')));
     }
   }
 
@@ -296,17 +289,13 @@ class _MainScreenState extends State<MainScreen> {
                       // Avión de papel: app -> ESP32 mediante WRITE.
                       IconButton(
                         tooltip: 'Enviar dato',
-                        onPressed: _writeCharacteristic == null
-                            ? null
-                            : _sendData,
+                        onPressed: _writeCharacteristic == null ? null : _sendData,
                         icon: const Icon(Icons.send),
                       ),
                       // Descarga: lectura explícita app <- ESP32 mediante READ.
                       IconButton(
                         tooltip: 'Leer dato de la ESP32',
-                        onPressed: _readCharacteristic?.properties.read == true
-                            ? _readData
-                            : null,
+                        onPressed: _readCharacteristic?.properties.read == true ? _readData : null,
                         icon: const Icon(Icons.download),
                       ),
                     ],
@@ -322,9 +311,7 @@ class _MainScreenState extends State<MainScreen> {
                     min: 0,
                     max: 100,
                     divisions: 100,
-                    activeColor: _nivelNafta < 20
-                        ? Colors.red
-                        : Colors.blueAccent,
+                    activeColor: _nivelNafta < 20 ? Colors.red : Colors.blueAccent,
                     onChanged: (nuevoValor) {
                       // El setState obliga a Flutter a redibujar el widget con el nuevo valor
                       setState(() {

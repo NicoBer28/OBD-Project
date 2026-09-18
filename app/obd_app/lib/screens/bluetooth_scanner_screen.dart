@@ -112,8 +112,7 @@ class _BluetoothScannerScreenState extends State<BluetoothScannerScreen> {
       widget.onConnected(device);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error de conexión: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error de conexión: $e')));
     }
   }
 
@@ -124,9 +123,7 @@ class _BluetoothScannerScreenState extends State<BluetoothScannerScreen> {
         title: const Text('Buscar Dispositivo'),
         actions: [
           IconButton(
-            tooltip: _mostrarSinNombre
-                ? 'Ocultar dispositivos sin nombre'
-                : 'Mostrar dispositivos sin nombre',
+            tooltip: _mostrarSinNombre ? 'Ocultar dispositivos sin nombre' : 'Mostrar dispositivos sin nombre',
             icon: Icon(
               _mostrarSinNombre ? Icons.filter_alt : Icons.filter_alt_outlined,
             ),
@@ -159,9 +156,7 @@ class _BluetoothScannerScreenState extends State<BluetoothScannerScreen> {
                 // detectando todos los dispositivos cercanos.
                 final visibleResults = _mostrarSinNombre
                     ? results
-                    : results
-                          .where((result) => result.device.advName.isNotEmpty)
-                          .toList();
+                    : results.where((result) => result.device.advName.isNotEmpty).toList();
 
                 if (visibleResults.isEmpty) {
                   return Center(
@@ -181,9 +176,7 @@ class _BluetoothScannerScreenState extends State<BluetoothScannerScreen> {
                   itemCount: visibleResults.length,
                   itemBuilder: (context, index) {
                     final device = visibleResults[index].device;
-                    final nombre = device.advName.isNotEmpty
-                        ? device.advName
-                        : 'Sin nombre (${device.remoteId})';
+                    final nombre = device.advName.isNotEmpty ? device.advName : 'Sin nombre (${device.remoteId})';
 
                     return Card(
                       margin: const EdgeInsets.symmetric(
