@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import './register_screen.dart';
-import './bluetooth_scanner_screen.dart';
 import './main_screen.dart';
 
 import 'dart:convert';
@@ -103,24 +102,8 @@ void _ingresar() {
       // Salto directo a la pantalla de escaneo Bluetooth
       navigator.pushReplacement(
         MaterialPageRoute(
-          builder: (context) => BluetoothScannerScreen(
-            nombreUsuario: userEmail,
-            onConnected: (device) {
-              navigator.pushReplacement(
-                MaterialPageRoute(
-                  builder: (context) =>
-                      MainScreen(nombreUsuario: userEmail,),
-                ),
-              );
-            },
-            onContinueWithoutConnection: () {
-              navigator.pushReplacement(
-                MaterialPageRoute(
-                  builder: (context) =>
-                      MainScreen(nombreUsuario: userEmail),
-                ),
-              );
-            },
+          builder: (context) => MainScreen(
+            nombreUsuario: userEmail
           ),
         ),
       );
