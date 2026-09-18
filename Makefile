@@ -22,4 +22,5 @@ test:
 
 setup:
 	chmod -R u+x ./.githooks 
-	git config core.hooksPath .githooks
+	lefthook install
+	@echo "Git hooks installed successfully."
