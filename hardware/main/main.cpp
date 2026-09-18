@@ -86,7 +86,7 @@ class MyRxCallbacks: public NimBLECharacteristicCallbacks {
 #define MCP2515_INT_PIN  GPIO_NUM_4
 
 
-bool int_mcp = false;
+volatile bool int_mcp = false;
 can_frame frame;
 
 // handle de la interrupt del pin del MCP
@@ -95,14 +95,14 @@ static void IRAM_ATTR gpioInterruptCan (void *args) {
 }
 
 
-void getSpeed(MCP2515 *mcp) {
+void requestOBD2(MCP2515 *mcp, uint8_t pid) {
     struct can_frame tx_frame;
     tx_frame.can_id = 0x7DF; // id de pregunta a ECU
     tx_frame.can_dlc = 8;   // paquete de 8 bytes
     
     tx_frame.data[0] = 0x02;    // espacio de data
     tx_frame.data[1] = 0x01;    // pedir datos actuales
-    tx_frame.data[2] = 0x0D;    // PID de la velocidad
+    tx_frame.data[2] = pid;     // PID solicitado
     
     // se rellena con ceros
     for(int i = 3; i < 8; i++) {
@@ -139,7 +139,14 @@ extern "C" void app_main(void){
     // pin interrupt del MCP
     gpio_install_isr_service(0);
 
-    gpio_set_intr_type(MCP2515_INT_PIN, GPIO_INTR_NEGEDGE);
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_NEGEDGE;
+    io_conf.pin_bit_mask = (1ULL << MCP2515_INT_PIN);
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    gpio_config(&io_conf);
+
     gpio_isr_handler_add(MCP2515_INT_PIN, gpioInterruptCan, NULL);
 
 
@@ -148,6 +155,8 @@ extern "C" void app_main(void){
     mcp2515.reset();
     mcp2515.setBitrate(CAN_125KBPS, MCP_8MHZ);
     mcp2515.setNormalMode();
+    mcp2515.clearInterrupts();
+    mcp2515.setInterruptMask(MCP2515::CANINTF_RX0IF | MCP2515::CANINTF_RX1IF);
 
 
     // init bt
@@ -204,13 +213,19 @@ extern "C" void app_main(void){
     SpeedRpmPacket currentSpeedRpm;
     EngTempFuelPacket currentEngTempFuel;
 
+    bool req_speed = true;
     TickType_t last_call = xTaskGetTickCount();
-    const TickType_t every_ms = 1000 / portTICK_PERIOD_MS;
+    const TickType_t every_ms = 500 / portTICK_PERIOD_MS;
 
     while(1){
 
         if ((xTaskGetTickCount() - last_call) >= every_ms) {
-            getSpeed(&mcp2515);
+            if (req_speed) {
+                requestOBD2(&mcp2515, 0x0D); // PID Velocidad
+            } else {
+                requestOBD2(&mcp2515, 0x0C); // PID RPM
+            }
+            req_speed = !req_speed;
             last_call = xTaskGetTickCount();
         }
 
@@ -221,12 +236,13 @@ extern "C" void app_main(void){
 
             if (irq & MCP2515::CANINTF_RX0IF) {
                 if (mcp2515.readMessage(MCP2515::RXB0, &frame) == MCP2515::ERROR_OK) {
-                    if (frame.can_id == 0x7E8) {
-                        if (frame.data[1] == 0x41 && frame.data[2] == 0x0D) {
-                            
+                    if (frame.can_id == 0x7E8 && frame.data[1] == 0x41) {
+                        if (frame.data[2] == 0x0D) {
                             uint8_t speed_kmh = frame.data[3];
-                            
                             ESP_LOGI("OBD2", "Velocidad actual: %d km/h", speed_kmh);
+                        } else if (frame.data[2] == 0x0C) {
+                            uint16_t rpm = ((frame.data[3] * 256) + frame.data[4]) / 4;
+                            ESP_LOGI("OBD2", "RPM actual: %d", rpm);
                         }
                     }   
                 }
@@ -234,15 +250,26 @@ extern "C" void app_main(void){
 
             if (irq & MCP2515::CANINTF_RX1IF) {
                 if (mcp2515.readMessage(MCP2515::RXB1, &frame) == MCP2515::ERROR_OK) {
-                    if (frame.can_id == 0x7E8) {
-                        if (frame.data[1] == 0x41 && frame.data[2] == 0x0D) {
-                            
+                    if (frame.can_id == 0x7E8 && frame.data[1] == 0x41) {
+                        if (frame.data[2] == 0x0D) {
                             uint8_t speed_kmh = frame.data[3];
-                            
                             ESP_LOGI("OBD2", "Velocidad actual: %d km/h", speed_kmh);
+                        } else if (frame.data[2] == 0x0C) {
+                            uint16_t rpm = ((frame.data[3] * 256) + frame.data[4]) / 4;
+                            ESP_LOGI("OBD2", "RPM actual: %d", rpm);
                         }
                     } 
                 }
+            }
+
+            if (irq & (MCP2515::CANINTF_TX0IF | MCP2515::CANINTF_TX1IF | MCP2515::CANINTF_TX2IF)) {
+                mcp2515.clearTXInterrupts();
+            }
+            if (irq & MCP2515::CANINTF_MERRF) {
+                mcp2515.clearMERR();
+            }
+            if (irq & MCP2515::CANINTF_ERRIF) {
+                mcp2515.clearERRIF();
             }
         }
 
