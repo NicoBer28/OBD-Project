@@ -16,6 +16,10 @@ check:
 	@echo "Checking firmware formatting..."
 	cd hardware && clang-format --dry-run --Werror main/*.cpp
 
+test:
+	@echo "Running Flutter tests..."
+	cd app/obd_app && flutter test
+
 setup:
 	chmod -R u+x ./.githooks 
 	lefthook install

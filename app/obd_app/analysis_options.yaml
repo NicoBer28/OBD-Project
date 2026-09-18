@@ -20,4 +20,4 @@ linter:
     - prefer_single_quotes: true
     - always_declare_return_types: true
     - prefer_final_fields: true
-    # - avoid_print: true
+    - avoid_print: true
