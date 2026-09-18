@@ -20,13 +20,15 @@ import java.util.concurrent.Executor
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.example.obd_app/ble_channel"
     private val COMPANION_REQUEST_CODE = 1001
+
     // UUID del servicio de tu ESP32
     private val OBD_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
 
+    //se ejecuta cuando queres conectarte con el ESP32 por primera vez, abre la ventanita de Android para que el usuario seleccione el dispositivo
     fun iniciarVinculacionOBD() {
         val deviceManager = getSystemService(Context.COMPANION_DEVICE_SERVICE) as CompanionDeviceManager
 
-        // Filtramos para que SOLO muestre dispositivos que tengan tu UUID
+        // Filtramos para que solo muestre dispositivos que tengan el uuid que declaramos
         val deviceFilter = BluetoothLeDeviceFilter.Builder()
             .setScanFilter(
                 android.bluetooth.le.ScanFilter.Builder()
@@ -37,14 +39,13 @@ class MainActivity: FlutterActivity() {
 
         val request = AssociationRequest.Builder()
             .addDeviceFilter(deviceFilter)
-            .setSingleDevice(false) // Ponelo en true si querés que vincule el primero que encuentre sin preguntar
+            .setSingleDevice(false)
             .build()
 
         val executor = Executor { it.run() }
 
         deviceManager.associate(request, executor, object : CompanionDeviceManager.Callback() {
             override fun onAssociationPending(intentSender: IntentSender) {
-                // Esto abre la ventanita de Android donde el usuario selecciona el ESP32
                 startIntentSenderForResult(intentSender, COMPANION_REQUEST_CODE, null, 0, 0, 0)
             }
 
@@ -54,7 +55,7 @@ class MainActivity: FlutterActivity() {
         })
     }
 
-    // Android nos avisa acá cuando el usuario eligió el dispositivo en la ventanita
+    // se ejecuta cuando se seleccionó el dispositivo en la ventanita de Android en la primera vez
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         
@@ -66,18 +67,17 @@ class MainActivity: FlutterActivity() {
 
                 Log.i("OBD-C", "¡Vinculado exitosamente! MAC: ${macMayusculas}")
                 
-                // ¡LA MAGIA OCURRE ACÁ!
-                // Le decimos a Android: "A partir de ahora, si ves esta MAC en el aire, despertá mi app"
+                // le dice a andriod que a partir de ahora, si detecta esta MAC en el aire, que despierte la app
                 val deviceManager = getSystemService(Context.COMPANION_DEVICE_SERVICE) as CompanionDeviceManager
                 deviceManager.startObservingDevicePresence(macMayusculas)
             }
         }
     }
 
+    //configura los MethodChannel para vincular con Flutter a través de Pigeon
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         
-        // 1. Configuramos el MethodChannel (La Vinculación Inicial)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             if (call.method == "iniciarVinculacion") {
                 iniciarVinculacionOBD()
@@ -87,12 +87,11 @@ class MainActivity: FlutterActivity() {
             }
         }
 
-        // 2. Configuramos Pigeon (El Puente de Datos Continuo hacia Flutter)
         ObdEventBridge.flutterApi = ObdFlutterApi(flutterEngine.dartExecutor.binaryMessenger)
-}
-
+    }
+    
+    // Si el usuario mata la interfaz gráfica, desconectamos el puente
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
-        // Si el usuario mata la interfaz gráfica, desconectamos el puente
         ObdEventBridge.flutterApi = null
         super.cleanUpFlutterEngine(flutterEngine)
     }

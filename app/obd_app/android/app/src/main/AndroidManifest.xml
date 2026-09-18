@@ -45,6 +45,7 @@
             </intent-filter>
         </activity>
         
+        <!-- Permisos especiales para servicios en segundo plano -->
         <service
             android:name=".ObdCompanionService"
             android:exported="true"

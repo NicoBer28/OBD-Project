@@ -4,20 +4,13 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
-import '../src/generated/obd_api.g.dart'; // Importamos el código generado
+import '../src/generated/obd_api.g.dart';
 
 import './login_screen.dart';
 import '../native_bridge.dart';
 
 import 'package:permission_handler/permission_handler.dart';
 
-
-// UUIDs del Nordic UART Service (NUS) que implementa la ESP32.
-// Se mantienen constantes porque todos los dispositivos del mismo modelo
-// comparten el mismo contrato GATT; no identifican a un dispositivo individual.
-const _uartServiceUuid = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E';
-const _uartWriteUuid = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E';
-const _uartReadUuid = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E';
 
 // Panel principal: muestra la nafta y administra la comunicación GATT.
 class MainScreen extends StatefulWidget {
@@ -32,25 +25,14 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> implements ObdFlutterApi{
   int _selectedTab = 1;
 
-  // Valor inicial usado por el simulador cuando no hay ESP32 conectada.
-  double _nivelNafta = 75.0;
+  double _nivelNafta = 0;
   int _velocidad = 0;
   int _rpm = 0;
-
-  // Textos de diagnóstico visibles durante el desarrollo.
-  String _connectionStatus = 'Modo demo: sin conexión BLE';
-  String _receivedData = 'Sin datos recibidos';
-
-  // Impide iniciar dos escrituras simultáneas sobre la misma característica.
-  bool _isSending = false;
-
-  // Campo de texto cuyo contenido se convierte a bytes UTF-8 al enviar.
-  final _sendController = TextEditingController();
 
 @override
   void initState() {
     super.initState();
-    // 2. Registramos esta pantalla como la que va a recibir los datos de Kotlin
+    // registramos esta pantalla como la que va a recibir los datos de Kotlin
     ObdFlutterApi.setUp(this);
     _solicitarPermisos();
   }
@@ -61,7 +43,6 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi{
       Permission.bluetoothConnect,
       Permission.location,
       Permission.notification,
-      // Si usás Android 13+, también deberías pedir permission.notification
     ].request();
   }
 
@@ -72,17 +53,15 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi{
     super.dispose();
   }
 
-  // 3. ¡Acá llega el dato directo desde el background service nativo!
+  // acá llega el dato directo desde el background service nativo
   @override
   void onTelemetryUpdated(TelemetryEvent event) {
     if (!mounted) return;
     
-    // Simplemente actualizamos la UI. Pigeon ya nos da un objeto con variables tipadas
     setState(() {
       _velocidad = event.speed ?? 0;
       _rpm = event.rpm ?? 0;
       _nivelNafta = (event.fuel ?? 0).toDouble();
-      // También tenés event.lat y event.lng si querés actualizar un mapa en vivo
     });
   }
 
@@ -147,7 +126,6 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi{
   }
 
   Widget _buildCarPage(BuildContext context) {
-    final connected =_connectionStatus.toLowerCase().contains('conectado');
     return ListView(
       key: const ValueKey('car'),
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
@@ -159,7 +137,7 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi{
         ),
         const SizedBox(height: 4),
         Text(
-          connected ? 'Telemetría en directo' : 'Resumen del vehículo',
+          'Telemetría en directo',
           style: TextStyle(color: Colors.grey.shade400),
         ),
         const SizedBox(height: 20),
@@ -178,7 +156,7 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi{
                   const Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('OBD-C · Demo'),
+                      Text('OBD-C'),
                       SizedBox(height: 6),
                       Text(
                         'Volkswagen Golf GTI',
@@ -317,7 +295,6 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi{
         ListTile(
           leading: const Icon(Icons.bluetooth),
           title: const Text('Conexión OBD'),
-          subtitle: Text(_connectionStatus),
           trailing: const Icon(Icons.chevron_right),
         ),
         const Divider(),

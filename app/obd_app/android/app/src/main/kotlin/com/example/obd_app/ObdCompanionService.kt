@@ -16,8 +16,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
+//Foreground Service que se ejecuta en segundo plano cuando el auto está encendido y conectado al ESP32
 class ObdCompanionService : CompanionDeviceService() {
-
     private val NOTIFICATION_ID = 1996
     private val CHANNEL_ID = "OBD_TRIP_CHANNEL"
     
@@ -25,14 +25,12 @@ class ObdCompanionService : CompanionDeviceService() {
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
 
-    // Variables para guardar el último estado conocido
     private var lastLat: Double = 0.0
     private var lastLng: Double = 0.0
     private var lastSpeed: Int = 0
     private var lastRpm: Int = 0
     private var lastFuel: Int = 0
 
-    // 1. Definimos los UUIDs exactos (Los mismos que usabas en Dart)
     private val OBD_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
     private val NOTIFY_CHARACTERISTIC_UUID = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
     // El Descriptor estándar de Bluetooth para habilitar notificaciones (CCCD)
@@ -46,45 +44,40 @@ class ObdCompanionService : CompanionDeviceService() {
         crearCanalNotificacion()
     }
 
-    // ¡EL AUTO SE ENCENDIÓ Y SE CONECTÓ!
+    // Se ejecuta cuando Android detecta que el ESP32 está en el aire (auto encendido)
     override fun onDeviceAppeared(associationInfo: AssociationInfo) {
         val macAddress = associationInfo.deviceMacAddress.toString()
         Log.i("OBD-C", "Auto detectado ($macAddress). Iniciando Viaje...")
 
-        // 1. Iniciamos el Foreground Service con la notificación imborrable
+        // iniciamos el Foreground Service con una notificación fija
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("OBD-C")
-            .setContentText("Registrando viaje en curso...")
-            .setSmallIcon(android.R.drawable.ic_menu_compass) // Cambiar por tu logo
+            .setContentTitle("OBD")
+            .setContentText("Conectado al auto.")
+            .setSmallIcon(android.R.drawable.ic_menu_compass) // TODO Cambiar por otro logo
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
             
         startForeground(NOTIFICATION_ID, notification)
 
-        // 2. Encendemos el GPS (Solo durante el viaje)
         iniciarTrackingGPS()
 
-        // 3. ACÁ CONECTAREMOS EL BLUETOOTH (GATT)
         conectarBLE(macAddress)
     }
 
-    // ¡EL AUTO SE APAGÓ!
+    // se desconectó del ESP32 (auto apagado o fuera de rango)
     override fun onDeviceDisappeared(associationInfo: AssociationInfo) {
         Log.i("OBD-C", "Auto apagado. Finalizando Viaje...")
 
-        // 1. Apagamos el GPS
         fusedLocationClient.removeLocationUpdates(locationCallback)
 
         // 2. Desconectamos BLE
         desconectarBLE()
 
-        // 3. Matamos el servicio y quitamos la notificación
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     private fun iniciarTrackingGPS() {
-        // Configuramos para que no mate la batería: cada 10 segs, o si se mueve 15 metros.
         val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10000)
             .setMinUpdateDistanceMeters(15f)
             .build()
@@ -97,8 +90,6 @@ class ObdCompanionService : CompanionDeviceService() {
                     
                     Log.i("OBD-C", "NUEVO PUNTO -> GPS: [$lastLat, $lastLng] | Nafta: $lastFuel%")
                     
-                    // ACÁ SE GUARDA EN LA BASE DE DATOS LOCAL EL "PUNTO ATÓMICO"
-                    // BaseDeDatosLocal.insertarPunto(lastLat, lastLng, lastFuel, timestamp)
                 }
             }
         }
@@ -124,11 +115,12 @@ class ObdCompanionService : CompanionDeviceService() {
         manager.createNotificationChannel(channel)
     }
 
+
 private fun conectarBLE(macAddress: String) {
         val macMayusculas = macAddress.uppercase()
         Log.i("OBD-C", "Antena ocupada leyendo aparición. Esperando 1 segundo...")
         
-        // Retrasamos la conexión 1000 milisegundos. ESTO ES VITAL.
+        // Retrasamos la conexión 1000 milisegundos (para no saturar)
         Handler(Looper.getMainLooper()).postDelayed({
             try {
                 val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -137,7 +129,6 @@ private fun conectarBLE(macAddress: String) {
 
                 Log.i("OBD-C", "Intentando dar la mano (GATT LE) al ESP32 ($macMayusculas)...")
                 
-                // BluetoothDevice.TRANSPORT_LE fuerza a usar el chip moderno
                 bluetoothGatt = device.connectGatt(
                     this@ObdCompanionService, 
                     true,
@@ -153,22 +144,20 @@ private fun conectarBLE(macAddress: String) {
             } catch (e: Exception) {
                 Log.e("OBD-C", "Error fatal conectando BLE: ${e.message}")
             }
-        }, 1000) // <-- 1000 ms (1 segundo) de delay
+        }, 1000) //ms
     }
 
-    // Llamá a esta función desde onDeviceDisappeared
     private fun desconectarBLE() {
         bluetoothGatt?.disconnect()
         bluetoothGatt?.close()
         bluetoothGatt = null
     }
 
-    // 2. El "Cerebro" de la conexión Bluetooth
+    // Escucha cuando el ESP32 acepta la conexión, busca los servicios y se suscribe a las notificaciones
     private val gattCallback = object : BluetoothGattCallback() {
 
         // Se ejecuta cuando el ESP32 acepta o rechaza la conexión
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            // Filtro de seguridad: Si el status NO es 0 (GATT_SUCCESS), falló.
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.e("OBD-C", "Error GATT: status=$status. Cerrando conexión para liberar memoria.")
                 gatt.close()
@@ -178,7 +167,6 @@ private fun conectarBLE(macAddress: String) {
 
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.i("OBD-C", "GATT Conectado. Buscando servicios OBD...")
-                // Al conectarse, obligamos a Android a descubrir qué UUIDs tiene el ESP32
                 gatt.discoverServices() 
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.w("OBD-C", "GATT Desconectado.")
@@ -194,10 +182,8 @@ private fun conectarBLE(macAddress: String) {
                 if (characteristic != null) {
                     Log.i("OBD-C", "Característica encontrada. Suscribiendo...")
                     
-                    // a) Le decimos a Android que nos interesa la característica
                     gatt.setCharacteristicNotification(characteristic, true)
                     
-                    // b) El Truco de Android: Escribimos el descriptor 2902 para que el ESP32 empiece a mandar datos
                     val descriptor = characteristic.getDescriptor(CCCD_UUID)
                     descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                     gatt.writeDescriptor(descriptor)
@@ -219,7 +205,7 @@ private fun conectarBLE(macAddress: String) {
         }
     }
 
-    // 3. El Parser: Mapeamos la estructura de C++ a variables locales
+    //FUNCION QUE SE EJECUTAN AL LEER DATOS DEL ESP32
     private fun procesarPaquete(bytes: ByteArray) {
         if (bytes.isEmpty()) return
 
@@ -248,16 +234,16 @@ private fun conectarBLE(macAddress: String) {
             
             Log.d("OBD-C", "Nafta recibida en Background: $fuel%")
         }
-        // 1. Armamos el objeto autogenerado por Pigeon
+        // Armamos el objeto autogenerado por Pigeon
         val evento = TelemetryEvent(
-            speed = lastSpeed.toLong(), // Pigeon mapea los Int de Dart a Long en Kotlin
+            speed = lastSpeed.toLong(),
             rpm = lastRpm.toLong(),
             fuel = lastFuel.toLong(),
             lat = lastLat,
             lng = lastLng
         )
 
-        // 2. Enviamos a Flutter asegurándonos de estar en el Hilo Principal usando Corrutinas
+        // Enviamos a Flutter asegurándonos de estar en el Hilo Principal usando Corrutinas
         CoroutineScope(Dispatchers.Main).launch {
             try {
                 ObdEventBridge.flutterApi?.onTelemetryUpdated(evento)

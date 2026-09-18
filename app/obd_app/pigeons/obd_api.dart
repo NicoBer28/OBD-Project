@@ -1,4 +1,5 @@
 import 'package:pigeon/pigeon.dart';
+//Es el contrato de pigeon
 
 // Le decimos a Pigeon dónde generar los archivos traducidos
 @ConfigurePigeon(PigeonOptions(
@@ -7,7 +8,6 @@ import 'package:pigeon/pigeon.dart';
   kotlinOptions: KotlinOptions(package: 'com.example.obd_app'),
 ))
 
-// Esta es la "Caja" unificada que contiene OBD + GPS
 class TelemetryEvent {
   int? speed;
   int? rpm;
@@ -16,7 +16,6 @@ class TelemetryEvent {
   double? lng;
 }
 
-// @FlutterApi indica que esto es Nativo hablando hacia Flutter (De Kotlin a Dart)
 @FlutterApi()
 abstract class ObdFlutterApi {
   void onTelemetryUpdated(TelemetryEvent event);

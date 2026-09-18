@@ -1,10 +1,11 @@
 import 'package:flutter/services.dart';
 
 class NativeBleBridge {
-  // 1. Sintonizamos exactamente la misma frecuencia que pusimos en Kotlin
+  // sintonizamos exactamente la misma frecuencia que pusimos en Kotlin
   static const platform = MethodChannel('com.example.obd_app/ble_channel');
 
-  // 2. Función estática que podremos llamar desde cualquier botón
+  // función estática que podremos llamar desde cualquier botón
+  // es para iniciar la vinculación BLE desde Flutter por primera vez
   static Future<void> iniciarVinculacion() async {
     try {
       // Le mandamos el mensaje "iniciarVinculacion" a Android
