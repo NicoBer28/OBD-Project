@@ -32,84 +32,98 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _ingresar() async {
-    // Si la validación local es correcta, se inicia el flujo BLE.
+  // void _ingresar() async {
+  //   // Si la validación local es correcta, se inicia el flujo BLE.
+  //   if (_formKey.currentState!.validate()) {
+  //     final userEmail = _emailController.text.trim();
+  //     final userPassword = _passwordController.text;
+      
+  //     final navigator = Navigator.of(context);
+  //     final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+  //     final url = Uri.parse('http://192.168.1.19:8080/api/v1/auth/login');
+
+  //     try {
+  //       // Disparamos la petición a la API
+  //       final response = await http.post(
+  //         url,
+  //         headers: {'Content-Type': 'application/json'},
+  //         body: jsonEncode({
+  //           'userMail': userEmail,
+  //           'userPassword': userPassword,
+  //         }),
+  //       );
+
+  //       // Si las credenciales coinciden en la base de datos, el 200 es que salio todo bien
+  //       if (response.statusCode == 200) {
+  //         print('Login exitoso! Tokens: ${response.body}');
+
+  //         // Primero se busca el dispositivo OBD antes de mostrar el panel.
+  //         navigator.pushReplacement(
+  //           MaterialPageRoute(
+  //             builder: (context) => MainScreen(
+  //               nombreUsuario: userEmail
+  //             ),
+  //           ),
+  //         );
+  //       } else if (response.statusCode == 401) {
+  //         // 401 Unauthorized: email o contraseña incorrectos
+  //         scaffoldMessenger.showSnackBar(
+  //           const SnackBar(
+  //             content: Text('Correo o contraseña incorrectos'),
+  //             backgroundColor: Colors.red,
+  //           ),
+  //         );
+  //       } else {
+  //         // eror del servidor
+  //         scaffoldMessenger.showSnackBar(
+  //           SnackBar(
+  //             content: Text('Error del servidor (${response.statusCode})'),
+  //             backgroundColor: Colors.orange,
+  //           ),
+  //         );
+  //       }
+  //     } catch (error) {
+  //       // problema de wifi o servidor apagado
+  //       scaffoldMessenger.showSnackBar(
+  //         const SnackBar(
+  //           content: Text('No se pudo conectar. Revisá tu conexión Wi-Fi.'),
+  //           backgroundColor: Colors.red,
+  //         ),
+  //       );
+  //     }
+  //   }
+  // }
+void _ingresar() {
+    // Si la validación local de formato pasa, navegamos directo sin llamar al backend
     if (_formKey.currentState!.validate()) {
       final userEmail = _emailController.text.trim();
-      final userPassword = _passwordController.text;
-      
       final navigator = Navigator.of(context);
-      final scaffoldMessenger = ScaffoldMessenger.of(context);
 
-      final url = Uri.parse('http://192.168.1.19:8080/api/v1/auth/login');
-
-      try {
-        // Disparamos la petición a la API
-        final response = await http.post(
-          url,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'userMail': userEmail,
-            'userPassword': userPassword,
-          }),
-        );
-
-        // Si las credenciales coinciden en la base de datos, el 200 es que salio todo bien
-        if (response.statusCode == 200) {
-          print('Login exitoso! Tokens: ${response.body}');
-
-          // Primero se busca el dispositivo OBD antes de mostrar el panel.
-          navigator.pushReplacement(
-            MaterialPageRoute(
-              builder: (context) => BluetoothScannerScreen(
-                nombreUsuario: userEmail,
-                onConnected: (device) {
-                  // Reemplazar la ruta evita volver al login con el botón Atrás.
-                  navigator.pushReplacement(
-                    MaterialPageRoute(
-                      builder: (context) =>
-                          MainScreen(nombreUsuario: userEmail, device: device),
-                    ),
-                  );
-                },
-                onContinueWithoutConnection: () {
-                  // Este camino conserva el simulador para pruebas sin hardware.
-                  navigator.pushReplacement(
-                    MaterialPageRoute(
-                      builder: (context) =>
-                          MainScreen(nombreUsuario: userEmail),
-                    ),
-                  );
-                },
-              ),
-            ),
-          );
-        } else if (response.statusCode == 401) {
-          // 401 Unauthorized: email o contraseña incorrectos
-          scaffoldMessenger.showSnackBar(
-            const SnackBar(
-              content: Text('Correo o contraseña incorrectos'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        } else {
-          // eror del servidor
-          scaffoldMessenger.showSnackBar(
-            SnackBar(
-              content: Text('Error del servidor (${response.statusCode})'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-      } catch (error) {
-        // problema de wifi o servidor apagado
-        scaffoldMessenger.showSnackBar(
-          const SnackBar(
-            content: Text('No se pudo conectar. Revisá tu conexión Wi-Fi.'),
-            backgroundColor: Colors.red,
+      // Salto directo a la pantalla de escaneo Bluetooth
+      navigator.pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => BluetoothScannerScreen(
+            nombreUsuario: userEmail,
+            onConnected: (device) {
+              navigator.pushReplacement(
+                MaterialPageRoute(
+                  builder: (context) =>
+                      MainScreen(nombreUsuario: userEmail,),
+                ),
+              );
+            },
+            onContinueWithoutConnection: () {
+              navigator.pushReplacement(
+                MaterialPageRoute(
+                  builder: (context) =>
+                      MainScreen(nombreUsuario: userEmail),
+                ),
+              );
+            },
           ),
-        );
-      }
+        ),
+      );
     }
   }
 

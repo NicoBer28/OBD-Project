@@ -3,9 +3,14 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+
+import '../src/generated/obd_api.g.dart'; // Importamos el código generado
 
 import './login_screen.dart';
+import '../native_bridge.dart';
+
+import 'package:permission_handler/permission_handler.dart';
+
 
 // UUIDs del Nordic UART Service (NUS) que implementa la ESP32.
 // Se mantienen constantes porque todos los dispositivos del mismo modelo
@@ -17,36 +22,20 @@ const _uartReadUuid = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E';
 // Panel principal: muestra la nafta y administra la comunicación GATT.
 class MainScreen extends StatefulWidget {
   final String nombreUsuario;
-  final BluetoothDevice? device;
 
-  const MainScreen({super.key, required this.nombreUsuario, this.device});
+  const MainScreen({super.key, required this.nombreUsuario});
 
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen> implements ObdFlutterApi{
   int _selectedTab = 1;
 
   // Valor inicial usado por el simulador cuando no hay ESP32 conectada.
   double _nivelNafta = 75.0;
   int _velocidad = 0;
   int _rpm = 0;
-
-  // Característica 6E400002: canal de escritura app -> ESP32.
-  BluetoothCharacteristic? _writeCharacteristic;
-
-  // Característica 6E400003 si permite lectura explícita.
-  BluetoothCharacteristic? _readCharacteristic;
-
-  // Característica 6E400003 si permite notificaciones ESP32 -> app.
-  BluetoothCharacteristic? _notifyCharacteristic;
-
-  // Suscripción que recibe automáticamente las notificaciones de la ESP32.
-  StreamSubscription<List<int>>? _receiveSubscription;
-
-  // Suscripción usada para reflejar conexiones y desconexiones en la UI.
-  StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
 
   // Textos de diagnóstico visibles durante el desarrollo.
   String _connectionStatus = 'Modo demo: sin conexión BLE';
@@ -58,163 +47,43 @@ class _MainScreenState extends State<MainScreen> {
   // Campo de texto cuyo contenido se convierte a bytes UTF-8 al enviar.
   final _sendController = TextEditingController();
 
-  @override
+@override
   void initState() {
     super.initState();
-    final device = widget.device;
-    if (device != null) {
-      // El estado puede cambiar después de abandonar el escáner, por eso se
-      // observa el stream del dispositivo en lugar de asumir que la conexión
-      // permanecerá activa durante toda la pantalla.
-      _connectionSubscription = device.connectionState.listen((state) {
-        if (!mounted) return;
-        setState(() {
-          _connectionStatus = state == BluetoothConnectionState.connected
-              ? 'Conectado'
-              : 'Desconectado';
-        });
-      });
-      _prepareBleConnection();
-    }
+    // 2. Registramos esta pantalla como la que va a recibir los datos de Kotlin
+    ObdFlutterApi.setUp(this);
+    _solicitarPermisos();
   }
 
-  Future<void> _prepareBleConnection() async {
-    final device = widget.device!;
-    try {
-      // Si Android perdió la conexión, se intenta restablecer antes de consultar
-      // servicios. Después de reconectar hay que descubrirlos nuevamente.
-      if (!device.isConnected) {
-        await device.connect(license: License.nonprofit, autoConnect: false);
-      }
-      final services = await device.discoverServices();
-      _writeCharacteristic = null;
-      _readCharacteristic = null;
-      _notifyCharacteristic = null;
-      // Se busca el servicio por UUID, no por posición en la lista.
-      final uartService = services.cast<BluetoothService?>().firstWhere(
-        (service) => service!.uuid == Guid(_uartServiceUuid),
-        orElse: () => null,
-      );
-
-      if (uartService == null) {
-        throw StateError('No se encontró el servicio UART de la ESP32');
-      }
-
-      for (final characteristic in uartService.characteristics) {
-        // La dirección de datos la determina el UUID y las propiedades GATT.
-        if (characteristic.uuid == Guid(_uartWriteUuid)) {
-          _writeCharacteristic = characteristic;
-        } else if (characteristic.uuid == Guid(_uartReadUuid)) {
-          _readCharacteristic = characteristic;
-          _notifyCharacteristic = characteristic;
-        }
-      }
-
-      final receiveCharacteristic = _notifyCharacteristic;
-      if (receiveCharacteristic != null &&
-          (receiveCharacteristic.properties.notify ||
-              receiveCharacteristic.properties.indicate)) {
-        // READ requiere una acción manual; NOTIFY permite que la ESP32 envíe
-        // datos espontáneamente. Activamos la suscripción solo si está soportada.
-        await receiveCharacteristic.setNotifyValue(true);
-        _receiveSubscription = receiveCharacteristic.onValueReceived.listen((
-          value,
-        ) {
-          if (!mounted|| value.isEmpty) return;
-
-          final bytes = Uint8List.fromList(value);
-          final byteData = ByteData.sublistView(bytes);
-          final id = byteData.getUint8(0);
-
-          setState(() {
-            if (id == 0x01 && bytes.length >= 4) {
-              // Struct SpeedRpmPacket: id (1 byte), speed (1 byte), rpm (2 bytes)
-              _velocidad = byteData.getUint8(1);
-              _rpm = byteData.getUint16(2, Endian.little); // ESP32 usa Little Endian
-              _receivedData = 'Paquete 0x01 - Vel: $_velocidad km/h | RPM: $_rpm';
-            } 
-            else if (id == 0x02 && bytes.length >= 3) {
-              // Struct EngTempFuelPacket: id (1 byte), temp (1 byte), fuel (1 byte)
-              final temp = byteData.getUint8(1);
-              _nivelNafta = byteData.getUint8(2).toDouble();
-              _receivedData = 'Paquete 0x02 - Temp: $temp°C | Nafta: ${_nivelNafta.toInt()}%';
-            }
-          });
-        });
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _connectionStatus = _writeCharacteristic == null
-            ? 'Conectado, pero no hay característica escribible'
-            : 'Conectado a ${device.advName.isEmpty ? device.remoteId : device.advName}';
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _connectionStatus = 'Error preparando BLE: $error');
-    }
-  }
-
-  Future<void> _sendData() async {
-    final text = _sendController.text;
-    final device = widget.device;
-    if (device == null || text.trim().isEmpty || _isSending) return;
-
-    // La escritura se serializa para evitar operaciones GATT simultáneas.
-    setState(() => _isSending = true);
-    try {
-      if (!device.isConnected) {
-        await _prepareBleConnection();
-      }
-      final activeCharacteristic = _writeCharacteristic;
-      if (activeCharacteristic == null || !device.isConnected) {
-        throw StateError('La ESP32 no está conectada o no acepta escritura');
-      }
-      // El texto se transmite como bytes UTF-8. El firmware de la ESP32 debe
-      // interpretar esos bytes con el mismo formato y protocolo de mensajes.
-      await activeCharacteristic.write(
-        utf8.encode(text),
-        withoutResponse:
-            activeCharacteristic.properties.writeWithoutResponse &&
-            !activeCharacteristic.properties.write,
-      );
-      _sendController.clear();
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('No se pudo enviar: $error')));
-    } finally {
-      if (mounted) setState(() => _isSending = false);
-    }
-  }
-
-  Future<void> _readData() async {
-    final characteristic = _readCharacteristic;
-    if (characteristic == null || !characteristic.properties.read) return;
-
-    try {
-      // Esta lectura es bajo demanda: no reemplaza las notificaciones.
-      final value = await characteristic.read();
-      if (!mounted) return;
-      setState(() {
-        _receivedData = utf8.decode(value, allowMalformed: true);
-      });
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('No se pudo leer: $error')));
-    }
+  Future<void> _solicitarPermisos() async {
+    await [
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+      Permission.location,
+      Permission.notification,
+      // Si usás Android 13+, también deberías pedir permission.notification
+    ].request();
   }
 
   @override
   void dispose() {
-    // Se cancelan streams y controllers para evitar fugas y callbacks sobre una
-    // pantalla que ya no existe. La conexión del dispositivo puede gestionarse
-    // aparte según la política de reconexión de la aplicación.
-    _receiveSubscription?.cancel();
-    _connectionSubscription?.cancel();
-    _sendController.dispose();
+    // Nos desuscribimos al cerrar la pantalla
+    ObdFlutterApi.setUp(null);
     super.dispose();
+  }
+
+  // 3. ¡Acá llega el dato directo desde el background service nativo!
+  @override
+  void onTelemetryUpdated(TelemetryEvent event) {
+    if (!mounted) return;
+    
+    // Simplemente actualizamos la UI. Pigeon ya nos da un objeto con variables tipadas
+    setState(() {
+      _velocidad = event.speed ?? 0;
+      _rpm = event.rpm ?? 0;
+      _nivelNafta = (event.fuel ?? 0).toDouble();
+      // También tenés event.lat y event.lng si querés actualizar un mapa en vivo
+    });
   }
 
   @override
@@ -278,9 +147,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Widget _buildCarPage(BuildContext context) {
-    final connected =
-        widget.device != null &&
-        _connectionStatus.toLowerCase().contains('conectado');
+    final connected =_connectionStatus.toLowerCase().contains('conectado');
     return ListView(
       key: const ValueKey('car'),
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
@@ -480,6 +347,8 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  // (Borrá _isSending y _sendController de arriba)
+
   Widget _buildBlePanel() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -495,58 +364,45 @@ class _MainScreenState extends State<MainScreen> {
               Icon(
                 Icons.circle,
                 size: 10,
-                color: _connectionStatus.startsWith('Conectado')
+                // Como todavía no trajimos el estado real desde Kotlin, 
+                // lo simulamos sabiendo que si hay velocidad, hay conexión.
+                color: _velocidad > 0 || _rpm > 0
                     ? Colors.greenAccent
                     : Colors.orangeAccent,
               ),
               const SizedBox(width: 8),
-              Expanded(
+              const Expanded(
                 child: Text(
-                  _connectionStatus,
+                  "Agente BLE (Kotlin Background)",
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          Text(
-            'Último dato: $_receivedData',
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
+          const SizedBox(height: 16),
+          
+          // ESTE ES EL BOTÓN CRÍTICO PARA EL PASO CERO
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.bluetooth_searching),
+              label: const Text('Vincular ESP32 (Fondo)'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue.shade700,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              onPressed: () async {
+                // Al tocar acá, se levanta la ventana nativa de Android.
+                // ¡A partir de ahí, Kotlin toma el control de tu vida!
+                await NativeBleBridge.iniciarVinculacion();
+              },
+            ),
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _sendController,
-                  enabled: _writeCharacteristic != null,
-                  decoration: const InputDecoration(
-                    labelText: 'Enviar comando',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  onSubmitted: (_) => _sendData(),
-                ),
-              ),
-              IconButton(
-                tooltip: 'Enviar dato',
-                onPressed: _writeCharacteristic == null ? null : _sendData,
-                icon: const Icon(Icons.send),
-              ),
-              IconButton(
-                tooltip: 'Leer dato',
-                onPressed: _readCharacteristic?.properties.read == true
-                    ? _readData
-                    : null,
-                icon: const Icon(Icons.download),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
+          
+          const SizedBox(height: 16),
           Text(
-            'Simulador de nafta',
+            'Simulador de nafta UI',
             style: TextStyle(color: Colors.grey.shade400),
           ),
           Slider(
