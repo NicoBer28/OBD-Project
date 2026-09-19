@@ -37,7 +37,7 @@ public class GroupController {
     }
 
     @GetMapping("/groups/{id}/members")
-    public List<GroupMember> members(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id){
+    public List<GroupDTO.Member> members(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id){
         return groupService.members(principal.getId(), id);
     }
 

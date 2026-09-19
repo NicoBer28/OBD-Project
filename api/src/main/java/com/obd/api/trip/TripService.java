@@ -63,10 +63,12 @@ public class TripService {
         return tripRepository.findByTripDriverIdOrderByTripStartedAtDesc(userId).stream().map(TripDTO.Read::from).toList();
     }
 
+    // A car the caller may not read answers exactly like one that does not
+    // exist (CarNotFoundException, "No such car"), so the id is not confirmed.
     public List<TripDTO.Read> getCarTrips(UUID userId, UUID carId){
-        Car car = carAccess.readableBy(userId, carId).orElseThrow(CarNotReadableException::new);
+        Car car = carAccess.readableBy(userId, carId).orElseThrow(() -> new CarNotFoundException(carId));
 
-        return tripRepository.findByTripCarIdOrderByTripStartedAtDesc(carId).stream().map(TripDTO.Read::from).toList();
+        return tripRepository.findByTripCarIdOrderByTripStartedAtDesc(car.getCarId()).stream().map(TripDTO.Read::from).toList();
     }
 
     /**
@@ -76,7 +78,7 @@ public class TripService {
      */
     public Optional<TripDTO.Read> active(UUID userId, UUID carId){
 
-        Car car = carAccess.readableBy(userId, carId).orElseThrow(CarNotReadableException::new);
+        Car car = carAccess.readableBy(userId, carId).orElseThrow(() -> new CarNotFoundException(carId));
 
         return tripRepository.findByTripCarIdAndTripEndedAtIsNull(car.getCarId()).map(TripDTO.Read::from);
     }
@@ -95,8 +97,22 @@ public class TripService {
     }
 
 
+    /**
+     * Cancels an open trip of the caller's own, as if it never started.
+     *
+     * The delete is conditional (own + open) and refusals are told apart the
+     * same way {@link #finish} does: unknown or someone else's trip is a 404,
+     * a trip that already ended is a 409 - finished trips are history and
+     * carry an expense, so they are never deleted.
+     */
     @Transactional
-    public TripDTO.Read delete(UUID userId, UUID tripId){
-        return tripRepository.deleteTripByTripIdAndTripDriverIdAndTripEndedAtIsNull(tripId, userId).map(TripDTO.Read::from).orElseThrow(()-> new CannotDeleteTripException(tripId));
+    public void delete(UUID userId, UUID tripId){
+        if (tripRepository.deleteTripByTripIdAndTripDriverIdAndTripEndedAtIsNull(tripId, userId).isEmpty()) {
+            tripRepository.findById(tripId)
+                    .filter(t -> t.getTripDriverId().equals(userId))
+                    .orElseThrow(() -> new TripNotFoundException(tripId));
+
+            throw new TripAlreadyEndedException(tripId);
+        }
     }
 }

@@ -51,7 +51,7 @@ REGISTER_BODY=$(curl -sS -c "$JAR" -X POST "$BASE/register" \
   -d "{
     \"userName\": \"Ada\",
     \"userLastName\": \"Lovelace\",
-    \"userEMail\": \"$EMAIL\",
+    \"userEmail\": \"$EMAIL\",
     \"userPassword\": \"$PASSWORD\",
     \"userPhone\": \"+39 320 1234567\"
   }")
@@ -62,7 +62,7 @@ ACCESS_TOKEN=$(extract_field "$REGISTER_BODY" accessToken)
 line "2. Login"
 LOGIN_BODY=$(curl -sS -c "$JAR" -X POST "$BASE/login" \
   -H "Content-Type: application/json" \
-  -d "{\"userMail\": \"$EMAIL\", \"userPassword\": \"$PASSWORD\"}")
+  -d "{\"userEmail\": \"$EMAIL\", \"userPassword\": \"$PASSWORD\"}")
 print_json "$LOGIN_BODY"
 ACCESS_TOKEN=$(extract_field "$LOGIN_BODY" accessToken)
 [ -n "$ACCESS_TOKEN" ] || fail "no accessToken in login response"
@@ -87,21 +87,21 @@ echo "status: $POST_LOGOUT_STATUS"
 line "6. Duplicate email on register (expect 409)"
 DUP_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/register" \
   -H "Content-Type: application/json" \
-  -d "{\"userName\":\"Ada\",\"userLastName\":\"L\",\"userEMail\":\"$EMAIL\",\"userPassword\":\"$PASSWORD\"}")
+  -d "{\"userName\":\"Ada\",\"userLastName\":\"L\",\"userEmail\":\"$EMAIL\",\"userPassword\":\"$PASSWORD\"}")
 echo "status: $DUP_STATUS"
 [ "$DUP_STATUS" = "409" ] || fail "expected 409 for duplicate email, got $DUP_STATUS"
 
 line "7. Bad credentials on login (expect 401)"
 BAD_LOGIN_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/login" \
   -H "Content-Type: application/json" \
-  -d "{\"userMail\":\"$EMAIL\",\"userPassword\":\"wrongpassword\"}")
+  -d "{\"userEmail\":\"$EMAIL\",\"userPassword\":\"wrongpassword\"}")
 echo "status: $BAD_LOGIN_STATUS"
 [ "$BAD_LOGIN_STATUS" = "401" ] || fail "expected 401 for bad credentials, got $BAD_LOGIN_STATUS"
 
 line "8. Invalid registration payload (expect 400)"
 INVALID_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/register" \
   -H "Content-Type: application/json" \
-  -d '{"userName":"","userLastName":"Lovelace","userEMail":"not-an-email","userPassword":"short"}')
+  -d '{"userName":"","userLastName":"Lovelace","userEmail":"not-an-email","userPassword":"short"}')
 echo "status: $INVALID_STATUS"
 [ "$INVALID_STATUS" = "400" ] || fail "expected 400 for invalid payload, got $INVALID_STATUS"
 
@@ -117,7 +117,7 @@ PLATE="AB$(date +%s | tail -c 6)"
 CAR_EMAIL="carl+$(date +%s)@example.com"
 CAR_REG=$(curl -sS -X POST "$BASE/register" \
   -H "Content-Type: application/json" \
-  -d "{\"userName\":\"Carl\",\"userLastName\":\"Sagan\",\"userEMail\":\"$CAR_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
+  -d "{\"userName\":\"Carl\",\"userLastName\":\"Sagan\",\"userEmail\":\"$CAR_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
 CAR_TOKEN=$(extract_field "$CAR_REG" accessToken)
 [ -n "$CAR_TOKEN" ] || fail "could not register a user to own cars"
 # Kept so the trip checks below can assert the driver really is this account.
@@ -196,7 +196,7 @@ done
 line "16. A different owner may register the same plate (expect 201)"
 OTHER_EMAIL="grace+$(date +%s)@example.com"
 OTHER_REG=$(curl -sS -X POST "$BASE/register" -H "Content-Type: application/json" \
-  -d "{\"userName\":\"Grace\",\"userLastName\":\"Hopper\",\"userEMail\":\"$OTHER_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
+  -d "{\"userName\":\"Grace\",\"userLastName\":\"Hopper\",\"userEmail\":\"$OTHER_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
 OTHER_TOKEN=$(extract_field "$OTHER_REG" accessToken)
 [ -n "$OTHER_TOKEN" ] || fail "could not register the second owner"
 OTHER_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$CARS" \
@@ -564,7 +564,7 @@ echo "status: $INV_FOREIGN"
 
 line "47. The invitee registers and finds the invitation waiting (expect 200)"
 INV_REG=$(curl -sS -X POST "$BASE/register" -H "Content-Type: application/json" \
-  -d "{\"userName\":\"Inv\",\"userLastName\":\"Itee\",\"userEMail\":\"$INV_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
+  -d "{\"userName\":\"Inv\",\"userLastName\":\"Itee\",\"userEmail\":\"$INV_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
 INV_TOKEN=$(extract_field "$INV_REG" accessToken)
 [ -n "$INV_TOKEN" ] || fail "could not register the invitee"
 PENDING=$(curl -sS "$INVITATIONS/pending" -H "Authorization: Bearer $INV_TOKEN")
@@ -773,14 +773,74 @@ echo "twice: $TWICE   someone else: $FOREIGN_FIN"
 STILL=$(curl -sS "$CARS/$TCAR_ID/trips" -H "Authorization: Bearer $CAR_TOKEN")
 echo "$STILL" | grep -q "\"id\":\"$TRIP2_ID\",[^}]*\"finalFuel\":50" || fail "the second finish must not overwrite the first result"
 
-line "68. The driver cancels a trip started by mistake (expect 200); a finished one cannot be (expect 409)"
-CANCEL=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$TRIPS/$TRIP3_ID" -H "Authorization: Bearer $CAR_TOKEN")
+line "68. Cancelling: someone else's open trip (expect 404), a finished one (expect 409), the driver's own (expect 204)"
+# Order matters: Grace tries first, while TRIP3 is still open - otherwise her
+# 404 would be for a trip that no longer exists, which proves nothing.
+CANCEL_FOREIGN=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$TRIPS/$TRIP3_ID" -H "Authorization: Bearer $OTHER_TOKEN")
 CANCEL_DONE=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$TRIPS/$TRIP2_ID" -H "Authorization: Bearer $CAR_TOKEN")
+CANCEL=$(curl -sS -w '\n%{http_code}' -X DELETE "$TRIPS/$TRIP3_ID" -H "Authorization: Bearer $CAR_TOKEN")
+CANCEL_STATUS=$(echo "$CANCEL" | tail -1); CANCEL_BODY=$(echo "$CANCEL" | sed '$d')
+CANCEL_UNKNOWN=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$TRIPS/00000000-0000-0000-0000-000000000000" -H "Authorization: Bearer $CAR_TOKEN")
 GONE=$(curl -sS "$CARS/$TCAR_ID/trips" -H "Authorization: Bearer $CAR_TOKEN")
-echo "cancel open: $CANCEL   cancel finished: $CANCEL_DONE"
-[ "$CANCEL" = "200" ]      || fail "expected 200 cancelling an open trip, got $CANCEL"
-[ "$CANCEL_DONE" = "409" ] || fail "expected 409 cancelling a finished trip, got $CANCEL_DONE"
+echo "someone else: $CANCEL_FOREIGN   finished: $CANCEL_DONE   own open: $CANCEL_STATUS   unknown: $CANCEL_UNKNOWN"
+[ "$CANCEL_FOREIGN" = "404" ] || fail "expected 404 for a non-driver cancelling, got $CANCEL_FOREIGN"
+[ "$CANCEL_DONE" = "409" ]    || fail "expected 409 cancelling a finished trip, got $CANCEL_DONE"
+[ "$CANCEL_STATUS" = "204" ]  || fail "expected 204 cancelling an open trip, got $CANCEL_STATUS"
+[ -z "$CANCEL_BODY" ]         || fail "expected no body on 204, got: $CANCEL_BODY"
+[ "$CANCEL_UNKNOWN" = "404" ] || fail "expected 404 cancelling an unknown trip, got $CANCEL_UNKNOWN"
 echo "$GONE" | grep -q "\"id\":\"$TRIP3_ID\"" && fail "the cancelled trip is still in the car's history"
 echo "$GONE" | grep -q "\"id\":\"$TRIP2_ID\"" || fail "the finished trip must stay in the car's history"
+
+# ---------------------------------------------------------------------------
+# Single car, the model catalog, group members
+# ---------------------------------------------------------------------------
+
+line "69. GET /cars/{id} (expect 200 for the owner, 404 for a stranger and for an unknown id, 400 for a malformed one)"
+ONE=$(curl -sS -w '\n%{http_code}' "$CARS/$TCAR_ID" -H "Authorization: Bearer $CAR_TOKEN")
+ONE_STATUS=$(echo "$ONE" | tail -1); ONE_BODY=$(echo "$ONE" | sed '$d')
+print_json "$ONE_BODY"
+[ "$ONE_STATUS" = "200" ] || fail "expected 200 from GET /cars/{id}, got $ONE_STATUS"
+expect_json "$ONE_BODY" id "\"$TCAR_ID\""
+echo "$ONE_BODY" | grep -q '"model":{' || fail "expected the model nested in the car"
+ONE_FOREIGN=$(curl -sS -o /dev/null -w '%{http_code}' "$CARS/$TCAR_ID" -H "Authorization: Bearer $OTHER_TOKEN")
+ONE_UNKNOWN=$(curl -sS -o /dev/null -w '%{http_code}' "$CARS/00000000-0000-0000-0000-000000000000" -H "Authorization: Bearer $CAR_TOKEN")
+ONE_BAD=$(curl -sS -o /dev/null -w '%{http_code}' "$CARS/not-a-uuid" -H "Authorization: Bearer $CAR_TOKEN")
+echo "stranger: $ONE_FOREIGN   unknown: $ONE_UNKNOWN   malformed: $ONE_BAD"
+[ "$ONE_FOREIGN" = "404" ] || fail "expected 404 for a stranger reading the car, got $ONE_FOREIGN"
+[ "$ONE_UNKNOWN" = "404" ] || fail "expected 404 for an unknown car id, got $ONE_UNKNOWN"
+[ "$ONE_BAD" = "400" ]     || fail "expected 400 for a malformed car id, got $ONE_BAD"
+
+line "70. GET /models lists the seeded catalog ordered by brand (expect 200, Chevrolet first)"
+MODELS=$(curl -sS "$BASE_URL/api/v1/models" -H "Authorization: Bearer $CAR_TOKEN")
+print_json "$MODELS"
+echo "$MODELS" | grep -q "\"modelId\":\"$MODEL_GOL\"" || fail "the seeded model is missing from GET /models"
+echo "$MODELS" | grep -q '^\[{"modelId":"[^"]*","modelBrand":"Chevrolet"' || fail "expected the catalog ordered by brand, Chevrolet first"
+echo "$MODELS" | grep -q '"modelName":"Gol"[^]]*"modelName":"Golf"' || fail "expected Gol before Golf within Volkswagen"
+
+line "71. POST /models is admin-only (expect 403 for a regular user, 401 without a token)"
+M_USER=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/v1/models" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d '{"modelBrand":"Honda","modelName":"Civic","modelProtocol":"ISO 15765-4 (CAN)"}')
+M_NOAUTH=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/v1/models" \
+  -H "Content-Type: application/json" \
+  -d '{"modelBrand":"Honda","modelName":"Civic","modelProtocol":"ISO 15765-4 (CAN)"}')
+echo "regular user: $M_USER   no token: $M_NOAUTH"
+[ "$M_USER" = "403" ]   || fail "expected 403 for a non-admin creating a model, got $M_USER"
+[ "$M_NOAUTH" = "401" ] || fail "expected 401 creating a model without a token, got $M_NOAUTH"
+# No admin account is seeded, so the 201 path is covered by ModelControllerTest only.
+
+line "72. GET /groups/{id}/members (expect 200 with both roles for a member, 404 for a non-member)"
+# Carl is ADMIN of GROUP_ID (step 18); the invitee joined as MEMBER (step 49).
+MEMBERS=$(curl -sS "$GROUPS_URL/$GROUP_ID/members" -H "Authorization: Bearer $INV_TOKEN")
+print_json "$MEMBERS"
+# People, not ids: the admin (Carl) leads, then the invitee, each with an email.
+echo "$MEMBERS" | grep -q "^\[{\"userId\":\"$CAR_USER_ID\",\"name\":\"Carl\",\"email\":\"$CAR_EMAIL\",\"role\":\"ADMIN\"}" \
+  || fail "expected the admin first, with name and email"
+echo "$MEMBERS" | grep -q "\"email\":\"$INV_EMAIL\",\"role\":\"MEMBER\"" || fail "expected the invitee in the member list as MEMBER"
+MEMBERS_FOREIGN=$(curl -sS -o /dev/null -w '%{http_code}' "$GROUPS_URL/$GROUP_ID/members" -H "Authorization: Bearer $OTHER_TOKEN")
+MEMBERS_UNKNOWN=$(curl -sS -o /dev/null -w '%{http_code}' "$GROUPS_URL/00000000-0000-0000-0000-000000000000/members" -H "Authorization: Bearer $CAR_TOKEN")
+echo "non-member: $MEMBERS_FOREIGN   unknown group: $MEMBERS_UNKNOWN"
+[ "$MEMBERS_FOREIGN" = "404" ] || fail "expected 404 for a non-member listing members, got $MEMBERS_FOREIGN"
+[ "$MEMBERS_UNKNOWN" = "404" ] || fail "expected 404 for an unknown group, got $MEMBERS_UNKNOWN"
 
 line "All checks passed"

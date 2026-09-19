@@ -5,25 +5,34 @@ import com.obd.api.auth.dto.TokenPair;
 import com.obd.api.auth.exception.EmailAlreadyInUseException;
 import com.obd.api.auth.refresh.RefreshCookie;
 import com.obd.api.auth.refresh.RefreshTokenService;
+import com.obd.api.support.SliceSecurityConfig;
 import com.obd.api.user.dto.UserDTO;
+import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.verify;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -31,17 +40,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Contract test for the auth endpoints: routing, request validation, response
  * shape and error mapping. Everything below the controller is mocked.
  *
- * The security filter chain is deliberately out of the slice (addFilters=false,
- * and the security beans are excluded): a mocked Filter would silently break the
- * chain, and JwtAuthFilter drags in JwtService/AppUserDetailsService. Whether a
- * route is actually public or protected is a wiring question, so it belongs to a
- * full-context test against the real chain, not here.
+ * The production security chain is deliberately out of the slice (the security
+ * beans are excluded): a mocked Filter would silently break the chain, and
+ * JwtAuthFilter drags in JwtService/AppUserDetailsService. Whether a route is
+ * actually public or protected is a wiring question, so it belongs to a
+ * full-context test against the real chain, not here. SliceSecurityConfig
+ * stands in - a permissive chain that still loads the SecurityContext, which
+ * logout's @AuthenticationPrincipal needs.
  */
 @WebMvcTest(controllers = AuthController.class,
         excludeFilters = @ComponentScan.Filter(
                 type = FilterType.ASSIGNABLE_TYPE,
                 classes = {SecurityConfig.class, JwtAuthFilter.class, JwtAuthEntryPoint.class}))
-@AutoConfigureMockMvc(addFilters = false)
+@Import(SliceSecurityConfig.class)
 class AuthControllerTest {
 
     private static final UUID USER_ID = UUID.fromString("11111111-2222-3333-4444-555555555555");
@@ -66,7 +77,7 @@ class AuthControllerTest {
             {
               "userName": "Ada",
               "userLastName": "Lovelace",
-              "userEMail": "ada@example.com",
+              "userEmail": "ada@example.com",
               "userPassword": "supersecret123",
               "userPhone": "+39 320 1234567"
             }
@@ -99,14 +110,14 @@ class AuthControllerTest {
                                 {
                                   "userName": "",
                                   "userLastName": "Lovelace",
-                                  "userEMail": "not-an-email",
+                                  "userEmail": "not-an-email",
                                   "userPassword": "short"
                                 }
                                 """))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.title").value("Validation failed"))
                 .andExpect(jsonPath("$.errors.userName").exists())
-                .andExpect(jsonPath("$.errors.userEMail").exists())
+                .andExpect(jsonPath("$.errors.userEmail").exists())
                 .andExpect(jsonPath("$.errors.userPassword").exists());
     }
 
@@ -134,7 +145,7 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"userMail": "ada@example.com", "userPassword": "supersecret123"}
+                                {"userEmail": "ada@example.com", "userPassword": "supersecret123"}
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.accessToken").value("header.payload.signature"))
@@ -149,7 +160,7 @@ class AuthControllerTest {
         mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"userMail": "ada@example.com", "userPassword": "wrongpassword"}
+                                {"userEmail": "ada@example.com", "userPassword": "wrongpassword"}
                                 """))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.detail").value("Invalid email or password"));
@@ -173,5 +184,26 @@ class AuthControllerTest {
                         .cookie(new jakarta.servlet.http.Cookie(RefreshCookie.NAME, "raw-refresh-token")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.accessToken").value("header.payload.signature"));
+    }
+
+    // --- logout --------------------------------------------------------------
+
+    /** Puts a real UserPrincipal in the SecurityContext, as JwtAuthFilter would. */
+    private static RequestPostProcessor caller() {
+        var principal = new UserPrincipal(USER_ID, "ada@example.com", "hash",
+                List.of(new SimpleGrantedAuthority("ROLE_USER")), true);
+        return authentication(new UsernamePasswordAuthenticationToken(
+                principal, null, principal.getAuthorities()));
+    }
+
+    @Test
+    void logoutRevokesTheCallersRefreshTokensAndClearsTheCookie() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/logout").with(caller()))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+        // Whose tokens: the principal's, never anything in the request.
+        verify(authService).logout(USER_ID);
+        verify(refreshCookie).clear(any(HttpServletResponse.class));
     }
 }

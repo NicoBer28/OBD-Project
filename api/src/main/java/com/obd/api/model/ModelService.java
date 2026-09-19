@@ -35,7 +35,7 @@ public class ModelService {
     }
 
     public List<ModelDTO.Read> getModels(){
-        return modelRepository.findAll().stream().map(ModelDTO.Read::from).toList();
+        return modelRepository.findAllByOrderByModelBrandAscModelNameAsc().stream().map(ModelDTO.Read::from).toList();
     }
 
     private static String blankToNull(String raw) {

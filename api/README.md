@@ -74,6 +74,9 @@ others and goes stale the moment a dongle is moved.
 | `last_seen_at`, server clock | "The dongle hasn't reported since Tuesday" cannot be produced any other way. Set only by batches that name the serial. |
 | `ON DELETE CASCADE` from `cars` | A dongle without its car is nothing to us. |
 
+How the pieces fit end to end — pair, connect, upload by serial — is walked
+through under Endpoints › *From dongle to database*.
+
 **The firmware does not expose a serial yet.** `main.cpp` advertises a name and
 a raw frame, nothing that identifies the unit. The intended change is small:
 add the standard Device Information Service (`0x180A`) with a Serial Number
@@ -116,7 +119,38 @@ Required environment variables (see `.env.example` / `application.properties`):
 
 ## Endpoints
 
-Base path: `/api/v1/auth`
+Base path: `/api/v1`. Everything except `auth/*` requires
+`Authorization: Bearer <accessToken>`.
+
+### From dongle to database — how a reading finds its car
+
+The ESP32 speaks only BLE and every unit advertises the same name, `OBD-C`.
+The phone is the relay, and the API is what tells it which car a dongle
+belongs to. The whole path, in order:
+
+1. **Pair, once, by the owner** — `PUT /cars/{carId}/device` with the
+   dongle's serial. This is the only step where a person names the car.
+   Group members do not pair; they inherit the mapping.
+2. **The phone connects to `OBD-C`** and reads the unit's serial (the
+   firmware half — Device Information Service `0x2A25`, see Database ›
+   Devices). It does **not** need to know the car.
+3. *(optional)* **`GET /devices/{serial}`** — "which car is this?" — to show
+   the driver the car's name and to prompt for a trip. Not required before
+   uploading.
+4. **`POST /telemetry` with `serial` + the buffered readings.** The server
+   resolves the serial to its paired car, checks that the uploader may read
+   that car (owner or group member), stores the readings, stamps them with
+   the car's open trip, refreshes the car's snapshot and marks the dongle as
+   seen. The phone never says which car — it cannot get that wrong, and
+   moving a dongle to another car (unpair, pair) re-routes every phone in the
+   family at once.
+5. **`GET /telemetry?carId=&since=`** — any member reads the history back.
+
+`carId` on upload exists for the cases with no dongle in the loop: a car
+without one, manual entry, tests. When the phone has a serial it should send
+the serial.
+
+---
 
 ### `POST /api/v1/auth/register`
 
@@ -128,7 +162,7 @@ Creates a new user, then logs them in (issues tokens).
 {
   "userName": "Ada",
   "userLastName": "Lovelace",
-  "userEMail": "ada@example.com",
+  "userEmail": "ada@example.com",
   "userPassword": "supersecret123",
   "userPhone": "+39 320 1234567"
 }
@@ -138,7 +172,7 @@ Creates a new user, then logs them in (issues tokens).
 |---|---|---|
 | `userName` | yes | non-blank |
 | `userLastName` | yes | non-blank |
-| `userEMail` | yes | must be a valid email |
+| `userEmail` | yes | must be a valid email |
 | `userPassword` | yes | 8–72 characters |
 | `userPhone` | no | must match a phone-number pattern if present |
 
@@ -168,14 +202,14 @@ Request` with a per-field error map if validation fails.
 
 ```json
 {
-  "userMail": "ada@example.com",
+  "userEmail": "ada@example.com",
   "userPassword": "supersecret123"
 }
 ```
 
 | Field | Required | Notes |
 |---|---|---|
-| `userMail` | yes | must be a valid email |
+| `userEmail` | yes | must be a valid email |
 | `userPassword` | yes | 8–72 characters |
 
 **Response:** same shape as `register` — `AuthResponseDTO` body + `refreshToken` cookie.
@@ -220,7 +254,7 @@ The user is the token holder; there is no `GET /users/{id}`.
   "id": "8f14e...-...",
   "userName": "Ada",
   "userLastName": "Lovelace",
-  "userMail": "ada@example.com",
+  "userEmail": "ada@example.com",
   "userPhone": "+39 320 1234567"
 }
 ```
@@ -322,6 +356,24 @@ own family twice, and would have been a second copy of the rule to keep in
 step. See `ROADMAP.md` §2.
 
 **Errors:** `401 Unauthorized` without a token.
+
+---
+
+### `GET /api/v1/cars/{carId}`
+
+One car, by id. Requires `Authorization: Bearer <accessToken>`.
+
+**Response** `200 OK` — the same object `GET /cars` lists, so a client that
+already has the list gains nothing by calling this; it is for deep links and
+for refreshing one car's snapshot after `POST /telemetry`.
+
+Goes through the same `CarAccess.readableBy` as every other per-car endpoint:
+the owner and every member of the group the car is shared with may read it.
+
+**Errors:** `404 Not Found` — the same answer whether the car does not exist or
+belongs to someone the caller has no group in common with, so an id is never
+confirmed to a stranger (`CarNotFoundException`). `400 Bad Request` when
+`{carId}` is not a UUID. `401 Unauthorized` without a token.
 
 ---
 
@@ -475,9 +527,11 @@ without a token.
 
 ### `GET /api/v1/devices/{serial}`
 
-**"Which car is this dongle?"** — what a phone asks the moment it connects.
-The serial is matched after normalisation, so the phone sends it however its
-BLE stack reports it.
+**"Which car is this dongle?"** — what a phone asks the moment it connects,
+to show the driver the car's name and offer to start a trip. Not a
+prerequisite for uploading: `POST /telemetry` accepts the serial directly and
+does this lookup itself. The serial is matched after normalisation, so the
+phone sends it however its BLE stack reports it.
 
 **Response** `200 OK` — the same device object, whose `carId` and `carName`
 are what the phone needs to start uploading and to tell the user what it
@@ -496,7 +550,8 @@ The car model catalog — what the create-car form lists, and where the
 `modelId` that `POST /cars` requires comes from. Requires
 `Authorization: Bearer <accessToken>`; any signed-in user may read it.
 
-**Response** `200 OK`, in insertion order (the seed first):
+**Response** `200 OK`, ordered by brand then model — the order a picker
+shows it in:
 
 ```json
 [
@@ -553,10 +608,12 @@ brand/model precisely so the table cannot fill up with "VW" / "vw" /
 returned: a model has no canonical URL a client would fetch — the catalog is
 only ever read as a list — so there is nothing for one to point at.
 
-**Response:** the created model, same shape as one entry of `GET /models`.
+**Response** `201 Created` — the created model, same shape as one entry of
+`GET /models`.
 
-**Errors:** `409 Conflict` if that brand/model is already in the catalog, `403 Forbidden` for a non-admin account, `401 Unauthorized`
-without a token.
+**Errors:** `409 Conflict` if that brand/model is already in the catalog,
+`403 Forbidden` for a non-admin account, `400 Bad Request` for a missing or
+overlong field, `401 Unauthorized` without a token.
 
 **Creating the first admin.** `register` always assigns `USER`, and no endpoint
 promotes an account, so the first admin is made by hand:
@@ -650,6 +707,34 @@ is the same principal-not-body rule as everything else, and nothing yet needs
 to read someone else's list.
 
 **Errors:** `401 Unauthorized` without a valid access token.
+
+---
+
+### `GET /api/v1/groups/{groupId}/members`
+
+Who is in a group, with their role. Requires
+`Authorization: Bearer <accessToken>`; any member may read it, whatever their
+role (`GroupAccess.requireMember`).
+
+**Response** `200 OK` — admins first, then by name:
+
+```json
+[
+  { "userId": "3f9a…", "name": "Carl", "email": "carl@example.com", "role": "ADMIN" },
+  { "userId": "b81c…", "name": "Grace", "email": "grace@example.com", "role": "MEMBER" }
+]
+```
+
+**One query.** `GroupMemberRepository.findMembersOf` joins `group_members` to
+`users` and builds `GroupDTO.Member` directly, so a members screen can be
+drawn from this list alone — there is no `GET /users/{id}` to resolve ids
+with, and one request per member would be the N+1 this avoids. `name` is the
+first name, as in `GET /users/me`.
+
+**Errors:** `404 Not Found` for a non-member **and** for a group that does not
+exist — the same answer, so a group id is never confirmed to an outsider.
+`400 Bad Request` when `{groupId}` is not a UUID. `401 Unauthorized` without a
+token.
 
 ---
 
@@ -797,8 +882,8 @@ the trip open until it is finished. Requires
 
 | Field | Required | Notes |
 |---|---|---|
-| `carId` | yes | must be a car the caller owns |
-| `initialFuel` | no | fuel reading at the start, ≥ 0; defaults to the car's last reported level |
+| `carId` | yes | a car the caller may use: their own, or one shared with a group they belong to |
+| `initialFuel` | no | fuel reading at the start, ≥ 0; defaults to the car's cached snapshot (`fuelLevel`), which is what the dongle last reported |
 
 The driver is always taken from the access token and the start time from the
 server clock, so a trip cannot be logged in someone else's name or backdated.
@@ -835,13 +920,11 @@ index (`ux_trips_one_active_per_car`), not only by a check in the service, so
 simultaneous requests cannot both win: six parallel starts on one car yield one
 `201` and five `409`.
 
-**Errors:** `404 Not Found` if the car does not exist **or belongs to someone
-else** — the two are deliberately indistinguishable, since a `403` would confirm
-that an id is real; `409 Conflict` if the car is already on a trip; `400 Bad
-Request` with a per-field error map if validation fails; `401 Unauthorized`
-without a valid access token.
-
----
+**Errors:** `404 Not Found` if the car does not exist **or the caller may not
+use it** (neither owner nor a member of its group) — the two are deliberately
+indistinguishable, since a `403` would confirm that an id is real; `409
+Conflict` if the car is already on a trip; `400 Bad Request` with a per-field
+error map if validation fails; `401 Unauthorized` without a valid access token.
 
 ---
 
@@ -884,6 +967,7 @@ idle** — which is its usual state, so that is a normal answer, not an error.
 **Errors:** `404 Not Found` if the car does not exist or the caller may not
 read it; `401 Unauthorized` without a token.
 
+---
 
 ### `POST /api/v1/trips/{tripId}/finish`
 
@@ -942,15 +1026,20 @@ Unauthorized` without a token.
 
 ### `DELETE /api/v1/trips/{tripId}`
 
-Cancels a trip the caller started by mistake. Only an **open** trip of the
-caller's own can be cancelled: a finished trip is history and stays.
+Cancels a trip the caller started by mistake, as if it never happened. Only an
+**open** trip of the caller's own can be cancelled: a finished trip is history,
+carries an expense, and stays.
 
-**Response** `200 OK` with the removed trip.
+**Response** `204 No Content`.
 
-**Errors:** `409 Conflict` — one answer for "unknown", "not yours" and
-"already finished", since the service does not tell them apart; the detail,
-*Only an open trip of your own can be cancelled*, is true in all three cases
-and confirms nothing. `401 Unauthorized` without a token.
+One conditional `DELETE … where trip_id = ? and driver_id = ? and ended_at is
+null`; when it removes nothing the service looks the trip up to say why, the
+same way `finish` does:
+
+**Errors:** `404 Not Found` for an unknown trip **and** for someone else's —
+the same answer, so a trip id is never confirmed to a non-driver (and the
+car's owner cannot cancel a trip out from under the driver). `409 Conflict`
+for a trip that has already ended. `401 Unauthorized` without a token.
 
 ---
 
@@ -964,11 +1053,24 @@ dongle sent since the last upload — batched, possibly late, possibly a repeat 
 something it was unsure about. The endpoint is shaped for that: **retrying a
 batch is always safe.**
 
-**Body** (`application/json`):
+**Which car?** The batch names its target in one of two ways, and exactly one:
+
+- **`serial`** — the dongle's serial, as read over BLE. This is the normal
+  path. The server looks the serial up in `devices`, takes the car it is
+  paired to, and uses that; the phone does not know, and is not asked, which
+  car it is in. Also marks the dongle's `lastSeenAt`.
+- **`carId`** — the car directly. For a car with no dongle, manual entry, or
+  tests. Says nothing about hardware, so `lastSeenAt` is untouched.
+
+Either way the uploader comes from the token and must be able to read the car
+— its owner or a member of the group it is shared with. A serial paired to a
+car the caller cannot see answers exactly like an unknown serial.
+
+**Body** (`application/json`) — by serial, the phone's case:
 
 ```json
 {
-  "carId": "2d14dd55-c2c8-4b5a-aae8-b1c93a632cfc",
+  "serial": "a4:cf:12:8b:3c:7e",
   "readings": [
     {
       "recordedAt": "2026-09-10T14:56:13Z",
@@ -981,22 +1083,24 @@ batch is always safe.**
 }
 ```
 
+Or by car id, same `readings`:
+
+```json
+{ "carId": "2d14dd55-c2c8-4b5a-aae8-b1c93a632cfc", "readings": [ … ] }
+```
+
 | Field | Required | Notes |
 |---|---|---|
-| `carId` | one of | the car, by id |
-| `serial` | one of | the car, by the serial of its paired dongle — what the relaying phone actually knows. Exactly one of `carId`/`serial`. |
+| `serial` | one of | the paired dongle's serial; matched after trim + upper-case, so send it as the BLE stack reports it. ≤ 64 chars |
+| `carId` | one of | the car, by id. Exactly one of `serial`/`carId` |
 | `readings` | yes | 1–500 entries |
 | `readings[].recordedAt` | yes | when the reading was **taken** (device time), not uploaded; at most 5 minutes in the future |
 | `readings[].latitude` / `longitude` | no | both or neither; valid WGS-84 ranges |
 | `readings[].speed`, `fuelLevel`, `batteryLevel`, `mileage` | no | ≥ 0 each |
 | `readings[].raw` | no | any JSON — the frame as the device sent it, kept verbatim |
 
-The uploader is taken from the access token. The car must be one the caller
-may read — owner or group member — whether named by id or resolved from the
-serial. A batch that names the serial also stamps the device's `lastSeenAt`;
-one that names the car says nothing about the hardware, so it does not.
-
-**Response** `200 OK`:
+**Response** `200 OK`. `carId` is the car the readings landed on — when
+uploading by serial this is how the phone learns it:
 
 ```json
 {
@@ -1042,11 +1146,13 @@ concurrent batches. Fields the batch did not carry keep their previous value
 index (`readings[2].positionComplete`, `readings[3].notFromTheFuture`) — a
 malformed reading is a serialiser bug on the phone, and half-applying a batch
 would leave its buffer state unknowable; also `400` (`exactlyOneTarget`) if
-both or neither of `carId`/`serial` are given. `404 Not Found` if the car does
-not exist or is not the caller's, or (`"No such device"`) if the serial is
-unknown or belongs to a car the caller may not see. `401 Unauthorized` without a token. There is
-deliberately no `409`: unlike a duplicate trip start, a duplicate reading is the
-normal retry path.
+both or neither of `serial`/`carId` are given. `404 Not Found`: by car id,
+`"No such car"` if it does not exist or the caller may not read it; by serial,
+`"No such device"` if the serial is not paired to any car **or** is paired to
+a car the caller may not see — the same answer, so a phone outside the family
+cannot confirm a dongle exists. `401 Unauthorized` without a token. There is
+deliberately no `409`: unlike a duplicate trip start, a duplicate reading is
+the normal retry path.
 
 ---
 
@@ -1164,32 +1270,12 @@ What is missing, in what order to build it, and the endpoint roadmap live in
 [`ROADMAP.md`](ROADMAP.md). This list is the short version.
 
 - `GET /trips` and `GET /cars/{carId}/trips` are unpaged.
-- `DELETE /trips/{id}` answers `409` for an unknown or foreign trip where the
-  other endpoints answer `404`; the service uses one exception for all three
-  refusals. Splitting it the way `finish` does (`TripNotFound` → 404,
-  `TripAlreadyEnded` → 409) is a small change. It also answers `200` with a
-  body where `204` would match the other deletes.
-- `CarNotReadableException` maps to `404` but its detail, `"Car not
-  Readable"`, tells the caller the car *exists* — the distinction
-  `CarNotFoundException` was built to hide. `NoActiveTripsException` and its
-  handler are unused since the active lookup went to `204`.
 - Deleting a car deletes its trips (`on delete cascade`), unlike deleting a user,
   which orphans them. There is no delete-car endpoint yet, so this is still free
   to change if trip history should outlive the car.
 - Whether `fuel_level` and `battery_level` are percentages or absolute units is
   undecided, so V2 constrains them to `>= 0` rather than `0..100`. Tighten in a
   later migration once the firmware settles what it reports.
-- `POST /api/v1/models` answers `200` where the other creates answer `201`.
-  `GET /api/v1/models` is unordered (`findAll()`), so the catalog comes back in
-  insertion order rather than by brand.
-- `GET /api/v1/models` and `POST /api/v1/models` have no tests and no smoke
-  checks yet.
-- `GET /api/v1/cars/{car_id}` exists (through `CarAccess`, so a shared car is
-  readable by group members) but answers `202 Accepted` instead of `200`, and
-  has no README section, slice test or smoke check. Updating and deleting a
-  car are not implemented.
-- `AuthController.logout` is still not covered by the controller slice. It reads
-  `@AuthenticationPrincipal`, so `SliceSecurityConfig` would now make this
-  straightforward.
-- Mockito logs a self-attach warning on JDK 25. Harmless today; it will need
-  the Mockito agent wired into Surefire before a JDK that removes self-attach.
+- No admin account is seeded, so the smoke script only covers the `403` side
+  of `POST /models`; the `201` path is pinned by `ModelControllerTest`.
+- Updating and deleting a car are not implemented.

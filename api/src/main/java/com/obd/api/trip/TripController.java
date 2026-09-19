@@ -49,9 +49,11 @@ public class TripController {
         return tripService.finish(principal.getId(), id ,trip);
     }
 
+    /** 204 like the other deletes: there is nothing left to return. */
     @DeleteMapping("/trips/{id}")
-    public TripDTO.Read delete(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id){
-        return tripService.delete(principal.getId(), id);
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id){
+        tripService.delete(principal.getId(), id);
     }
 
 }

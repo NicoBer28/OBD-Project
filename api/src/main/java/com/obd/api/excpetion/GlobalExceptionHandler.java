@@ -1,11 +1,8 @@
 package com.obd.api.excpetion;
 
 import com.obd.api.invitation.exception.*;
-import com.obd.api.trip.exception.CannotDeleteTripException;
-import com.obd.api.trip.exception.CarNotReadableException;
 import com.obd.api.trip.exception.TripAlreadyEndedException;
 import com.obd.api.trip.exception.TripNotFoundException;
-import com.obd.api.trip.exception.NoActiveTripsException;
 import com.obd.api.user.exception.UserNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,6 +14,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import com.obd.api.auth.exception.EmailAlreadyInUseException;
 import com.obd.api.car.exception.CarNotFoundException;
@@ -89,14 +87,6 @@ public class GlobalExceptionHandler {
         return p;
     }
 
-    @ExceptionHandler(CarNotReadableException.class)
-    public ProblemDetail carNotReadable(CarNotReadableException e) {
-        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
-        p.setTitle("Not Found");
-        p.setDetail("Car not Readable");
-        return p;
-    }
-
     @ExceptionHandler(TripNotFoundException.class)
     public ProblemDetail tripNotFound(TripNotFoundException e) {
         var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
@@ -114,35 +104,19 @@ public class GlobalExceptionHandler {
         return p;
     }
 
-    @ExceptionHandler(CannotDeleteTripException.class)
-    public ProblemDetail cannotDeleteTrip(CannotDeleteTripException e) {
-        var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
-        p.setTitle("Conflict");
-        // One answer for unknown, not yours, and already ended - the service
-        // does not tell them apart. True in all three cases, leaks in none.
-        p.setDetail("Only an open trip of your own can be cancelled");
-        return p;
-    }
-
-    @ExceptionHandler(NoActiveTripsException.class)
-    public ProblemDetail notActiveTrips(NoActiveTripsException e) {
-        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
-        p.setTitle("Not Found");
-        p.setDetail("No active trips");
-        return p;
-    }
-
     @ExceptionHandler(NotAnAdminException.class)
     public ProblemDetail notAnAdmin(NotAnAdminException e) {
         var p = ProblemDetail.forStatus(HttpStatus.FORBIDDEN);
-        p.setTitle("Conflict");
+        p.setTitle("Forbidden");
         p.setDetail("Not an Admin of the Group");
         return p;
     }
     @ExceptionHandler(NotAMemberException.class)
     public ProblemDetail notAMember(NotAMemberException e) {
         var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
-        p.setTitle("Conflict");
+        p.setTitle("Not Found");
+        // Also the answer for a group that does not exist - the id is not
+        // confirmed to a non-member.
         p.setDetail("Not a Member of the Group");
         return p;
     }
@@ -224,6 +198,16 @@ public class GlobalExceptionHandler {
         p.setTitle("Validation failed");
         p.setProperty("errors", e.getBindingResult().getFieldErrors().stream()
                 .collect(Collectors.toMap(FieldError::getField, FieldError::getDefaultMessage, (a, b) -> a)));
+        return p;
+    }
+
+    // A path variable that is not a UUID (GET /cars/not-a-uuid): the client's
+    // fault, so 400 - not a 500 from the catch-all below.
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ProblemDetail typeMismatch(MethodArgumentTypeMismatchException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
+        p.setTitle("Validation failed");
+        p.setDetail("'%s' is not a valid value for '%s'".formatted(e.getValue(), e.getName()));
         return p;
     }
 

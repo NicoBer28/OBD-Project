@@ -176,6 +176,40 @@ class CarControllerTest {
                 .andExpect(jsonPath("$").isEmpty());
     }
 
+    // --- GET /cars/{id} ------------------------------------------------------
+
+    @Test
+    void carReturns200WithTheSameShapeAsTheList() throws Exception {
+        given(carService.getCar(OWNER_ID, CAR_ID)).willReturn(created());
+
+        mockMvc.perform(get("/api/v1/cars/" + CAR_ID).with(caller()))
+                // 200, not 202 ACCEPTED - that one means "queued for later".
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(CAR_ID.toString()))
+                .andExpect(jsonPath("$.name").value("Ada's Gol"))
+                .andExpect(jsonPath("$.model.brand").value("Volkswagen"))
+                .andExpect(jsonPath("$.mileage").value(120_000));
+    }
+
+    @Test
+    void carMapsACarTheCallerMayNotSeeToNotFound() throws Exception {
+        willThrow(new CarNotFoundException(CAR_ID)).given(carService).getCar(OWNER_ID, CAR_ID);
+
+        // Same answer as for a car that does not exist - the id is not confirmed.
+        mockMvc.perform(get("/api/v1/cars/" + CAR_ID).with(caller()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("No such car"));
+    }
+
+    @Test
+    void carRejectsAMalformedIdAs400Not500() throws Exception {
+        mockMvc.perform(get("/api/v1/cars/not-a-uuid").with(caller()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Validation failed"));
+
+        then(carService).shouldHaveNoInteractions();
+    }
+
     // --- sharing -------------------------------------------------------------
 
     private static final UUID GROUP_ID = UUID.fromString("99999999-8888-7777-6666-555555555555");

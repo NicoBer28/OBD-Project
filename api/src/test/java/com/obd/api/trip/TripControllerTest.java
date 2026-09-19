@@ -8,8 +8,6 @@ import com.obd.api.car.exception.CarNotFoundException;
 import com.obd.api.support.SliceSecurityConfig;
 import com.obd.api.trip.dto.TripDTO;
 import com.obd.api.trip.exception.CarAlreadyOnATripException;
-import com.obd.api.trip.exception.CannotDeleteTripException;
-import com.obd.api.trip.exception.CarNotReadableException;
 import com.obd.api.trip.exception.TripAlreadyEndedException;
 import com.obd.api.trip.exception.TripNotFoundException;
 import org.junit.jupiter.api.Test;
@@ -34,6 +32,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.verify;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -162,10 +161,12 @@ class TripControllerTest {
 
     @Test
     void activeMapsACarTheCallerMayNotSeeToNotFound() throws Exception {
-        willThrow(new CarNotReadableException()).given(tripService).active(DRIVER_ID, CAR_ID);
+        willThrow(new CarNotFoundException(CAR_ID)).given(tripService).active(DRIVER_ID, CAR_ID);
 
+        // Same answer as for a car that does not exist - the id is not confirmed.
         mockMvc.perform(get("/api/v1/cars/" + CAR_ID + "/trips/active").with(caller()))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("No such car"));
     }
 
     // --- POST /trips/{id}/finish, DELETE /trips/{id} -----------------------------
@@ -237,21 +238,30 @@ class TripControllerTest {
     }
 
     @Test
-    void cancelReturnsTheRemovedTrip() throws Exception {
-        given(tripService.delete(DRIVER_ID, TRIP_ID)).willReturn(started());
-
+    void cancelAnswers204WithNoBody() throws Exception {
         mockMvc.perform(delete("/api/v1/trips/" + TRIP_ID).with(caller()))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(TRIP_ID.toString()));
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+        verify(tripService).delete(DRIVER_ID, TRIP_ID);
     }
 
     @Test
-    void cancelMapsARefusalToConflict() throws Exception {
-        willThrow(new CannotDeleteTripException(TRIP_ID)).given(tripService).delete(DRIVER_ID, TRIP_ID);
+    void cancelMapsAnUnknownOrForeignTripToNotFound() throws Exception {
+        willThrow(new TripNotFoundException(TRIP_ID)).given(tripService).delete(DRIVER_ID, TRIP_ID);
+
+        mockMvc.perform(delete("/api/v1/trips/" + TRIP_ID).with(caller()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("No such trip"));
+    }
+
+    @Test
+    void cancelMapsAFinishedTripToConflict() throws Exception {
+        willThrow(new TripAlreadyEndedException(TRIP_ID)).given(tripService).delete(DRIVER_ID, TRIP_ID);
 
         mockMvc.perform(delete("/api/v1/trips/" + TRIP_ID).with(caller()))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.detail").value("Only an open trip of your own can be cancelled"));
+                .andExpect(jsonPath("$.detail").value("That trip has already ended"));
     }
 
     @Test

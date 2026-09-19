@@ -97,6 +97,33 @@ class CarServiceTest {
         return new CarDTO.Share(groupId);
     }
 
+    // --- getCar ------------------------------------------------------------------
+
+    @Test
+    void theOwnerReadsTheirCar() {
+        CarDTO.Read read = carService.getCar(adaId, golId);
+
+        assertThat(read.id()).isEqualTo(golId);
+        assertThat(read.name()).isEqualTo("Ada's Gol");
+        assertThat(read.model()).isNotNull();
+        assertThat(read.group()).isNull();
+    }
+
+    @Test
+    void aGroupMemberReadsASharedCarAStrangerNeverDoes() {
+        assertThatThrownBy(() -> carService.getCar(graceId, golId))
+                .isInstanceOf(CarNotFoundException.class);
+
+        carService.share(adaId, golId, with(familiaId));
+
+        assertThat(carService.getCar(graceId, golId).group().id()).isEqualTo(familiaId);
+        // Not in Familia: same answer as for a car that does not exist.
+        assertThatThrownBy(() -> carService.getCar(strangerId, golId))
+                .isInstanceOf(CarNotFoundException.class);
+        assertThatThrownBy(() -> carService.getCar(adaId, UUID.randomUUID()))
+                .isInstanceOf(CarNotFoundException.class);
+    }
+
     // --- share -------------------------------------------------------------------
 
     @Test

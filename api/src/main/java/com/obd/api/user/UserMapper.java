@@ -18,7 +18,7 @@ public class UserMapper {
                 // Normalised on the way in so it matches how AppUserDetailsService
                 // looks users up, and so the unique index catches "Ada@x.com"
                 // colliding with "ada@x.com".
-                .userEmail(userDto.userEMail().trim().toLowerCase())
+                .userEmail(userDto.userEmail().trim().toLowerCase())
                 .userPhone(userDto.userPhone())
                 .userPasswordHash(encoder.encode(userDto.userPassword()))
                 .role(Role.USER)

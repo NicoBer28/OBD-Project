@@ -30,4 +30,11 @@ public class GroupDTO {
                     group.getGroupCreatedAt(), memberCount, callerRole);
         }
     }
+
+    public record Member(
+            UUID userId,
+            String name,
+            String email,
+            GroupRole role
+    ){}
 }

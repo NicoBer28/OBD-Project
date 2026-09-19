@@ -5,6 +5,7 @@ import com.obd.api.auth.JwtAuthFilter;
 import com.obd.api.auth.SecurityConfig;
 import com.obd.api.auth.UserPrincipal;
 import com.obd.api.group.dto.GroupDTO;
+import com.obd.api.invitation.exception.NotAMemberException;
 import com.obd.api.support.SliceSecurityConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,15 +27,18 @@ import java.util.UUID;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Contract test for POST /api/v1/groups. See {@link GroupRepositoryTest} for
- * the database side.
+ * Contract tests for the group endpoints: POST /groups, GET /groups and
+ * GET /groups/{id}/members. See {@link GroupRepositoryTest} for the database
+ * side and {@link GroupServiceTest} for the membership rules.
  */
 @WebMvcTest(controllers = GroupController.class,
         excludeFilters = @ComponentScan.Filter(
@@ -121,5 +125,74 @@ class GroupControllerTest {
                         .content("{\"name\": \"" + "x".repeat(61) + "\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.name").exists());
+    }
+
+    // --- GET /groups ---------------------------------------------------------
+
+    @Test
+    void groupsListsTheCallersGroupsWithTheirRoleInEach() throws Exception {
+        UUID other = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        given(groupService.getGroups(CALLER_ID)).willReturn(List.of(
+                created(),
+                new GroupDTO.Read(other, "Los Lopez",
+                        Instant.parse("2026-09-09T12:00:00Z"), 4, GroupRole.MEMBER)));
+
+        mockMvc.perform(get("/api/v1/groups").with(caller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].id").value(GROUP_ID.toString()))
+                .andExpect(jsonPath("$[0].callerRole").value("ADMIN"))
+                .andExpect(jsonPath("$[1].id").value(other.toString()))
+                .andExpect(jsonPath("$[1].memberCount").value(4))
+                .andExpect(jsonPath("$[1].callerRole").value("MEMBER"));
+    }
+
+    @Test
+    void groupsIsAnEmptyListNotAnErrorForAUserInNoGroup() throws Exception {
+        given(groupService.getGroups(CALLER_ID)).willReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/groups").with(caller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
+    }
+
+    // --- GET /groups/{id}/members --------------------------------------------
+
+    @Test
+    void membersListsEveryMemberWithTheirRole() throws Exception {
+        UUID grace = UUID.fromString("99999999-9999-9999-9999-999999999999");
+        given(groupService.members(CALLER_ID, GROUP_ID)).willReturn(List.of(
+                new GroupDTO.Member(CALLER_ID, "Ada", "ada@example.com", GroupRole.ADMIN),
+                new GroupDTO.Member(grace, "Grace", "grace@example.com", GroupRole.MEMBER)));
+
+        mockMvc.perform(get("/api/v1/groups/{id}/members", GROUP_ID).with(caller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].userId").value(CALLER_ID.toString()))
+                .andExpect(jsonPath("$[0].name").value("Ada"))
+                .andExpect(jsonPath("$[0].email").value("ada@example.com"))
+                .andExpect(jsonPath("$[0].role").value("ADMIN"))
+                .andExpect(jsonPath("$[1].userId").value(grace.toString()))
+                .andExpect(jsonPath("$[1].role").value("MEMBER"));
+    }
+
+    @Test
+    void membersIs404ForANonMemberSoTheGroupIsNotConfirmedToExist() throws Exception {
+        given(groupService.members(CALLER_ID, GROUP_ID))
+                .willThrow(new NotAMemberException(CALLER_ID, GROUP_ID));
+
+        mockMvc.perform(get("/api/v1/groups/{id}/members", GROUP_ID).with(caller()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Not a Member of the Group"));
+    }
+
+    @Test
+    void membersRejectsAMalformedGroupIdAs400Not500() throws Exception {
+        mockMvc.perform(get("/api/v1/groups/{id}/members", "not-a-uuid").with(caller()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Validation failed"))
+                .andExpect(jsonPath("$.detail").value("'not-a-uuid' is not a valid value for 'id'"));
+
+        verifyNoInteractions(groupService);
     }
 }

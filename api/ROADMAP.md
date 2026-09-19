@@ -4,7 +4,7 @@ What is missing, what to build next, and in what order. Companion to
 `README.md`, which documents what already **exists**; this file is about what
 does not.
 
-Last updated: 2026-09-15. Schema is at `V9__devices.sql`. 257 tests, 68 smoke
+Last updated: 2026-09-16. Schema is at `V9__devices.sql`. 288 tests, 72 smoke
 checks.
 
 ---
@@ -15,7 +15,7 @@ checks.
 |---|---|---|
 | Auth / users | `users`, `refresh_tokens` | register, login, refresh, logout, `GET /users/me` |
 | Cars | `cars` (with `group_id`, `snapshot_at`), `models` | `POST /cars`, `GET /cars`, `GET /cars/{id}`, `PUT`/`DELETE /cars/{id}/group`, `GET /groups/{id}/cars`, `GET /models`, `POST /models` (admin) |
-| Groups | `groups`, `group_members` | `POST /groups`, `GET /groups` |
+| Groups | `groups`, `group_members` | `POST /groups`, `GET /groups`, `GET /groups/{id}/members` |
 | Invitations | `invitations` | `POST /invitations/invite/{groupId}`, `GET /invitations/pending`, `POST /invitations/{id}/accept` |
 | Trips | `trips` | start, finish, cancel, `GET /trips`, `GET /cars/{id}/trips`, `GET /cars/{id}/trips/active` |
 | Telemetry | `telemetry` | `POST /telemetry` (batch ingest, by `carId` or by dongle `serial`), `GET /telemetry` (cursor sync) |
@@ -27,10 +27,14 @@ through it. **Sharing is live**: `PUT /cars/{id}/group` sets the column, and
 nothing in trips or telemetry changed to honour it. `GroupAccess` is the
 counterpart for groups (`memberOf` / `requireMember` / `requireAdmin`).
 
-One thing in the table is off and worth knowing before anything else:
-
-- **`GET /cars/{car_id}` answers `202 Accepted`** — a status that means "queued
-  for later" — instead of `200`. It has no README section and no tests.
+Every endpoint in the table has a slice test, a smoke check and a README
+section; the status-code inconsistencies that used to be listed here
+(`202` on `GET /cars/{id}`, `200` on `POST /models` and `DELETE /trips/{id}`,
+`409` for an unknown trip) are fixed. Refusals are uniform: **404** for
+"does not exist *or* not yours" (car, trip, group, device, invitation), **403**
+only where the caller already knows the thing exists (not an admin, not the
+account role), **409** for a state conflict, **400** for a malformed id or
+body.
 
 ---
 
@@ -161,25 +165,28 @@ tested; **bold** notes are what is left.
 `GET /telemetry` (cursor sync), `GET /cars`, `GET /cars/{id}`, and `CarAccess`.
 The full path ESP32 → phone → API → Postgres can run end to end.
 
-### Phase 2 — The remaining reads
+### ~~Phase 2 — The remaining reads~~ — done
 
 | Endpoint | Notes |
 |---|---|
-| ~~`GET /users/me`~~ | The profile, from the token. No tests, smoke check or README section yet. |
+| ~~`GET /users/me`~~ | The profile, from the token. No slice test or smoke check yet. |
+| ~~`GET /cars/{id}`~~ | `200`, same shape as the list; `404` for unknown *and* not-readable. |
 | ~~`GET /cars/{id}/trips/active`~~ | Through `CarAccess.readableBy`; `204` when idle. |
-| **`GET /groups/{id}`** | One group, with its members (or a separate `/members`). `GroupAccess.memberOf` for the check. |
-| **`GET /trips/{id}`** | `POST /trips` no longer sends a `Location`, so this is optional now. |
+| ~~`GET /groups/{id}/members`~~ | Any member, `requireMember`. One join to `users` → `GroupDTO.Member(userId, name, email, role)`, admins first. There is no `GET /groups/{id}` on its own; `GET /groups` already carries name and count. |
 | ~~`GET /trips`~~ | Newest first. Paging still to do. |
 | ~~`GET /cars/{id}/trips`~~ | The car's full history, every driver, newest first, for anyone who may read it. |
-| ~~`GET /models`~~ | Plus an admin-only `POST /models`. Answers `200` where other creates answer `201`; `findAll()` is unordered. |
-| ~~`GET /groups`~~ | One JPQL query building the DTO directly; `memberCount` as a correlated subquery. No tests or smoke check yet. |
+| ~~`GET /models`~~ | Ordered by brand then model. Plus an admin-only `POST /models`, `201`. |
+| ~~`GET /groups`~~ | One JPQL query building the DTO directly; `memberCount` as a correlated subquery. |
+
+`GET /trips/{id}` was dropped: `POST /trips` sends no `Location`, and a trip
+is always reached through its car or driver list.
 
 ### Phase 3 — Finish the trip lifecycle — mostly done
 
 | Endpoint | Notes |
 |---|---|
 | ~~`POST /trips/{id}/finish`~~ | One conditional `UPDATE`: driver-only, once, server clock. `fuelUsed` is live. |
-| ~~`DELETE /trips/{id}`~~ | Open trips of the caller's own. Answers `409` for every refusal and `200` with a body — see README limitations. |
+| ~~`DELETE /trips/{id}`~~ | Open trips of the caller's own, `204`. `404` unknown/foreign, `409` already ended — same split as `finish`. |
 | **`GET /trips/{id}/route`** | Readings stamped with this trip, oldest first. `findByTelemetryTripIdOrderByTelemetryRecordedAtAsc` already exists. |
 
 Traps:
@@ -211,7 +218,6 @@ open trip survives un-sharing (`sharingLeavesAnOpenTripAlone`).
 | ~~Reclaim expired rows on invite~~ | `deleteExpiredPending` before the insert; accepted rows untouched. |
 | **`GET /groups/{id}/invitations`** | Admin's view: who was invited, status. |
 | **`DELETE /groups/{id}/invitations/{invId}`** | Revoke. Today the only way out of a pending invitation is expiry. |
-| **`GET /groups/{id}/members`** | |
 | **`PATCH /groups/{id}/members/{userId}`** | Change role. Admin-only. |
 | **`DELETE /groups/{id}/members/{userId}`** | Remove, or leave when it is yourself. |
 | **`DELETE /groups/{id}`** | Admin-only. Cars fall back to un-shared (`ON DELETE SET NULL`), invitations go with the group (`CASCADE`). |

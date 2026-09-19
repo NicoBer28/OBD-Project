@@ -37,4 +37,15 @@ public interface GroupMemberRepository extends JpaRepository<GroupMember, GroupM
            and u.userEmail = :email
         """)
     Optional<GroupMember> findByGroupIdAndUserEmail(@Param("groupId") UUID groupId,  @Param("email") String email);
+
+    // One join to users so the list can be shown as people, not ids. Admins
+    // first, then alphabetically - the order a members screen expects.
+    @Query("""
+        select new com.obd.api.group.dto.GroupDTO$Member(u.userId, u.userName, u.userEmail, m.role)
+          from GroupMember m, User u
+         where u.userId = m.id.userId
+           and m.id.groupId = :groupId
+         order by case m.role when com.obd.api.group.GroupRole.ADMIN then 0 else 1 end, u.userName, u.userLastName
+        """)
+    List<GroupDTO.Member> findMembersOf(@Param("groupId") UUID groupId);
 }

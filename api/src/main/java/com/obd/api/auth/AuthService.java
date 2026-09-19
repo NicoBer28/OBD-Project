@@ -49,7 +49,7 @@ public class AuthService {
     }
 
     public TokenPair login(UserDTO.Login userDto){
-        Authentication authentication = authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(userDto.userMail().trim().toLowerCase(), userDto.userPassword()));
+        Authentication authentication = authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(userDto.userEmail().trim().toLowerCase(), userDto.userPassword()));
         return pairFor((UserPrincipal) authentication.getPrincipal(), true);
     }
 

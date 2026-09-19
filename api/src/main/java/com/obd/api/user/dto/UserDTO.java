@@ -11,7 +11,7 @@ public class UserDTO {
     public record Create(
             @NotBlank String userName,
             @NotBlank String userLastName,
-            @NotBlank @Email String userEMail,
+            @NotBlank @Email String userEmail,
             @NotBlank @Size(min = 8, max = 72) String userPassword,
             @Pattern(regexp = PHONE, message = "Invalid Phone Number") String userPhone
     ) {}
@@ -23,7 +23,7 @@ public class UserDTO {
     ) {}
 
     public record Login(
-            @NotBlank @Email String userMail,
+            @NotBlank @Email String userEmail,
             @NotBlank @Size(min = 8, max = 72) String userPassword
     ){}
 
@@ -31,7 +31,7 @@ public class UserDTO {
             UUID id,
             String userName,
             String userLastName,
-            String userMail,
+            String userEmail,
             String userPhone
     ) {
         public static Read from(User u) {

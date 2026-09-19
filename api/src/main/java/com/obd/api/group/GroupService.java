@@ -46,10 +46,10 @@ public class GroupService {
         return groupMemberRepository.findSummariesForUser(userId);
     }
 
-    public List<GroupMember> members(UUID userId, UUID groupId){
+    public List<GroupDTO.Member> members(UUID userId, UUID groupId){
         groupAccess.requireMember(userId, groupId);
 
-        return groupMemberRepository.findByIdGroupId(groupId);
+        return groupMemberRepository.findMembersOf(groupId);
     }
 
 }

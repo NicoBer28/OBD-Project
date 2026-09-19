@@ -5,8 +5,6 @@ import com.obd.api.car.CarAccess;
 import com.obd.api.car.CarRepository;
 import com.obd.api.model.ModelRepository;
 import com.obd.api.car.exception.CarNotFoundException;
-import com.obd.api.trip.exception.CannotDeleteTripException;
-import com.obd.api.trip.exception.CarNotReadableException;
 import com.obd.api.trip.exception.TripAlreadyEndedException;
 import com.obd.api.trip.exception.TripNotFoundException;
 import com.obd.api.group.*;
@@ -159,7 +157,7 @@ class TripServiceTest {
         finishedTrip(adasCar.getCarId(), adaId);
 
         assertThatThrownBy(() -> tripService.getCarTrips(strangerId, adasCar.getCarId()))
-                .isInstanceOf(CarNotReadableException.class);
+                .isInstanceOf(CarNotFoundException.class);
     }
 
     @Test
@@ -196,7 +194,7 @@ class TripServiceTest {
         tripService.start(adaId, startOn(adasCar));
 
         assertThatThrownBy(() -> tripService.active(strangerId, adasCar.getCarId()))
-                .isInstanceOf(CarNotReadableException.class);
+                .isInstanceOf(CarNotFoundException.class);
     }
 
     // --- finish / cancel ---------------------------------------------------------
@@ -258,26 +256,33 @@ class TripServiceTest {
     void theDriverCancelsATripStartedByMistake() {
         TripDTO.Read open = tripService.start(graceId, startOn(adasCar));
 
-        TripDTO.Read removed = tripService.delete(graceId, open.id());
+        tripService.delete(graceId, open.id());
 
-        assertThat(removed.id()).isEqualTo(open.id());
         assertThat(tripRepository.findById(open.id())).isEmpty();
         assertThat(tripService.active(adaId, adasCar.getCarId())).isEmpty();
     }
 
     @Test
-    void cancelIsRefusedForAFinishedTripSomeoneElsesTripAndAnUnknownOne() {
+    void cancellingAFinishedTripIsAConflictHistoryIsNeverDeleted() {
         TripDTO.Read finished = tripService.start(adaId, startOn(adasCar));
         tripService.finish(adaId, finished.id(), result(52, 140));
-        TripDTO.Read graces = tripService.start(graceId, startOn(adasCar));
 
         assertThatThrownBy(() -> tripService.delete(adaId, finished.id()))
-                .isInstanceOf(CannotDeleteTripException.class);
+                .isInstanceOf(TripAlreadyEndedException.class);
+        assertThat(tripRepository.findById(finished.id())).isPresent();
+    }
+
+    @Test
+    void cancellingSomeoneElsesTripOrAnUnknownOneIsNotFound() {
+        TripDTO.Read graces = tripService.start(graceId, startOn(adasCar));
+
+        // Same answer for both, so a trip id is never confirmed to a stranger -
+        // and the owner of the car cannot cancel a trip out from under the driver.
         assertThatThrownBy(() -> tripService.delete(adaId, graces.id()))
-                .isInstanceOf(CannotDeleteTripException.class);
+                .isInstanceOf(TripNotFoundException.class);
         assertThatThrownBy(() -> tripService.delete(adaId, UUID.randomUUID()))
-                .isInstanceOf(CannotDeleteTripException.class);
-        assertThat(tripRepository.count()).isEqualTo(2);
+                .isInstanceOf(TripNotFoundException.class);
+        assertThat(tripRepository.findById(graces.id())).isPresent();
     }
 
     @Test
