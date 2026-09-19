@@ -5,7 +5,10 @@ import './bluetooth_scanner_screen.dart';
 import './main_screen.dart';
 
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
+
+import '../ui/app_theme.dart';
 
 // Login: valida las credenciales localmente y conserva el nombre de usuario.
 // Actualmente no existe una autenticación contra un servidor.
@@ -37,7 +40,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (_formKey.currentState!.validate()) {
       final userEmail = _emailController.text.trim();
       final userPassword = _passwordController.text;
-      
+
       final navigator = Navigator.of(context);
       final scaffoldMessenger = ScaffoldMessenger.of(context);
 
@@ -56,8 +59,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
         // Si las credenciales coinciden en la base de datos, el 200 es que salio todo bien
         if (response.statusCode == 200) {
-          print('Login exitoso! Tokens: ${response.body}');
-
           // Primero se busca el dispositivo OBD antes de mostrar el panel.
           navigator.pushReplacement(
             MaterialPageRoute(
@@ -118,23 +119,40 @@ class _LoginScreenState extends State<LoginScreen> {
     return Scaffold(
       body: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(32.0),
+          padding: const EdgeInsets.all(24.0),
           child: Form(
             key: _formKey,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(
-                  Icons.directions_car,
-                  size: 80,
-                  color: Colors.blueAccent,
+                Container(
+                  width: 68,
+                  height: 68,
+                  decoration: BoxDecoration(
+                    color: AppColors.accentSubtle,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Icon(
+                    Icons.directions_car_outlined,
+                    size: 36,
+                    color: AppColors.accent,
+                  ),
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 20),
                 const Text(
                   'Bienvenido a OBD-C',
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    fontSize: 27,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.5,
+                  ),
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 6),
+                const Text(
+                  'Ingresá para ver cómo está tu auto.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+                const SizedBox(height: 28),
 
                 // Input de Email
                 TextFormField(
@@ -173,18 +191,19 @@ class _LoginScreenState extends State<LoginScreen> {
                     return null;
                   },
                 ),
-                const SizedBox(height: 32),
-                
-                const SizedBox(height: 32),
+                const SizedBox(height: 28),
                 // Botón de Ingreso
                 SizedBox(
                   width: double.infinity,
-                  height: 50,
+                  height: 52,
                   child: ElevatedButton(
                     onPressed: _ingresar,
                     child: const Text(
-                      'Ingresar',
-                      style: TextStyle(fontSize: 18),
+                      'INGRESAR',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ),

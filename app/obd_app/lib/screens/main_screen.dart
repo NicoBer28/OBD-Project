@@ -5,612 +5,883 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
-import './login_screen.dart';
+import '../ui/app_theme.dart';
+import 'login_screen.dart';
 
-// UUIDs del Nordic UART Service (NUS) que implementa la ESP32.
-// Se mantienen constantes porque todos los dispositivos del mismo modelo
-// comparten el mismo contrato GATT; no identifican a un dispositivo individual.
 const _uartServiceUuid = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E';
 const _uartWriteUuid = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E';
 const _uartReadUuid = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E';
 
-// Panel principal: muestra la nafta y administra la comunicación GATT.
 class MainScreen extends StatefulWidget {
   final String nombreUsuario;
   final BluetoothDevice? device;
-
   const MainScreen({super.key, required this.nombreUsuario, this.device});
-
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
 
 class _MainScreenState extends State<MainScreen> {
-  int _selectedTab = 1;
-
-  // Valor inicial usado por el simulador cuando no hay ESP32 conectada.
-  double _nivelNafta = 75.0;
-  int _velocidad = 0;
-  int _rpm = 0;
-
-  // Característica 6E400002: canal de escritura app -> ESP32.
-  BluetoothCharacteristic? _writeCharacteristic;
-
-  // Característica 6E400003 si permite lectura explícita.
-  BluetoothCharacteristic? _readCharacteristic;
-
-  // Característica 6E400003 si permite notificaciones ESP32 -> app.
-  BluetoothCharacteristic? _notifyCharacteristic;
-
-  // Suscripción que recibe automáticamente las notificaciones de la ESP32.
-  StreamSubscription<List<int>>? _receiveSubscription;
-
-  // Suscripción usada para reflejar conexiones y desconexiones en la UI.
-  StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
-
-  // Textos de diagnóstico visibles durante el desarrollo.
+  int _tab = 0;
+  bool _summary = false, _maintenanceAlerts = true, _tripAlerts = true;
+  double _fuel = 75;
+  int _speed = 0, _rpm = 0;
+  BluetoothCharacteristic? _write, _read;
+  StreamSubscription<List<int>>? _receiveSub;
+  StreamSubscription<BluetoothConnectionState>? _connectionSub;
   String _connectionStatus = 'Modo demo: sin conexión BLE';
   String _receivedData = 'Sin datos recibidos';
-
-  // Impide iniciar dos escrituras simultáneas sobre la misma característica.
-  bool _isSending = false;
-
-  // Campo de texto cuyo contenido se convierte a bytes UTF-8 al enviar.
-  final _sendController = TextEditingController();
+  bool _sending = false;
+  final _command = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    final device = widget.device;
-    if (device != null) {
-      // El estado puede cambiar después de abandonar el escáner, por eso se
-      // observa el stream del dispositivo en lugar de asumir que la conexión
-      // permanecerá activa durante toda la pantalla.
-      _connectionSubscription = device.connectionState.listen((state) {
-        if (!mounted) return;
-        setState(() {
-          _connectionStatus = state == BluetoothConnectionState.connected
-              ? 'Conectado'
-              : 'Desconectado';
-        });
+    if (widget.device != null) {
+      _connectionSub = widget.device!.connectionState.listen((state) {
+        if (mounted) {
+          setState(
+            () =>
+                _connectionStatus = state == BluetoothConnectionState.connected
+                ? 'Conectado'
+                : 'Desconectado',
+          );
+        }
       });
-      _prepareBleConnection();
+      _prepareBle();
     }
   }
 
-  Future<void> _prepareBleConnection() async {
+  Future<void> _prepareBle() async {
     final device = widget.device!;
     try {
-      // Si Android perdió la conexión, se intenta restablecer antes de consultar
-      // servicios. Después de reconectar hay que descubrirlos nuevamente.
       if (!device.isConnected) {
         await device.connect(license: License.nonprofit, autoConnect: false);
       }
-      final services = await device.discoverServices();
-      _writeCharacteristic = null;
-      _readCharacteristic = null;
-      _notifyCharacteristic = null;
-      // Se busca el servicio por UUID, no por posición en la lista.
-      final uartService = services.cast<BluetoothService?>().firstWhere(
-        (service) => service!.uuid == Guid(_uartServiceUuid),
-        orElse: () => null,
-      );
-
-      if (uartService == null) {
+      final service = (await device.discoverServices())
+          .cast<BluetoothService?>()
+          .firstWhere(
+            (item) => item!.uuid == Guid(_uartServiceUuid),
+            orElse: () => null,
+          );
+      if (service == null) {
         throw StateError('No se encontró el servicio UART de la ESP32');
       }
-
-      for (final characteristic in uartService.characteristics) {
-        // La dirección de datos la determina el UUID y las propiedades GATT.
+      for (final characteristic in service.characteristics) {
         if (characteristic.uuid == Guid(_uartWriteUuid)) {
-          _writeCharacteristic = characteristic;
-        } else if (characteristic.uuid == Guid(_uartReadUuid)) {
-          _readCharacteristic = characteristic;
-          _notifyCharacteristic = characteristic;
+          _write = characteristic;
+        }
+        if (characteristic.uuid == Guid(_uartReadUuid)) {
+          _read = characteristic;
         }
       }
-
-      final receiveCharacteristic = _notifyCharacteristic;
-      if (receiveCharacteristic != null &&
-          (receiveCharacteristic.properties.notify ||
-              receiveCharacteristic.properties.indicate)) {
-        // READ requiere una acción manual; NOTIFY permite que la ESP32 envíe
-        // datos espontáneamente. Activamos la suscripción solo si está soportada.
-        await receiveCharacteristic.setNotifyValue(true);
-        _receiveSubscription = receiveCharacteristic.onValueReceived.listen((
-          value,
-        ) {
-          if (!mounted|| value.isEmpty) return;
-
-          final bytes = Uint8List.fromList(value);
-          final byteData = ByteData.sublistView(bytes);
-          final id = byteData.getUint8(0);
-
-          setState(() {
-            if (id == 0x01 && bytes.length >= 4) {
-              // Struct SpeedRpmPacket: id (1 byte), speed (1 byte), rpm (2 bytes)
-              _velocidad = byteData.getUint8(1);
-              _rpm = byteData.getUint16(2, Endian.little); // ESP32 usa Little Endian
-              _receivedData = 'Paquete 0x01 - Vel: $_velocidad km/h | RPM: $_rpm';
-            } 
-            else if (id == 0x02 && bytes.length >= 3) {
-              // Struct EngTempFuelPacket: id (1 byte), temp (1 byte), fuel (1 byte)
-              final temp = byteData.getUint8(1);
-              _nivelNafta = byteData.getUint8(2).toDouble();
-              _receivedData = 'Paquete 0x02 - Temp: $temp°C | Nafta: ${_nivelNafta.toInt()}%';
-            }
-          });
-        });
+      if (_read != null &&
+          (_read!.properties.notify || _read!.properties.indicate)) {
+        await _read!.setNotifyValue(true);
+        _receiveSub = _read!.onValueReceived.listen(_handlePacket);
       }
-
-      if (!mounted) return;
-      setState(() {
-        _connectionStatus = _writeCharacteristic == null
-            ? 'Conectado, pero no hay característica escribible'
-            : 'Conectado a ${device.advName.isEmpty ? device.remoteId : device.advName}';
-      });
+      if (mounted) {
+        setState(
+          () => _connectionStatus = _write == null
+              ? 'Conectado, sin canal de escritura'
+              : 'Conectado a ${device.advName.isEmpty ? device.remoteId : device.advName}',
+        );
+      }
     } catch (error) {
-      if (!mounted) return;
-      setState(() => _connectionStatus = 'Error preparando BLE: $error');
+      if (mounted) {
+        setState(() => _connectionStatus = 'Error preparando BLE: $error');
+      }
     }
   }
 
-  Future<void> _sendData() async {
-    final text = _sendController.text;
-    final device = widget.device;
-    if (device == null || text.trim().isEmpty || _isSending) return;
+  void _handlePacket(List<int> value) {
+    if (!mounted || value.isEmpty) return;
+    final bytes = Uint8List.fromList(value);
+    final data = ByteData.sublistView(bytes);
+    setState(() {
+      if (data.getUint8(0) == 1 && bytes.length >= 4) {
+        _speed = data.getUint8(1);
+        _rpm = data.getUint16(2, Endian.little);
+        _receivedData = 'Vel: $_speed km/h · RPM: $_rpm';
+      } else if (data.getUint8(0) == 2 && bytes.length >= 3) {
+        _fuel = data.getUint8(2).toDouble();
+        _receivedData = 'Nivel de nafta: ${_fuel.toInt()}%';
+      }
+    });
+  }
 
-    // La escritura se serializa para evitar operaciones GATT simultáneas.
-    setState(() => _isSending = true);
+  Future<void> _send() async {
+    if (_command.text.trim().isEmpty || _write == null || _sending) return;
+    setState(() => _sending = true);
     try {
-      if (!device.isConnected) {
-        await _prepareBleConnection();
-      }
-      final activeCharacteristic = _writeCharacteristic;
-      if (activeCharacteristic == null || !device.isConnected) {
-        throw StateError('La ESP32 no está conectada o no acepta escritura');
-      }
-      // El texto se transmite como bytes UTF-8. El firmware de la ESP32 debe
-      // interpretar esos bytes con el mismo formato y protocolo de mensajes.
-      await activeCharacteristic.write(
-        utf8.encode(text),
+      await _write!.write(
+        utf8.encode(_command.text.trim()),
         withoutResponse:
-            activeCharacteristic.properties.writeWithoutResponse &&
-            !activeCharacteristic.properties.write,
+            _write!.properties.writeWithoutResponse &&
+            !_write!.properties.write,
       );
-      _sendController.clear();
+      _command.clear();
     } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('No se pudo enviar: $error')));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('No se pudo enviar: $error')));
+      }
     } finally {
-      if (mounted) setState(() => _isSending = false);
+      if (mounted) setState(() => _sending = false);
     }
   }
 
-  Future<void> _readData() async {
-    final characteristic = _readCharacteristic;
-    if (characteristic == null || !characteristic.properties.read) return;
-
+  Future<void> _readOnce() async {
+    if (_read == null || !_read!.properties.read) return;
     try {
-      // Esta lectura es bajo demanda: no reemplaza las notificaciones.
-      final value = await characteristic.read();
-      if (!mounted) return;
-      setState(() {
-        _receivedData = utf8.decode(value, allowMalformed: true);
-      });
+      final value = await _read!.read();
+      if (mounted) {
+        setState(
+          () => _receivedData = utf8.decode(value, allowMalformed: true),
+        );
+      }
     } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('No se pudo leer: $error')));
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('No se pudo leer: $error')));
+      }
     }
   }
 
   @override
   void dispose() {
-    // Se cancelan streams y controllers para evitar fugas y callbacks sobre una
-    // pantalla que ya no existe. La conexión del dispositivo puede gestionarse
-    // aparte según la política de reconexión de la aplicación.
-    _receiveSubscription?.cancel();
-    _connectionSubscription?.cancel();
-    _sendController.dispose();
+    _receiveSub?.cancel();
+    _connectionSub?.cancel();
+    _command.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final pages = [
-      _buildTripsPage(context),
-      _buildCarPage(context),
-      _buildSettingsPage(context),
-    ];
-
+    final pages = [_car(), _shared(), _activity(), _profile()];
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          _selectedTab == 0
-              ? 'Tus viajes'
-              : _selectedTab == 1
-              ? 'Mi coche'
-              : 'Ajustes',
-        ),
-        centerTitle: false,
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Center(
-              child: Text(
-                widget.nombreUsuario,
-                style: TextStyle(color: Colors.grey.shade400),
-              ),
-            ),
-          ),
-        ],
-      ),
       body: SafeArea(
         child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 220),
-          child: pages[_selectedTab],
+          duration: const Duration(milliseconds: 180),
+          child: pages[_tab],
         ),
       ),
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedTab,
-        onDestinationSelected: (index) => setState(() => _selectedTab = index),
+        selectedIndex: _tab,
+        onDestinationSelected: (value) => setState(() => _tab = value),
         destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.route_outlined),
-            selectedIcon: Icon(Icons.route),
-            label: 'Viajes',
-          ),
           NavigationDestination(
             icon: Icon(Icons.directions_car_outlined),
             selectedIcon: Icon(Icons.directions_car),
-            label: 'Coche',
+            label: 'Auto',
           ),
           NavigationDestination(
-            icon: Icon(Icons.tune_outlined),
-            selectedIcon: Icon(Icons.tune),
-            label: 'Ajustes',
+            icon: Icon(Icons.group_outlined),
+            selectedIcon: Icon(Icons.group),
+            label: 'Compartido',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.bar_chart_outlined),
+            selectedIcon: Icon(Icons.bar_chart),
+            label: 'Actividad',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person),
+            label: 'Perfil',
           ),
         ],
       ),
     );
   }
 
-  Widget _buildCarPage(BuildContext context) {
-    final connected =
-        widget.device != null &&
-        _connectionStatus.toLowerCase().contains('conectado');
-    return ListView(
-      key: const ValueKey('car'),
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-      children: [
-        Text(
-          'Hola, ${widget.nombreUsuario}',
-          style: Theme.of(context).textTheme.headlineMedium
-              ?.copyWith(fontWeight: FontWeight.w800),
+  Widget _page(Key key, List<Widget> children) => ListView(
+    key: key,
+    padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
+    children: children,
+  );
+  Widget _car() {
+    final connected = _connectionStatus.toLowerCase().startsWith('conectado');
+    return _page(const ValueKey('car'), [
+      PageHeader(
+        title: 'Golf GTI',
+        subtitle: 'Volkswagen · AB 123 CD',
+        trailing: CircleAvatar(
+          backgroundColor: AppColors.accent,
+          child: Text(_initials),
         ),
-        const SizedBox(height: 4),
-        Text(
-          connected ? 'Telemetría en directo' : 'Resumen del vehículo',
-          style: TextStyle(color: Colors.grey.shade400),
-        ),
-        const SizedBox(height: 20),
-        Container(
-          padding: const EdgeInsets.all(22),
-          decoration: BoxDecoration(
-            color: Colors.blue.shade900.withValues(alpha: 0.55),
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Column(
+      ),
+      const SizedBox(height: 16),
+      SectionCard(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Center(
+              child: Icon(
+                Icons.directions_car_outlined,
+                color: AppColors.accent,
+                size: 100,
+              ),
+            ),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('OBD-C · Demo'),
-                      SizedBox(height: 6),
+                      const Eyebrow('Autonomía'),
+                      const SizedBox(height: 4),
                       Text(
-                        'Volkswagen Golf GTI',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
+                        '${(_fuel * 5.5).round()} km',
+                        style: const TextStyle(
+                          fontSize: 29,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -1,
                         ),
                       ),
                     ],
                   ),
-                  Icon(
-                    Icons.directions_car,
-                    size: 48,
-                    color: Colors.lightBlue.shade200,
+                ),
+                Text(
+                  '${_fuel.toInt()}%',
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 9),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: LinearProgressIndicator(
+                value: _fuel / 100,
+                minHeight: 7,
+                color: AppColors.accent,
+                backgroundColor: const Color(0xFFF0F3F1),
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 10),
+      Row(
+        children: [
+          Expanded(child: _vital('Batería', '12,4 V')),
+          const SizedBox(width: 8),
+          Expanded(child: _vital('Estado', 'OK', dot: AppColors.success)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _vital('Service', '2.100 km', color: AppColors.warning),
+          ),
+        ],
+      ),
+      const SizedBox(height: 10),
+      SectionCard(
+        child: Row(
+          children: [
+            const CircleAvatar(
+              backgroundColor: AppColors.accentSubtle,
+              foregroundColor: AppColors.accent,
+              child: Icon(Icons.location_on_outlined),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Eyebrow('Estacionado hace 2 h'),
+                  SizedBox(height: 3),
+                  Text(
+                    'Av. Corrientes 1234',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'a 600 m tuyo · lo dejó Sofía',
+                    style: TextStyle(fontSize: 11, color: AppColors.muted),
                   ),
                 ],
               ),
-              const SizedBox(height: 28),
-              Row(
+            ),
+            TextButton(onPressed: () {}, child: const Text('Ir')),
+          ],
+        ),
+      ),
+      const SizedBox(height: 10),
+      Container(
+        padding: const EdgeInsets.all(13),
+        decoration: BoxDecoration(
+          color: AppColors.accentSubtle,
+          borderRadius: BorderRadius.circular(15),
+        ),
+        child: const Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: _metric(
-                      'Nafta',
-                      '${_nivelNafta.toInt()}%',
-                      Icons.local_gas_station,
+                  Eyebrow('Tu próximo turno'),
+                  SizedBox(height: 3),
+                  Text(
+                    'Hoy · 18:00 – 21:00',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+            Text(
+              'Calendario ›',
+              style: TextStyle(
+                color: AppColors.accent,
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 16),
+      ElevatedButton.icon(
+        onPressed: () {},
+        icon: const Icon(Icons.play_arrow_rounded),
+        label: const Text('Iniciar viaje'),
+      ),
+      const SizedBox(height: 16),
+      _bleCard(connected),
+    ]);
+  }
+
+  Widget _vital(String label, String value, {Color? dot, Color? color}) =>
+      SectionCard(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Eyebrow(label),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                if (dot != null)
+                  Container(
+                    width: 7,
+                    height: 7,
+                    margin: const EdgeInsets.only(right: 5),
+                    decoration: BoxDecoration(
+                      color: dot,
+                      shape: BoxShape.circle,
                     ),
                   ),
-                  Expanded(
-                    child: _metric('Kilometraje', '48.320 km', Icons.speed),
+                Flexible(
+                  child: Text(
+                    value,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: color,
+                    ),
                   ),
-                  Expanded(child: _metric('Estado', 'Bueno', Icons.favorite)),
-                ],
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            Expanded(
-              child: _infoTile('Velocidad', '$_velocidad km/h', Icons.speed),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _infoTile(
-                'RPM',
-                '$_rpm',
-                Icons.rotate_right,
-              ),
+                ),
+              ],
             ),
           ],
         ),
-        const SizedBox(height: 20),
-        _buildBlePanel(),
-      ],
-    );
-  }
-
-  Widget _buildTripsPage(BuildContext context) {
-    return ListView(
-      key: const ValueKey('trips'),
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-      children: [
-        Text(
-          'Tu año al volante',
-          style: Theme.of(context).textTheme.headlineMedium
-              ?.copyWith(fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Una mirada rápida a tus rutas recientes',
-          style: TextStyle(color: Colors.grey.shade400),
-        ),
-        const SizedBox(height: 22),
-        Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: Colors.teal.shade900.withValues(alpha: 0.6),
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: const Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Tu número estrella'),
-              SizedBox(height: 8),
-              Text(
-                '1.284 km',
-                style: TextStyle(fontSize: 42, fontWeight: FontWeight.w900),
-              ),
-              SizedBox(height: 4),
-              Text('recorridos en 37 viajes'),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            Expanded(
-              child: _infoTile(
-                'Viaje más largo',
-                '86 km',
-                Icons.wb_sunny_outlined,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _infoTile('Tiempo conduciendo', '28 h', Icons.schedule),
-            ),
-          ],
-        ),
-        const SizedBox(height: 24),
-        Text(
-          'Últimos viajes',
-          style: Theme.of(context).textTheme.titleLarge
-              ?.copyWith(fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 8),
-        _tripRow('Casa → Trabajo', 'Hoy · 12,4 km', '18 min'),
-        _tripRow('Ruta costera', 'Ayer · 42,8 km', '51 min'),
-        _tripRow('Centro → Norte', 'Dom, 31 ago · 8,6 km', '16 min'),
-      ],
-    );
-  }
-
-  Widget _buildSettingsPage(BuildContext context) {
-    return ListView(
-      key: const ValueKey('settings'),
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-      children: [
-        Text(
-          'Ajustes',
-          style: Theme.of(context).textTheme.headlineMedium
-              ?.copyWith(fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 20),
-        ListTile(
-          leading: const Icon(Icons.bluetooth),
-          title: const Text('Conexión OBD'),
-          subtitle: Text(_connectionStatus),
-          trailing: const Icon(Icons.chevron_right),
-        ),
-        const Divider(),
-        const ListTile(
-          leading: Icon(Icons.directions_car_outlined),
-          title: Text('Vehículo'),
-          subtitle: Text('Volkswagen Golf GTI'),
-          trailing: Icon(Icons.chevron_right),
-        ),
-        const Divider(),
-        const ListTile(
-          leading: Icon(Icons.notifications_outlined),
-          title: Text('Notificaciones'),
-          subtitle: Text('Alertas de mantenimiento'),
-          trailing: Icon(Icons.chevron_right),
-        ),
-        const SizedBox(height: 24),
-        FilledButton.tonalIcon(
-          onPressed: () => Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const LoginScreen()),
-          ),
-          icon: const Icon(Icons.logout),
-          label: const Text('Cerrar sesión'),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildBlePanel() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white10,
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.circle,
-                size: 10,
-                color: _connectionStatus.startsWith('Conectado')
-                    ? Colors.greenAccent
-                    : Colors.orangeAccent,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  _connectionStatus,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Último dato: $_receivedData',
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _sendController,
-                  enabled: _writeCharacteristic != null,
-                  decoration: const InputDecoration(
-                    labelText: 'Enviar comando',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  onSubmitted: (_) => _sendData(),
-                ),
-              ),
-              IconButton(
-                tooltip: 'Enviar dato',
-                onPressed: _writeCharacteristic == null ? null : _sendData,
-                icon: const Icon(Icons.send),
-              ),
-              IconButton(
-                tooltip: 'Leer dato',
-                onPressed: _readCharacteristic?.properties.read == true
-                    ? _readData
-                    : null,
-                icon: const Icon(Icons.download),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Simulador de nafta',
-            style: TextStyle(color: Colors.grey.shade400),
-          ),
-          Slider(
-            value: _nivelNafta,
-            min: 0,
-            max: 100,
-            divisions: 100,
-            activeColor: _nivelNafta < 20 ? Colors.red : Colors.blueAccent,
-            onChanged: (value) => setState(() => _nivelNafta = value),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _metric(String label, String value, IconData icon) {
-    return Column(
+      );
+  Widget _bleCard(bool connected) => SectionCard(
+    child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, size: 18, color: Colors.lightBlue.shade200),
-        const SizedBox(height: 8),
-        Text(
-          value,
-          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+        Row(
+          children: [
+            Icon(
+              Icons.circle,
+              size: 10,
+              color: connected ? AppColors.success : AppColors.warning,
+            ),
+            const SizedBox(width: 7),
+            Expanded(
+              child: Text(
+                _connectionStatus,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 2),
+        const SizedBox(height: 7),
         Text(
-          label,
-          style: TextStyle(fontSize: 12, color: Colors.grey.shade300),
+          'Último dato: $_receivedData',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 12, color: AppColors.muted),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _command,
+                enabled: _write != null,
+                decoration: const InputDecoration(
+                  isDense: true,
+                  labelText: 'Enviar comando',
+                ),
+              ),
+            ),
+            IconButton(
+              onPressed: _write == null ? null : _send,
+              icon: _sending
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.send_outlined),
+            ),
+            IconButton(
+              onPressed: _read?.properties.read == true ? _readOnce : null,
+              icon: const Icon(Icons.download_outlined),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Simulador de nafta',
+          style: TextStyle(fontSize: 11, color: AppColors.muted),
+        ),
+        Slider(
+          value: _fuel,
+          min: 0,
+          max: 100,
+          onChanged: (value) => setState(() => _fuel = value),
         ),
       ],
-    );
-  }
+    ),
+  );
 
-  Widget _infoTile(String label, String value, IconData icon) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white10,
-        borderRadius: BorderRadius.circular(16),
+  Widget _shared() => _page(const ValueKey('shared'), [
+    PageHeader(
+      title: 'Compartido',
+      subtitle: 'Familia X· 4 miembros',
+      trailing: IconButton(
+        onPressed: () {},
+        icon: const Icon(Icons.person_add_alt_1),
       ),
+    ),
+    const SizedBox(height: 18),
+    Row(
+      children: [
+        _avatar('LM', AppColors.accent),
+        _avatar('SM', const Color(0xFF6D4AFF)),
+        _avatar('MG', const Color(0xFFE05A3E)),
+        _avatar('PA', const Color(0xFFC2820B)),
+        const SizedBox(width: 8),
+        const Text(
+          'Invitar por QR o link',
+          style: TextStyle(fontSize: 12, color: AppColors.muted),
+        ),
+      ],
+    ),
+    const SizedBox(height: 16),
+    SectionCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: Colors.amber.shade300),
-          const SizedBox(height: 12),
-          Text(
-            value,
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          const Eyebrow('Hoy tiene el auto'),
+          const SizedBox(height: 9),
+          Row(
+            children: [
+              _avatar('SM', const Color(0xFF6D4AFF)),
+              const SizedBox(width: 9),
+              const Expanded(
+                child: Text(
+                  'Sofía Gimenez',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              const Text(
+                'Hasta 18:00',
+                style: TextStyle(color: AppColors.muted, fontSize: 12),
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
-          Text(label, style: TextStyle(color: Colors.grey.shade400)),
         ],
       ),
-    );
-  }
+    ),
+    const SizedBox(height: 10),
+    SectionCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Eyebrow('Próximos turnos'),
+          const SizedBox(height: 10),
+          _schedule('Hoy', '18:00 – 21:00', 'Lucas'),
+          const Divider(),
+          _schedule('Mañana', '08:00 – 11:00', 'Martín'),
+          const Divider(),
+          _schedule('Vie', '19:00 – 23:00', 'Sofía'),
+        ],
+      ),
+    ),
+    const SizedBox(height: 10),
+    SectionCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Eyebrow('Gastos de septiembre'),
+          const SizedBox(height: 7),
+          const Text(
+            r'$ 84.200',
+            style: TextStyle(fontSize: 27, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: const LinearProgressIndicator(
+              value: .68,
+              minHeight: 9,
+              color: AppColors.accent,
+              backgroundColor: Color(0xFF6D4AFF),
+            ),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Lucas 42% · Sofía 31% · Martín 18% · Paula 9%',
+            style: TextStyle(fontSize: 11, color: AppColors.muted),
+          ),
+        ],
+      ),
+    ),
+  ]);
+  Widget _avatar(String name, Color color) => Container(
+    margin: const EdgeInsets.only(right: 3),
+    width: 33,
+    height: 33,
+    decoration: BoxDecoration(
+      color: color,
+      shape: BoxShape.circle,
+      border: Border.all(color: Colors.white, width: 2),
+    ),
+    alignment: Alignment.center,
+    child: Text(
+      name,
+      style: const TextStyle(
+        color: Colors.white,
+        fontSize: 10,
+        fontWeight: FontWeight.w700,
+      ),
+    ),
+  );
+  Widget _schedule(String day, String time, String person) => Row(
+    children: [
+      SizedBox(
+        width: 58,
+        child: Text(
+          day,
+          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+        ),
+      ),
+      Expanded(child: Text(time, style: const TextStyle(fontSize: 12))),
+      Text(
+        person,
+        style: const TextStyle(fontSize: 12, color: AppColors.muted),
+      ),
+    ],
+  );
 
-  Widget _tripRow(String title, String subtitle, String duration) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: const CircleAvatar(child: Icon(Icons.route)),
-      title: Text(title),
-      subtitle: Text(subtitle),
-      trailing: Text(duration, style: TextStyle(color: Colors.grey.shade400)),
-    );
+  Widget _activity() => _page(const ValueKey('activity'), [
+    PageHeader(title: 'Actividad', subtitle: 'Golf GTI · últimos 30 días'),
+    const SizedBox(height: 16),
+    Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F3F1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      padding: const EdgeInsets.all(3),
+      child: Row(
+        children: [
+          Expanded(child: _segment('Viajes', !_summary)),
+          Expanded(child: _segment('Resumen', _summary)),
+        ],
+      ),
+    ),
+    const SizedBox(height: 16),
+    if (_summary) ..._summaryContent() else ..._tripContent(),
+  ]);
+  Widget _segment(String text, bool selected) => InkWell(
+    onTap: () => setState(() => _summary = text == 'Resumen'),
+    child: Container(
+      padding: const EdgeInsets.symmetric(vertical: 9),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: selected ? Colors.white : Colors.transparent,
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          color: selected ? AppColors.text : AppColors.muted,
+        ),
+      ),
+    ),
+  );
+  List<Widget> _tripContent() => [
+    const Text(
+      'Últimos viajes',
+      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+    ),
+    const SizedBox(height: 8),
+    SectionCard(
+      child: Column(
+        children: [
+          _trip('Hoy', 'Casa → Trabajo', '12,4 km', '18 min'),
+          const Divider(),
+          _trip('Ayer', 'Ruta costera', '42,8 km', '51 min'),
+          const Divider(),
+          _trip('Dom, 31 ago', 'Centro → Norte', '8,6 km', '16 min'),
+        ],
+      ),
+    ),
+  ];
+  Widget _trip(String day, String route, String km, String duration) => Row(
+    children: [
+      SizedBox(
+        width: 75,
+        child: Text(
+          day,
+          style: const TextStyle(fontSize: 11, color: AppColors.muted),
+        ),
+      ),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              route,
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+            ),
+            Text(
+              duration,
+              style: const TextStyle(fontSize: 11, color: AppColors.muted),
+            ),
+          ],
+        ),
+      ),
+      Text(
+        km,
+        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+      ),
+    ],
+  );
+  List<Widget> _summaryContent() => [
+    Row(
+      children: [
+        Expanded(child: _stat('Distancia', '1.284', 'km', '+12%')),
+        const SizedBox(width: 8),
+        Expanded(child: _stat('Viajes', '37', '', '+4 vs. ago')),
+      ],
+    ),
+    const SizedBox(height: 8),
+    Row(
+      children: [
+        Expanded(child: _stat('Combustible', '118', 'L', '-8%')),
+        const SizedBox(width: 8),
+        Expanded(child: _stat('Promedio', '9,2', 'L/100', 'estable')),
+      ],
+    ),
+    const SizedBox(height: 12),
+    SectionCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Eyebrow('Distancia por semana'),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 100,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [32, 54, 43, 76, 61, 88, 67]
+                  .map(
+                    (v) => Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 2),
+                        height: v.toDouble(),
+                        decoration: BoxDecoration(
+                          color: AppColors.accent,
+                          borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(4),
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
+        ],
+      ),
+    ),
+  ];
+  Widget _stat(String label, String value, String unit, String delta) =>
+      SectionCard(
+        padding: const EdgeInsets.all(11),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Eyebrow(label),
+            const SizedBox(height: 7),
+            RichText(
+              text: TextSpan(
+                style: const TextStyle(color: AppColors.text),
+                children: [
+                  TextSpan(
+                    text: value,
+                    style: const TextStyle(
+                      fontSize: 21,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  TextSpan(
+                    text: ' $unit',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              delta,
+              style: const TextStyle(
+                fontSize: 10,
+                color: AppColors.success,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      );
+
+  Widget _profile() => _page(const ValueKey('profile'), [
+    PageHeader(title: 'Perfil', subtitle: widget.nombreUsuario),
+    const SizedBox(height: 18),
+    SectionCard(
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 25,
+            backgroundColor: AppColors.accent,
+            child: Text(
+              _initials,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.nombreUsuario,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const Text(
+                  'Plan personal',
+                  style: TextStyle(fontSize: 12, color: AppColors.muted),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.chevron_right, color: AppColors.muted),
+        ],
+      ),
+    ),
+    const SizedBox(height: 16),
+    const Eyebrow('Vehículo y dispositivo'),
+    const SizedBox(height: 7),
+    SectionCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        children: [
+          _setting(Icons.bluetooth_outlined, 'Conexión OBD', _connectionStatus),
+          const Divider(height: 1),
+          _setting(
+            Icons.directions_car_outlined,
+            'Vehículo',
+            'Volkswagen Golf GTI',
+          ),
+        ],
+      ),
+    ),
+    const SizedBox(height: 16),
+    const Eyebrow('Alertas'),
+    const SizedBox(height: 7),
+    SectionCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        children: [
+          _switch(
+            'Mantenimiento',
+            'Service y fallas del vehículo',
+            _maintenanceAlerts,
+            (v) => setState(() => _maintenanceAlerts = v),
+          ),
+          const Divider(height: 1),
+          _switch(
+            'Viajes',
+            'Inicio y fin de cada recorrido',
+            _tripAlerts,
+            (v) => setState(() => _tripAlerts = v),
+          ),
+        ],
+      ),
+    ),
+    const SizedBox(height: 24),
+    OutlinedButton.icon(
+      onPressed: () => Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+      ),
+      icon: const Icon(Icons.logout, color: AppColors.danger),
+      label: const Text(
+        'Cerrar sesión',
+        style: TextStyle(color: AppColors.danger),
+      ),
+    ),
+  ]);
+  Widget _setting(IconData icon, String title, String subtitle) => ListTile(
+    leading: Icon(icon, color: AppColors.muted),
+    title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+    subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+    trailing: const Icon(Icons.chevron_right, color: AppColors.muted),
+  );
+  Widget _switch(
+    String title,
+    String subtitle,
+    bool value,
+    ValueChanged<bool> changed,
+  ) => SwitchListTile(
+    value: value,
+    onChanged: changed,
+    activeTrackColor: AppColors.accent,
+    title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+    subtitle: Text(subtitle),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
+  );
+  String get _initials {
+    final name = widget.nombreUsuario.trim().split('@').first;
+    return name.isEmpty
+        ? 'LM'
+        : name.substring(0, name.length.clamp(0, 2)).toUpperCase();
   }
 }
