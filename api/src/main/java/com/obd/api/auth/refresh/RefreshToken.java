@@ -20,6 +20,8 @@ import java.util.UUID;
 @AllArgsConstructor
 class RefreshToken {
 
+    // Assigned by issue() rather than generated - the service mints the id
+    // alongside the raw token it hands back to the client.
     @Id
     private UUID id;
 
@@ -41,14 +43,25 @@ class RefreshToken {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
-    static RefreshToken from(RefreshTokenDTO r) {
+    static RefreshToken issue(UUID userId, UUID familyId, String tokenHash, Instant expiresAt) {
         var e = new RefreshToken();
-        e.id = r.id(); e.userId = r.userId(); e.familyId = r.familyId();
-        e.tokenHash = r.tokenHash(); e.expiresAt = r.expiresAt(); e.revokedAt = r.revokedAt();
+        e.id = UUID.randomUUID();
+        e.userId = userId;
+        e.familyId = familyId;
+        e.tokenHash = tokenHash;
+        e.expiresAt = expiresAt;
         return e;
     }
 
-    RefreshTokenDTO toRecord() {
-        return new RefreshTokenDTO(id, userId, familyId, tokenHash, expiresAt, revokedAt);
+    boolean isRevoked() {
+        return revokedAt != null;
+    }
+
+    boolean isExpired() {
+        return expiresAt.isBefore(Instant.now());
+    }
+
+    boolean isUsable() {
+        return !isRevoked() && !isExpired();
     }
 }

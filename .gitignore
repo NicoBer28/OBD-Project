@@ -18,3 +18,5 @@ circuito/*.kicad_sch-bak
 circuito/*.fp-info-cache
 
 .devcontainer/
+### graphify ###
+graphify-out/
