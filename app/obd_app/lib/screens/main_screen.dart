@@ -422,7 +422,7 @@ Future<void> _solicitarPermisos() async {
       _rpm = event.rpm ?? 0;
       _fuel = (event.fuel ?? 0).toDouble();
       if (_speed > 0 || _rpm > 0) {
-         _connectionStatus = 'Conectado (Recibiendo datos)';
+         _connectionStatus = 'Conectado';
       }
     });
   }
@@ -825,7 +825,7 @@ Future<void> _solicitarPermisos() async {
               _SettingTile(
                 icon: AppIcons.bluetooth,
                 title: 'Conexión OBD',
-                subtitle: "Conectado",
+                subtitle: _connectionStatus,
                 onTap: () async {
                   await NativeBleBridge.iniciarVinculacion();
                 },
