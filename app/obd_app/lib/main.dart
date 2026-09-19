@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'package:obd_app/screens/login_screen.dart';
 import 'package:obd_app/screens/main_screen.dart';
 import 'package:obd_app/ui/app_theme.dart';
 
@@ -15,11 +14,16 @@ class OBDCApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'OBD-C App',
-      debugShowCheckedModeBanner: false,
-      theme: buildAppTheme(),
-      home: const MainScreen(nombreUsuario: "sixseven"),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeModeNotifier,
+      builder: (_, mode, _) => MaterialApp(
+        title: 'OBD-C App',
+        debugShowCheckedModeBanner: false,
+        theme: buildAppTheme(),
+        darkTheme: buildAppTheme(Brightness.dark),
+        themeMode: mode,
+        home: const MainScreen(nombreUsuario: 'sixseven'),
+      ),
     );
   }
 }

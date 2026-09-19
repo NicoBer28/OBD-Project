@@ -10,11 +10,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:obd_app/main.dart';
 
 void main() {
-  testWidgets('Login screen is shown', (WidgetTester tester) async {
+  testWidgets('Dashboard is shown', (WidgetTester tester) async {
     // Build our app and trigger a frame.
     await tester.pumpWidget(const OBDCApp());
 
-    expect(find.text('Bienvenido a OBD-C'), findsOneWidget);
-    expect(find.text('INGRESAR'), findsOneWidget);
+    expect(find.text('Golf GTI'), findsOneWidget);
+    expect(find.text('Volkswagen · AB 123 CD'), findsOneWidget);
   });
 }

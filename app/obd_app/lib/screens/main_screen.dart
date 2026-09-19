@@ -23,6 +23,7 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   int _tab = 0;
   bool _summary = false, _maintenanceAlerts = true, _tripAlerts = true;
+  String _period = '30 d';
   double _fuel = 75;
   int _speed = 0, _rpm = 0;
   BluetoothCharacteristic? _write, _read;
@@ -155,6 +156,320 @@ class _MainScreenState extends State<MainScreen> {
     super.dispose();
   }
 
+  void _showInviteDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Invitar al grupo'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Center(
+              child: Icon(Icons.qr_code_2, size: 160, color: AppColors.text),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Escaneá este código para unirte al auto, o enviá una invitación directa:',
+              style: TextStyle(fontSize: 13, color: AppColors.muted),
+            ),
+            const SizedBox(height: 20),
+            TextField(
+              decoration: InputDecoration(
+                labelText: 'Correo electrónico',
+                prefixIcon: const Icon(Icons.email_outlined),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.send, color: AppColors.accent),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Invitación enviada')),
+                    );
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Enlace copiado al portapapeles'),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.link),
+              label: const Text('Copiar enlace'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showStartJourneySheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+          left: 24,
+          right: 24,
+          top: 24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Configurar Viaje',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 24),
+
+            // Start Location
+            TextField(
+              decoration: InputDecoration(
+                labelText: 'Punto de partida',
+                hintText: 'Ubicación actual',
+                prefixIcon: const Icon(
+                  Icons.my_location,
+                  color: AppColors.accent,
+                ),
+                filled: true,
+                fillColor: Theme.of(context).colorScheme.surfaceContainerHighest
+                    .withOpacity(0.3),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // End Location
+            TextField(
+              decoration: InputDecoration(
+                labelText: 'Destino',
+                hintText: 'Ej: Av. Corrientes 980',
+                prefixIcon: const Icon(Icons.flag_outlined),
+                filled: true,
+                fillColor: Theme.of(context).colorScheme.surfaceContainerHighest
+                    .withOpacity(0.3),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // QR Code Section for Non-Members
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.accent.withOpacity(0.1),
+                border: Border.all(color: AppColors.accent.withOpacity(0.2)),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.qr_code_2,
+                    size: 42,
+                    color: AppColors.accent,
+                  ),
+                  const SizedBox(width: 16),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Sumar pasajeros',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                          ),
+                        ),
+                        Text(
+                          'Mostrá el QR para dividir el costo con no-miembros',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.muted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () {
+                      // TODO: Navigate to full-screen QR
+                    },
+                    icon: const Icon(
+                      Icons.arrow_forward_ios,
+                      size: 16,
+                      color: AppColors.accent,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 32),
+
+            // Start Action
+            SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.accent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  elevation: 0,
+                ),
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  'Iniciar Recorrido',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+            const SizedBox(height: 32),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _saldarCard(BuildContext context) {
+    final t = context.tokens;
+    return SectionCard(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Tu saldo pendiente',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: t.muted,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Debés \$12.400',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: t.accent2,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '3 consumos sin liquidar · Último: Nafta Super',
+                  style: TextStyle(fontSize: 11, color: t.muted),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Colors come from elevatedButtonTheme; only size/shape are overridden.
+          // minimumSize is required: the theme's Size.fromHeight(52) has an
+          // infinite minimum width, which breaks inside a Row.
+          ElevatedButton(
+            onPressed: _settleUp,
+            style: ElevatedButton.styleFrom(
+              minimumSize: const Size(0, 34),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              textStyle: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            child: const Text('Saldar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _proximoTurnoCard() {
+    final t = context.tokens;
+    return Material(
+      color: t.surface2,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: t.member1.withValues(alpha: 0.4)),
+      ),
+      child: InkWell(
+        onTap: () => setState(() => _tab = 1), // Compartido tab (calendar)
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Icon(Icons.calendar_today_rounded, size: 18, color: t.member1),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Próximo turno',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: t.muted,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'HOY · 18:00 a 21:00 hs',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        color: t.text,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: t.member1,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'Vos',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = [_car(), _shared(), _activity(), _profile()];
@@ -205,9 +520,18 @@ class _MainScreenState extends State<MainScreen> {
       PageHeader(
         title: 'Golf GTI',
         subtitle: 'Volkswagen · AB 123 CD',
-        trailing: CircleAvatar(
-          backgroundColor: AppColors.accent,
-          child: Text(_initials),
+        trailing: GestureDetector(
+          onTap: () => setState(() => _tab = 3), // Redirects to the Profile tab
+          child: CircleAvatar(
+            backgroundColor: AppColors.accent,
+            child: Text(
+              _initials,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
         ),
       ),
       const SizedBox(height: 16),
@@ -259,7 +583,7 @@ class _MainScreenState extends State<MainScreen> {
                 value: _fuel / 100,
                 minHeight: 7,
                 color: AppColors.accent,
-                backgroundColor: const Color(0xFFF0F3F1),
+                backgroundColor: AppPalette.surface2,
               ),
             ),
           ],
@@ -310,41 +634,10 @@ class _MainScreenState extends State<MainScreen> {
         ),
       ),
       const SizedBox(height: 10),
-      Container(
-        padding: const EdgeInsets.all(13),
-        decoration: BoxDecoration(
-          color: AppColors.accentSubtle,
-          borderRadius: BorderRadius.circular(15),
-        ),
-        child: const Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Eyebrow('Tu próximo turno'),
-                  SizedBox(height: 3),
-                  Text(
-                    'Hoy · 18:00 – 21:00',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
-            ),
-            Text(
-              'Calendario ›',
-              style: TextStyle(
-                color: AppColors.accent,
-                fontWeight: FontWeight.w700,
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ),
-      ),
+      _proximoTurnoCard(),
       const SizedBox(height: 16),
       ElevatedButton.icon(
-        onPressed: () {},
+        onPressed: () => _showStartJourneySheet(context),
         icon: const Icon(Icons.play_arrow_rounded),
         label: const Text('Iniciar viaje'),
       ),
@@ -464,139 +757,269 @@ class _MainScreenState extends State<MainScreen> {
   Widget _shared() => _page(const ValueKey('shared'), [
     PageHeader(
       title: 'Compartido',
-      subtitle: 'Familia X· 4 miembros',
-      trailing: IconButton(
-        onPressed: () {},
-        icon: const Icon(Icons.person_add_alt_1),
-      ),
+      subtitle: 'Familia · 4 miembros',
+      // The trailing IconButton has been removed entirely
     ),
     const SizedBox(height: 18),
     Row(
       children: [
-        _avatar('LM', AppColors.accent),
-        _avatar('SM', const Color(0xFF6D4AFF)),
-        _avatar('MG', const Color(0xFFE05A3E)),
-        _avatar('PA', const Color(0xFFC2820B)),
+        SizedBox(
+          width: 93, // Squeezed width constraint
+          height: 33,
+          child: Stack(
+            children: [
+              Positioned(
+                left: 0,
+                child: _avatar('LM', AppPalette.member1, hasBorder: false),
+              ),
+              Positioned(
+                left: 20,
+                child: _avatar('SM', AppPalette.member2, hasBorder: false),
+              ),
+              Positioned(
+                left: 40,
+                child: _avatar('MG', AppPalette.member3, hasBorder: false),
+              ),
+              Positioned(
+                left: 60,
+                child: _avatar('PA', AppPalette.member4, hasBorder: false),
+              ),
+            ],
+          ),
+        ),
         const SizedBox(width: 8),
-        const Text(
-          'Invitar por QR o link',
-          style: TextStyle(fontSize: 12, color: AppColors.muted),
+        InkWell(
+          onTap: _showInviteDialog,
+          borderRadius: BorderRadius.circular(16.5),
+          child: Container(
+            width: 33,
+            height: 33,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: AppColors.muted.withValues(alpha: 0.4),
+                width: 1.5,
+              ),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(Icons.add, size: 18, color: AppColors.muted),
+          ),
+        ),
+        const SizedBox(width: 8),
+        const Expanded(
+          child: Text(
+            'Invitar por QR o link',
+            style: TextStyle(fontSize: 12, color: AppColors.muted),
+          ),
         ),
       ],
     ),
     const SizedBox(height: 16),
+    _fuelSplitCard(),
+    const SizedBox(height: 10),
+    _saldarCard(context),
+    const SizedBox(height: 10),
     SectionCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Eyebrow('Hoy tiene el auto'),
-          const SizedBox(height: 9),
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _avatar('SM', const Color(0xFF6D4AFF)),
-              const SizedBox(width: 9),
-              const Expanded(
-                child: Text(
-                  'Sofía Gimenez',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
-              const Text(
-                'Hasta 18:00',
-                style: TextStyle(color: AppColors.muted, fontSize: 12),
+              const Eyebrow('Esta semana'),
+              TextButton.icon(
+                onPressed: () {},
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Reservar'),
               ),
             ],
           ),
-        ],
-      ),
-    ),
-    const SizedBox(height: 10),
-    SectionCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Eyebrow('Próximos turnos'),
-          const SizedBox(height: 10),
-          _schedule('Hoy', '18:00 – 21:00', 'Lucas'),
+          _calendarSlot('HOY', '18–21', 'Vos', AppPalette.member1),
           const Divider(),
-          _schedule('Mañana', '08:00 – 11:00', 'Martín'),
+          _calendarSlot('SÁB', '09–14', 'Sofía · Pilar', AppPalette.member2),
           const Divider(),
-          _schedule('Vie', '19:00 – 23:00', 'Sofía'),
-        ],
-      ),
-    ),
-    const SizedBox(height: 10),
-    SectionCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Eyebrow('Gastos de septiembre'),
-          const SizedBox(height: 7),
-          const Text(
-            r'$ 84.200',
-            style: TextStyle(fontSize: 27, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: const LinearProgressIndicator(
-              value: .68,
-              minHeight: 9,
-              color: AppColors.accent,
-              backgroundColor: Color(0xFF6D4AFF),
-            ),
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            'Lucas 42% · Sofía 31% · Martín 18% · Paula 9%',
-            style: TextStyle(fontSize: 11, color: AppColors.muted),
-          ),
+          _calendarSlot('DOM', 'todo', 'Martín', AppPalette.member3),
+          const Divider(),
+          _calendarSlot('LUN', '—', 'Libre', AppPalette.surface2),
         ],
       ),
     ),
   ]);
-  Widget _avatar(String name, Color color) => Container(
-    margin: const EdgeInsets.only(right: 3),
-    width: 33,
-    height: 33,
-    decoration: BoxDecoration(
-      color: color,
-      shape: BoxShape.circle,
-      border: Border.all(color: Colors.white, width: 2),
-    ),
-    alignment: Alignment.center,
-    child: Text(
-      name,
-      style: const TextStyle(
-        color: Colors.white,
-        fontSize: 10,
-        fontWeight: FontWeight.w700,
-      ),
-    ),
-  );
-  Widget _schedule(String day, String time, String person) => Row(
-    children: [
-      SizedBox(
-        width: 58,
-        child: Text(
-          day,
-          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
-        ),
-      ),
-      Expanded(child: Text(time, style: const TextStyle(fontSize: 12))),
-      Text(
-        person,
-        style: const TextStyle(fontSize: 12, color: AppColors.muted),
-      ),
-    ],
-  );
 
+  Widget _fuelSplitCard() => SectionCard(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Eyebrow('Nafta · septiembre'),
+            Text(
+              '142 L',
+              style: TextStyle(fontSize: 11, color: AppColors.muted),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        const Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              r'$84.200',
+              style: TextStyle(
+                fontSize: 36,
+                fontWeight: FontWeight.w800,
+              ), // Increased size and weight
+            ),
+            SizedBox(width: 7),
+            Padding(
+              padding: EdgeInsets.only(
+                bottom: 6,
+              ), // Adjusted to align with the larger text
+              child: Text(
+                'total del grupo',
+                style: TextStyle(fontSize: 11, color: AppColors.muted),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 11),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: const SizedBox(
+            height: 9,
+            child: Row(
+              children: [
+                Expanded(
+                  flex: 42,
+                  child: ColoredBox(color: AppPalette.member1),
+                ),
+                SizedBox(width: 2),
+                Expanded(
+                  flex: 31,
+                  child: ColoredBox(color: AppPalette.member2),
+                ),
+                SizedBox(width: 2),
+                Expanded(
+                  flex: 18,
+                  child: ColoredBox(color: AppPalette.member3),
+                ),
+                SizedBox(width: 2),
+                Expanded(flex: 9, child: ColoredBox(color: AppPalette.member4)),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        _fuelMember('LM', 'Vos', '42%', r'$35.364', AppPalette.member1),
+        _fuelMember('SM', 'Sofía', '31%', r'$26.102', AppPalette.member2),
+        _fuelMember('MG', 'Martín', '18%', r'$15.156', AppPalette.member3),
+        _fuelMember('PA', 'Papá', '9%', r'$7.578', AppPalette.member4),
+      ],
+    ),
+  );
+  Widget _fuelMember(
+    String initials,
+    String name,
+    String percent,
+    String amount,
+    Color color,
+  ) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Row(
+      children: [
+        _avatar(initials, color),
+        const SizedBox(width: 5),
+        Expanded(
+          child: Text(
+            name,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ),
+        SizedBox(
+          width: 34,
+          child: Text(
+            percent,
+            style: const TextStyle(fontSize: 11, color: AppColors.muted),
+          ),
+        ),
+        Text(
+          amount,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+        ),
+      ],
+    ),
+  );
+  Widget _calendarSlot(String day, String time, String person, Color color) =>
+      Row(
+        children: [
+          SizedBox(
+            width: 51,
+            child: Text(
+              '$day\n$time',
+              style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: AppColors.muted,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Container(
+              height: 29,
+              padding: const EdgeInsets.symmetric(horizontal: 9),
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              alignment: Alignment.centerLeft,
+              child: Text(
+                person,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: person == 'Libre' ? AppColors.muted : Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+  void _settleUp() => ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(
+      content: Text('Pago registrado. Actualizaremos el saldo del grupo.'),
+    ),
+  );
+  Widget _avatar(String name, Color color, {bool hasBorder = true}) =>
+      Container(
+        width: 33,
+        height: 33,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          border: hasBorder
+              ? Border.all(
+                  color: Theme.of(context).colorScheme.surface,
+                  width: 2,
+                )
+              : null,
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          name,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
   Widget _activity() => _page(const ValueKey('activity'), [
     PageHeader(title: 'Actividad', subtitle: 'Golf GTI · últimos 30 días'),
     const SizedBox(height: 16),
     Container(
       decoration: BoxDecoration(
-        color: const Color(0xFFF0F3F1),
+        color: AppPalette.surface2,
         borderRadius: BorderRadius.circular(12),
       ),
       padding: const EdgeInsets.all(3),
@@ -607,6 +1030,7 @@ class _MainScreenState extends State<MainScreen> {
         ],
       ),
     ),
+    if (_summary) ...[const SizedBox(height: 12), _periodPicker()],
     const SizedBox(height: 16),
     if (_summary) ..._summaryContent() else ..._tripContent(),
   ]);
@@ -638,16 +1062,71 @@ class _MainScreenState extends State<MainScreen> {
     SectionCard(
       child: Column(
         children: [
-          _trip('Hoy', 'Casa → Trabajo', '12,4 km', '18 min'),
+          _trip(
+            'Hoy',
+            'Casa → Trabajo',
+            '12,4 km',
+            '18 min',
+            const ['LM'],
+            const [AppPalette.member1],
+          ),
           const Divider(),
-          _trip('Ayer', 'Ruta costera', '42,8 km', '51 min'),
+          _trip(
+            'Ayer',
+            'Ruta costera',
+            '42,8 km',
+            '51 min',
+            const ['SM', 'LM'],
+            const [AppPalette.member2, AppPalette.member1],
+          ),
           const Divider(),
-          _trip('Dom, 31 ago', 'Centro → Norte', '8,6 km', '16 min'),
+          _trip(
+            'Dom, 31 ago',
+            'Centro → Norte',
+            '8,6 km',
+            '16 min',
+            const ['MG'],
+            const [AppPalette.member3],
+          ),
+          const Divider(),
+          _trip(
+            'Vie, 29 ago',
+            'Belgrano → Palermo',
+            '15,7 km',
+            '26 min',
+            const ['LM', 'SM'],
+            const [AppPalette.member1, AppPalette.member2],
+          ),
+          const Divider(),
+          _trip(
+            'Jue, 28 ago',
+            'Trabajo → Gimnasio',
+            '6,2 km',
+            '14 min',
+            const ['SM'],
+            const [AppPalette.member2],
+          ),
+          const Divider(),
+          _trip(
+            'Mié, 27 ago',
+            'Centro → Tigre',
+            '31,4 km',
+            '43 min',
+            const ['MG', 'PA'],
+            const [AppPalette.member3, AppPalette.member4],
+          ),
         ],
       ),
     ),
   ];
-  Widget _trip(String day, String route, String km, String duration) => Row(
+  Widget _trip(
+    String day,
+    String route,
+    String km,
+    String duration,
+    List<String> initials,
+    List<Color> colors,
+  ) => Row(
     children: [
       SizedBox(
         width: 75,
@@ -656,6 +1135,8 @@ class _MainScreenState extends State<MainScreen> {
           style: const TextStyle(fontSize: 11, color: AppColors.muted),
         ),
       ),
+      _tripAvatars(initials, colors),
+      const SizedBox(width: 5),
       Expanded(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -677,41 +1158,210 @@ class _MainScreenState extends State<MainScreen> {
       ),
     ],
   );
+  Widget _tripAvatars(List<String> initials, List<Color> colors) => SizedBox(
+    width: initials.length == 1 ? 33 : 49,
+    height: 33,
+    child: Stack(
+      children: List.generate(
+        initials.length,
+        (index) => Positioned(
+          left: index * 17.0,
+          child: Container(
+            width: 33,
+            height: 33,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: colors[index],
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Theme.of(context).colorScheme.surface,
+                width: 2,
+              ),
+            ),
+            child: Text(
+              initials[index],
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  Widget _periodPicker() => SizedBox(
+    height: 34,
+    child: ListView.separated(
+      scrollDirection: Axis.horizontal,
+      itemCount: 5,
+      separatorBuilder: (_, index) => const SizedBox(width: 6),
+      itemBuilder: (_, index) {
+        const periods = ['7 d', '30 d', '3 m', '6 m', '1 a'];
+        final value = periods[index];
+        final selected = value == _period;
+        return ChoiceChip(
+          label: Text(value),
+          selected: selected,
+          onSelected: (_) => setState(() => _period = value),
+          selectedColor: AppColors.accent,
+          labelStyle: TextStyle(
+            color: selected ? Colors.white : AppColors.muted,
+            fontWeight: FontWeight.w700,
+            fontSize: 12,
+          ),
+          side: BorderSide(
+            color: selected ? AppColors.accent : AppColors.border,
+          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+        );
+      },
+    ),
+  );
   List<Widget> _summaryContent() => [
     Row(
       children: [
-        Expanded(child: _stat('Distancia', '1.284', 'km', '+12%')),
+        Expanded(
+          child: _stat(
+            Icons.route_outlined,
+            'Distancia',
+            '1.284',
+            'km',
+            '↑ 12% vs. agosto',
+            AppColors.success,
+          ),
+        ),
         const SizedBox(width: 8),
-        Expanded(child: _stat('Viajes', '37', '', '+4 vs. ago')),
+        Expanded(
+          child: _stat(
+            Icons.schedule_outlined,
+            'Al volante',
+            '38',
+            'h 20 min',
+            '↑ 8%',
+            AppColors.success,
+          ),
+        ),
       ],
     ),
     const SizedBox(height: 8),
     Row(
       children: [
-        Expanded(child: _stat('Combustible', '118', 'L', '-8%')),
+        Expanded(
+          child: _stat(
+            Icons.water_drop_outlined,
+            'Nafta',
+            '142',
+            'L · 11,1 L/100',
+            '↓ 6% de consumo',
+            AppColors.success,
+          ),
+        ),
         const SizedBox(width: 8),
-        Expanded(child: _stat('Promedio', '9,2', 'L/100', 'estable')),
+        Expanded(
+          child: _stat(
+            Icons.location_on_outlined,
+            'Más visitado',
+            'Centro',
+            '',
+            '8 viajes · 96 km',
+            AppColors.muted,
+          ),
+        ),
       ],
     ),
     const SizedBox(height: 12),
-    SectionCard(
+    _consumptionChart(),
+    const SizedBox(height: 12),
+    _driverBreakdown(),
+  ];
+  Widget _stat(
+    IconData icon,
+    String label,
+    String value,
+    String unit,
+    String delta,
+    Color deltaColor,
+  ) => SectionCard(
+    padding: const EdgeInsets.all(11),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 13, color: AppColors.muted),
+            const SizedBox(width: 4),
+            Eyebrow(label),
+          ],
+        ),
+        const SizedBox(height: 7),
+        RichText(
+          text: TextSpan(
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+            children: [
+              TextSpan(
+                text: value,
+                style: const TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              TextSpan(
+                text: ' $unit',
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.muted,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          delta,
+          style: TextStyle(
+            fontSize: 10,
+            color: deltaColor,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _consumptionChart() {
+    const values = [38, 52, 31, 64, 47, 80, 36, 27, 57, 69, 44, 100, 61, 49];
+    return SectionCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Eyebrow('Distancia por semana'),
-          const SizedBox(height: 16),
+          const Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Eyebrow('Consumo por día'),
+              Text(
+                'pico: sáb 14',
+                style: TextStyle(fontSize: 11, color: AppColors.muted),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
           SizedBox(
-            height: 100,
+            height: 104,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
-              children: [32, 54, 43, 76, 61, 88, 67]
+              children: values
                   .map(
-                    (v) => Expanded(
+                    (value) => Expanded(
                       child: Container(
                         margin: const EdgeInsets.symmetric(horizontal: 2),
-                        height: v.toDouble(),
+                        height: value.toDouble() * .78,
                         decoration: BoxDecoration(
-                          color: AppColors.accent,
+                          color: value == 100
+                              ? AppColors.accent
+                              : AppColors.accent.withValues(alpha: .72),
                           borderRadius: const BorderRadius.vertical(
                             top: Radius.circular(4),
                           ),
@@ -722,52 +1372,99 @@ class _MainScreenState extends State<MainScreen> {
                   .toList(),
             ),
           ),
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '1 sep',
+                  style: TextStyle(fontSize: 10, color: AppColors.muted),
+                ),
+                Text(
+                  '15 sep',
+                  style: TextStyle(fontSize: 10, color: AppColors.muted),
+                ),
+                Text(
+                  '30 sep',
+                  style: TextStyle(fontSize: 10, color: AppColors.muted),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
-    ),
-  ];
-  Widget _stat(String label, String value, String unit, String delta) =>
-      SectionCard(
-        padding: const EdgeInsets.all(11),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    );
+  }
+
+  Widget _driverBreakdown() => SectionCard(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Eyebrow('Kilómetros por conductor'),
+        const SizedBox(height: 12),
+        Row(
           children: [
-            Eyebrow(label),
-            const SizedBox(height: 7),
-            RichText(
-              text: TextSpan(
-                style: const TextStyle(color: AppColors.text),
-                children: [
-                  TextSpan(
-                    text: value,
-                    style: const TextStyle(
-                      fontSize: 21,
-                      fontWeight: FontWeight.w700,
-                    ),
+            SizedBox(
+              width: 94,
+              height: 94,
+              child: CustomPaint(
+                painter: _DonutPainter(),
+                child: const Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '1.284',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Text(
+                        'km',
+                        style: TextStyle(fontSize: 10, color: AppColors.muted),
+                      ),
+                    ],
                   ),
-                  TextSpan(
-                    text: ' $unit',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.muted,
-                    ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Column(
+                children: [
+                  _LegendDot(
+                    color: AppColors.accent,
+                    name: 'Vos',
+                    value: '539 km',
+                  ),
+                  SizedBox(height: 7),
+                  _LegendDot(
+                    color: AppPalette.member2,
+                    name: 'Sofía',
+                    value: '398 km',
+                  ),
+                  SizedBox(height: 7),
+                  _LegendDot(
+                    color: AppPalette.member3,
+                    name: 'Martín',
+                    value: '231 km',
+                  ),
+                  SizedBox(height: 7),
+                  _LegendDot(
+                    color: AppPalette.member4,
+                    name: 'Papá',
+                    value: '116 km',
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 4),
-            Text(
-              delta,
-              style: const TextStyle(
-                fontSize: 10,
-                color: AppColors.success,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
           ],
         ),
-      );
+      ],
+    ),
+  );
 
   Widget _profile() => _page(const ValueKey('profile'), [
     PageHeader(title: 'Perfil', subtitle: widget.nombreUsuario),
@@ -821,6 +1518,23 @@ class _MainScreenState extends State<MainScreen> {
             'Volkswagen Golf GTI',
           ),
         ],
+      ),
+    ),
+    const SizedBox(height: 16),
+    const Eyebrow('Apariencia'),
+    const SizedBox(height: 7),
+    ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeModeNotifier,
+      builder: (_, mode, _) => SectionCard(
+        padding: EdgeInsets.zero,
+        child: _switch(
+          'Modo oscuro',
+          'Usar la interfaz oscura',
+          mode == ThemeMode.dark,
+          (enabled) => themeModeNotifier.value = enabled
+              ? ThemeMode.dark
+              : ThemeMode.light,
+        ),
       ),
     ),
     const SizedBox(height: 16),
@@ -884,4 +1598,65 @@ class _MainScreenState extends State<MainScreen> {
         ? 'LM'
         : name.substring(0, name.length.clamp(0, 2)).toUpperCase();
   }
+}
+
+class _LegendDot extends StatelessWidget {
+  final Color color;
+  final String name;
+  final String value;
+  const _LegendDot({
+    required this.color,
+    required this.name,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      ),
+      const SizedBox(width: 7),
+      Expanded(
+        child: Text(
+          name,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+        ),
+      ),
+      Text(
+        value,
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+      ),
+    ],
+  );
+}
+
+class _DonutPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    const colors = [
+      AppPalette.member1,
+      AppPalette.member2,
+      AppPalette.member3,
+      AppPalette.member4,
+    ];
+    const parts = [.42, .31, .18, .09];
+    final rect = Offset.zero & size;
+    var start = -1.5708;
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 16
+      ..strokeCap = StrokeCap.butt;
+    for (var index = 0; index < parts.length; index++) {
+      paint.color = colors[index];
+      final sweep = parts[index] * 6.28318 - .025;
+      canvas.drawArc(rect.deflate(8), start, sweep, false, paint);
+      start += sweep + .025;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
