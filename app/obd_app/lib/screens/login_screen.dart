@@ -4,7 +4,10 @@ import './register_screen.dart';
 import './main_screen.dart';
 
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
+
+import '../ui/app_theme.dart';
 
 // Login: valida las credenciales localmente y conserva el nombre de usuario.
 // Actualmente no existe una autenticación contra un servidor.
@@ -31,82 +34,64 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  // void _ingresar() async {
-  //   // Si la validación local es correcta, se inicia el flujo BLE.
-  //   if (_formKey.currentState!.validate()) {
-  //     final userEmail = _emailController.text.trim();
-  //     final userPassword = _passwordController.text;
-      
-  //     final navigator = Navigator.of(context);
-  //     final scaffoldMessenger = ScaffoldMessenger.of(context);
-
-  //     final url = Uri.parse('http://192.168.1.19:8080/api/v1/auth/login');
-
-  //     try {
-  //       // Disparamos la petición a la API
-  //       final response = await http.post(
-  //         url,
-  //         headers: {'Content-Type': 'application/json'},
-  //         body: jsonEncode({
-  //           'userMail': userEmail,
-  //           'userPassword': userPassword,
-  //         }),
-  //       );
-
-  //       // Si las credenciales coinciden en la base de datos, el 200 es que salio todo bien
-  //       if (response.statusCode == 200) {
-  //         print('Login exitoso! Tokens: ${response.body}');
-
-  //         // Primero se busca el dispositivo OBD antes de mostrar el panel.
-  //         navigator.pushReplacement(
-  //           MaterialPageRoute(
-  //             builder: (context) => MainScreen(
-  //               nombreUsuario: userEmail
-  //             ),
-  //           ),
-  //         );
-  //       } else if (response.statusCode == 401) {
-  //         // 401 Unauthorized: email o contraseña incorrectos
-  //         scaffoldMessenger.showSnackBar(
-  //           const SnackBar(
-  //             content: Text('Correo o contraseña incorrectos'),
-  //             backgroundColor: Colors.red,
-  //           ),
-  //         );
-  //       } else {
-  //         // eror del servidor
-  //         scaffoldMessenger.showSnackBar(
-  //           SnackBar(
-  //             content: Text('Error del servidor (${response.statusCode})'),
-  //             backgroundColor: Colors.orange,
-  //           ),
-  //         );
-  //       }
-  //     } catch (error) {
-  //       // problema de wifi o servidor apagado
-  //       scaffoldMessenger.showSnackBar(
-  //         const SnackBar(
-  //           content: Text('No se pudo conectar. Revisá tu conexión Wi-Fi.'),
-  //           backgroundColor: Colors.red,
-  //         ),
-  //       );
-  //     }
-  //   }
-  // }
-void _ingresar() {
+void _ingresar() async {
     // Si la validación local de formato pasa, navegamos directo sin llamar al backend
     if (_formKey.currentState!.validate()) {
       final userEmail = _emailController.text.trim();
-      final navigator = Navigator.of(context);
+      final userPassword = _passwordController.text;
 
-      // Salto directo a la pantalla de escaneo Bluetooth
-      navigator.pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => MainScreen(
-            nombreUsuario: userEmail
+      final navigator = Navigator.of(context);
+      final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+      final url = Uri.parse('http://192.168.1.19:8080/api/v1/auth/login');
+
+      try {
+        // Disparamos la petición a la API
+        final response = await http.post(
+          url,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'userMail': userEmail,
+            'userPassword': userPassword,
+          }),
+        );
+
+        // Si las credenciales coinciden en la base de datos, el 200 es que salio todo bien
+        if (response.statusCode == 200) {
+          // Primero se busca el dispositivo OBD antes de mostrar el panel.
+          navigator.pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => MainScreen(
+                nombreUsuario: userEmail
+              ),
+            ),
+          );
+        } else if (response.statusCode == 401) {
+          // 401 Unauthorized: email o contraseña incorrectos
+          scaffoldMessenger.showSnackBar(
+            const SnackBar(
+              content: Text('Correo o contraseña incorrectos'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        } else {
+          // eror del servidor
+          scaffoldMessenger.showSnackBar(
+            SnackBar(
+              content: Text('Error del servidor (${response.statusCode})'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      } catch (error) {
+        // problema de wifi o servidor apagado
+        scaffoldMessenger.showSnackBar(
+          const SnackBar(
+            content: Text('No se pudo conectar. Revisá tu conexión Wi-Fi.'),
+            backgroundColor: Colors.red,
           ),
-        ),
-      );
+        );
+      }
     }
   }
 
@@ -115,23 +100,40 @@ void _ingresar() {
     return Scaffold(
       body: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(32.0),
+          padding: const EdgeInsets.all(24.0),
           child: Form(
             key: _formKey,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(
-                  Icons.directions_car,
-                  size: 80,
-                  color: Colors.blueAccent,
+                Container(
+                  width: 68,
+                  height: 68,
+                  decoration: BoxDecoration(
+                    color: AppColors.accentSubtle,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Icon(
+                    Icons.directions_car_outlined,
+                    size: 36,
+                    color: AppColors.accent,
+                  ),
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 20),
                 const Text(
                   'Bienvenido a OBD-C',
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    fontSize: 27,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.5,
+                  ),
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 6),
+                const Text(
+                  'Ingresá para ver cómo está tu auto.',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+                const SizedBox(height: 28),
 
                 // Input de Email
                 TextFormField(
@@ -170,18 +172,19 @@ void _ingresar() {
                     return null;
                   },
                 ),
-                const SizedBox(height: 32),
-                
-                const SizedBox(height: 32),
+                const SizedBox(height: 28),
                 // Botón de Ingreso
                 SizedBox(
                   width: double.infinity,
-                  height: 50,
+                  height: 52,
                   child: ElevatedButton(
                     onPressed: _ingresar,
                     child: const Text(
-                      'Ingresar',
-                      style: TextStyle(fontSize: 18),
+                      'INGRESAR',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ),

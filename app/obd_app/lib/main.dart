@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
-import 'package:obd_app/screens/login_screen.dart';
+import 'package:obd_app/screens/main_screen.dart';
+import 'package:obd_app/ui/app_theme.dart';
 
 void main() {
   // Punto de entrada de Dart. Flutter comienza construyendo OBDCApp.
@@ -13,18 +14,16 @@ class OBDCApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'OBD-C App',
-      debugShowCheckedModeBanner: false,
-      // Tema global: colores oscuros para entorno automotriz
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.blueAccent,
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeModeNotifier,
+      builder: (_, mode, _) => MaterialApp(
+        title: 'OBD-C App',
+        debugShowCheckedModeBanner: false,
+        theme: buildAppTheme(),
+        darkTheme: buildAppTheme(Brightness.dark),
+        themeMode: mode,
+        home: const MainScreen(nombreUsuario: 'sixseven'),
       ),
-      home: const LoginScreen(),
     );
   }
 }

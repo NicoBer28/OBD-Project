@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
+
+import '../ui/app_theme.dart';
 
 // Pantalla de Registro: permite al usuario crear una cuenta validando
 // que los campos de nombre, correo y contraseña cumplan los requisitos básicos.
@@ -17,11 +20,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _formKey = GlobalKey<FormState>();
 
   // Los controllers permiten leer el contenido de los campos de texto.
-  final _nombreController = TextEditingController();   // Para userName
+  final _nombreController = TextEditingController(); // Para userName
   final _apellidoController = TextEditingController(); // Para userLastName
-  final _emailController = TextEditingController();    // Para userEMail
+  final _emailController = TextEditingController(); // Para userEMail
   final _passwordController = TextEditingController(); // Para userPassword
-  final _telefonoController = TextEditingController(); // Para userPhone (Opcional)
+  final _telefonoController =
+      TextEditingController(); // Para userPhone (Opcional)
 
   // Los controllers deben liberarse cuando el State deja de existir.
   @override
@@ -51,20 +55,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
       // Armamos la URL
       final url = Uri.parse('http://192.168.1.19:8080/api/v1/auth/register');
-      
+
       try {
         // 2. Disparamos la petición HTTP POST
         // el await para todo el codigo hasta que java responda
         final response = await http.post(
           url,
-          headers: {'Content-Type': 'application/json'}, // Le avisamos a Java que le mandamos un JSON
+          headers: {
+            'Content-Type': 'application/json',
+          }, // Le avisamos a Java que le mandamos un JSON
           body: jsonEncode({
             'userName': userName,
             'userLastName': userLastName,
             'userEMail': userEMail,
             'userPassword': userPassword,
             // Solo mandamos el teléfono si el usuario escribió algo
-            if (userPhone.isNotEmpty) 'userPhone': userPhone, 
+            if (userPhone.isNotEmpty) 'userPhone': userPhone,
           }),
         );
 
@@ -77,10 +83,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
               backgroundColor: Colors.green,
             ),
           );
-          // Como venimos desde la pantalla de Login usando Navigator.push, 
+          // Como venimos desde la pantalla de Login usando Navigator.push,
           // navigator.pop() cierra esta pantalla y nos devuelve al Login.
           navigator.pop();
-        } else if(response.statusCode == 409){
+        } else if (response.statusCode == 409) {
           // Si devuelve 409 Email ya existe
           scaffoldMessenger.showSnackBar(
             const SnackBar(
@@ -107,31 +113,56 @@ class _RegisterScreenState extends State<RegisterScreen> {
         );
       }
     }
-    
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Crear Cuenta'),
-      ),
+      appBar: AppBar(title: const Text('Crear Cuenta')),
       body: Center(
         // SingleChildScrollView evita que el teclado tape los botones al escribir.
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(32.0),
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
           child: Form(
             key: _formKey, // Conectamos el formulario con nuestra llave maestra
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 // Icono decorativo al igual que en el login
-                const Icon(
-                  Icons.person_add,
-                  size: 80,
-                  color: Colors.blueAccent,
+                Container(
+                  width: 62,
+                  height: 62,
+                  decoration: BoxDecoration(
+                    color: AppColors.accentSubtle,
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: const Icon(
+                    Icons.person_add_alt_1_outlined,
+                    size: 32,
+                    color: AppColors.accent,
+                  ),
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 18),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Creá tu cuenta',
+                    style: TextStyle(
+                      fontSize: 25,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 5),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Empezá a conocer mejor tu auto.',
+                    style: TextStyle(color: AppColors.muted),
+                  ),
+                ),
+                const SizedBox(height: 26),
 
                 // Campo: Nombre (userName)
                 TextFormField(
@@ -170,7 +201,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 // Campo: Correo Electrónico (userEMail)
                 TextFormField(
                   controller: _emailController,
-                  keyboardType: TextInputType.emailAddress, // Muestra el teclado con el "@"
+                  keyboardType: TextInputType
+                      .emailAddress, // Muestra el teclado con el "@"
                   decoration: const InputDecoration(
                     labelText: 'Correo electrónico',
                     border: OutlineInputBorder(),
@@ -222,12 +254,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 // Botón de Registro
                 SizedBox(
                   width: double.infinity, // Ocupa todo el ancho disponible
-                  height: 50,
+                  height: 52,
                   child: ElevatedButton(
                     onPressed: _registrarse,
                     child: const Text(
                       'REGISTRARSE',
-                      style: TextStyle(fontSize: 18),
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ),
