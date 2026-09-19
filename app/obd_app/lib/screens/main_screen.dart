@@ -8,471 +8,716 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../ui/app_theme.dart';
 import 'login_screen.dart';
 
+/// ---------------------------------------------------------------------------
+/// BLE constants
+/// ---------------------------------------------------------------------------
+
 const _uartServiceUuid = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E';
 const _uartWriteUuid = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E';
 const _uartReadUuid = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E';
 
+/// ---------------------------------------------------------------------------
+/// UI / domain data
+/// ---------------------------------------------------------------------------
+
+class CarData {
+  final String name;
+  final String brand;
+  final String plate;
+  final double fuelPercent;
+  final double fuelCapacityLiters;
+  final double kmPerLiter;
+  final double batteryVoltage;
+  final String service;
+  final String parkingAddress;
+  final String parkingMeta;
+  final String parkedBy;
+  final ScheduleSlot? nextTurn;
+
+  const CarData({
+    required this.name,
+    required this.brand,
+    required this.plate,
+    required this.fuelPercent,
+    required this.fuelCapacityLiters,
+    required this.kmPerLiter,
+    required this.batteryVoltage,
+    required this.service,
+    required this.parkingAddress,
+    required this.parkingMeta,
+    required this.parkedBy,
+    this.nextTurn,
+  });
+
+  int get autonomyKm =>
+      (fuelPercent / 100 * fuelCapacityLiters * kmPerLiter).round();
+
+  double get fuelLiters => fuelPercent / 100 * fuelCapacityLiters;
+}
+
+class MemberData {
+  final String initials;
+  final String name;
+  final Color color;
+  final double fuelShare;
+  final String fuelAmount;
+
+  const MemberData({
+    required this.initials,
+    required this.name,
+    required this.color,
+    required this.fuelShare,
+    required this.fuelAmount,
+  });
+}
+
+class FuelSummaryData {
+  final String periodLabel;
+  final double liters;
+  final String total;
+  final List<MemberData> members;
+
+  const FuelSummaryData({
+    required this.periodLabel,
+    required this.liters,
+    required this.total,
+    required this.members,
+  });
+}
+
+class ScheduleSlot {
+  final String day;
+  final String time;
+  final String person;
+  final Color color;
+  final bool available;
+
+  const ScheduleSlot({
+    required this.day,
+    required this.time,
+    required this.person,
+    required this.color,
+    this.available = false,
+  });
+}
+
+class TripData {
+  final String day;
+  final String route;
+  final String distance;
+  final String duration;
+  final List<MemberData> drivers;
+
+  const TripData({
+    required this.day,
+    required this.route,
+    required this.distance,
+    required this.duration,
+    required this.drivers,
+  });
+}
+
+class ActivitySummaryData {
+  final String distance;
+  final String drivingTime;
+  final String fuel;
+  final String mostVisited;
+  final List<double> consumption;
+  final List<MemberDistance> driverDistances;
+
+  const ActivitySummaryData({
+    required this.distance,
+    required this.drivingTime,
+    required this.fuel,
+    required this.mostVisited,
+    required this.consumption,
+    required this.driverDistances,
+  });
+}
+
+class MemberDistance {
+  final MemberData member;
+  final String distance;
+
+  const MemberDistance(this.member, this.distance);
+}
+
+/// ---------------------------------------------------------------------------
+/// Demo data
+///
+/// Keeping this separate from the UI makes it easy to replace later with
+/// API/database/OBD data without changing the widgets.
+/// ---------------------------------------------------------------------------
+
+class DemoData {
+  static List<MemberData> get members => [
+    const MemberData(
+      initials: 'LM',
+      name: 'Vos',
+      color: AppPalette.member1,
+      fuelShare: .42,
+      fuelAmount: r'$35.364',
+    ),
+    const MemberData(
+      initials: 'SM',
+      name: 'Sofía',
+      color: AppPalette.member2,
+      fuelShare: .31,
+      fuelAmount: r'$26.102',
+    ),
+    const MemberData(
+      initials: 'MG',
+      name: 'Martín',
+      color: AppPalette.member3,
+      fuelShare: .18,
+      fuelAmount: r'$15.156',
+    ),
+    const MemberData(
+      initials: 'PA',
+      name: 'Papá',
+      color: AppPalette.member4,
+      fuelShare: .09,
+      fuelAmount: r'$7.578',
+    ),
+  ];
+
+  static const car = CarData(
+    name: 'Golf GTI',
+    brand: 'Volkswagen',
+    plate: 'AB 123 CD',
+    fuelPercent: 88,
+    fuelCapacityLiters: 52,
+    kmPerLiter: 9,
+    batteryVoltage: 12.4,
+    service: '2.100 km',
+    parkingAddress: 'Av. Corrientes 1234',
+    parkingMeta: 'a 600 m tuyo',
+    parkedBy: 'Sofía',
+    nextTurn: ScheduleSlot(
+      day: 'HOY',
+      time: '18:00 – 21:00',
+      person: 'Vos',
+      color: AppPalette.member1,
+    ),
+  );
+
+  static FuelSummaryData get fuel => FuelSummaryData(
+    periodLabel: 'septiembre',
+    liters: 142,
+    total: r'$84.200',
+    members: members,
+  );
+
+  static const schedule = [
+    ScheduleSlot(
+      day: 'HOY',
+      time: '18–21',
+      person: 'Vos',
+      color: AppPalette.member1,
+    ),
+    ScheduleSlot(
+      day: 'SÁB',
+      time: '09–14',
+      person: 'Sofía · Pilar',
+      color: AppPalette.member2,
+    ),
+    ScheduleSlot(
+      day: 'DOM',
+      time: 'todo',
+      person: 'Martín',
+      color: AppPalette.member3,
+    ),
+    ScheduleSlot(
+      day: 'LUN',
+      time: '—',
+      person: 'Libre',
+      color: AppPalette.surface2,
+      available: true,
+    ),
+  ];
+
+  static List<TripData> get trips {
+    final people = members;
+
+    return [
+      TripData(
+        day: 'Hoy',
+        route: 'Casa → Trabajo',
+        distance: '12,4 km',
+        duration: '18 min',
+        drivers: [people[0]],
+      ),
+      TripData(
+        day: 'Ayer',
+        route: 'Ruta costera',
+        distance: '42,8 km',
+        duration: '51 min',
+        drivers: [people[1], people[0]],
+      ),
+      TripData(
+        day: 'Dom, 31 ago',
+        route: 'Centro → Norte',
+        distance: '8,6 km',
+        duration: '16 min',
+        drivers: [people[2]],
+      ),
+      TripData(
+        day: 'Vie, 29 ago',
+        route: 'Belgrano → Palermo',
+        distance: '15,7 km',
+        duration: '26 min',
+        drivers: [people[0], people[1]],
+      ),
+      TripData(
+        day: 'Jue, 28 ago',
+        route: 'Trabajo → Gimnasio',
+        distance: '6,2 km',
+        duration: '14 min',
+        drivers: [people[1]],
+      ),
+      TripData(
+        day: 'Mié, 27 ago',
+        route: 'Centro → Tigre',
+        distance: '31,4 km',
+        duration: '43 min',
+        drivers: [people[2], people[3]],
+      ),
+    ];
+  }
+
+  static ActivitySummaryData get activity {
+    final people = members;
+
+    return ActivitySummaryData(
+      distance: '1.284',
+      drivingTime: '38 h 20 min',
+      fuel: '142',
+      mostVisited: 'Centro',
+      consumption: [38, 52, 31, 64, 47, 80, 36, 27, 57, 69, 44, 100, 61, 49],
+      driverDistances: [
+        MemberDistance(people[0], '539 km'),
+        MemberDistance(people[1], '398 km'),
+        MemberDistance(people[2], '231 km'),
+        MemberDistance(people[3], '116 km'),
+      ],
+    );
+  }
+}
+
+/// ---------------------------------------------------------------------------
+/// Reusable icon vocabulary
+/// ---------------------------------------------------------------------------
+
+abstract final class AppIcons {
+  static const car = Icons.directions_car_rounded;
+  static const shared = Icons.people_alt_rounded;
+  static const activity = Icons.insights_rounded;
+  static const profile = Icons.person_rounded;
+  static const notification = Icons.notifications_none_rounded;
+  static const location = Icons.location_on_outlined;
+  static const calendar = Icons.calendar_month_rounded;
+  static const fuel = Icons.local_gas_station_rounded;
+  static const battery = Icons.battery_5_bar_rounded;
+  static const service = Icons.build_circle_outlined;
+  static const bluetooth = Icons.bluetooth_rounded;
+  static const trip = Icons.route_rounded;
+  static const clock = Icons.schedule_rounded;
+  static const link = Icons.link_rounded;
+  static const qr = Icons.qr_code_2_rounded;
+  static const invite = Icons.person_add_alt_1_rounded;
+  static const send = Icons.send_rounded;
+  static const refresh = Icons.refresh_rounded;
+  static const settings = Icons.tune_rounded;
+  static const logout = Icons.logout_rounded;
+  static const arrow = Icons.chevron_right_rounded;
+}
+
+/// ---------------------------------------------------------------------------
+/// Main screen
+/// ---------------------------------------------------------------------------
+
 class MainScreen extends StatefulWidget {
   final String nombreUsuario;
   final BluetoothDevice? device;
-  const MainScreen({super.key, required this.nombreUsuario, this.device});
+
+  final CarData? car;
+  final FuelSummaryData? fuelSummary;
+  final List<MemberData>? members;
+  final List<ScheduleSlot>? schedule;
+  final List<TripData>? trips;
+  final ActivitySummaryData? activity;
+
+  const MainScreen({
+    super.key,
+    required this.nombreUsuario,
+    this.device,
+    this.car,
+    this.fuelSummary,
+    this.members,
+    this.schedule,
+    this.trips,
+    this.activity,
+  });
+
   @override
   State<MainScreen> createState() => _MainScreenState();
 }
 
 class _MainScreenState extends State<MainScreen> {
+  late final CarData _carData;
+  late final FuelSummaryData _fuelData;
+  late final List<MemberData> _members;
+  late final List<ScheduleSlot> _schedule;
+  late final List<TripData> _trips;
+  late final ActivitySummaryData _activityData;
+
   int _tab = 0;
-  bool _summary = false, _maintenanceAlerts = true, _tripAlerts = true;
+  bool _showSummary = false;
+  bool _maintenanceAlerts = true;
+  bool _tripAlerts = true;
   String _period = '30 d';
-  double _fuel = 75;
-  int _speed = 0, _rpm = 0;
-  BluetoothCharacteristic? _write, _read;
-  StreamSubscription<List<int>>? _receiveSub;
-  StreamSubscription<BluetoothConnectionState>? _connectionSub;
-  String _connectionStatus = 'Modo demo: sin conexión BLE';
+
+  double _fuel = DemoData.car.fuelPercent;
+  int _speed = 0;
+  int _rpm = 0;
+
+  BluetoothCharacteristic? _writeCharacteristic;
+  BluetoothCharacteristic? _readCharacteristic;
+  StreamSubscription<List<int>>? _receiveSubscription;
+  StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
+
+  String _connectionStatus = 'Modo demo · sin conexión BLE';
   String _receivedData = 'Sin datos recibidos';
   bool _sending = false;
-  final _command = TextEditingController();
+
+  final _commandController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+
+    _carData = widget.car ?? DemoData.car;
+    _fuelData = widget.fuelSummary ?? DemoData.fuel;
+    _members = widget.members ?? DemoData.members;
+    _schedule = widget.schedule ?? DemoData.schedule;
+    _trips = widget.trips ?? DemoData.trips;
+    _activityData = widget.activity ?? DemoData.activity;
+
+    _fuel = _carData.fuelPercent;
+
     if (widget.device != null) {
-      _connectionSub = widget.device!.connectionState.listen((state) {
-        if (mounted) {
-          setState(
-            () =>
-                _connectionStatus = state == BluetoothConnectionState.connected
-                ? 'Conectado'
-                : 'Desconectado',
-          );
-        }
-      });
+      _listenToDevice();
       _prepareBle();
     }
   }
 
+  /// -------------------------------------------------------------------------
+  /// BLE
+  /// -------------------------------------------------------------------------
+
+  void _listenToDevice() {
+    final device = widget.device!;
+
+    _connectionSubscription = device.connectionState.listen((state) {
+      if (!mounted) return;
+
+      setState(() {
+        _connectionStatus = switch (state) {
+          BluetoothConnectionState.connected => 'Conectado',
+          BluetoothConnectionState.disconnected => 'Desconectado',
+          _ => 'Conectando…',
+        };
+      });
+    });
+  }
+
   Future<void> _prepareBle() async {
     final device = widget.device!;
+
     try {
       if (!device.isConnected) {
         await device.connect(license: License.nonprofit, autoConnect: false);
       }
-      final service = (await device.discoverServices())
-          .cast<BluetoothService?>()
-          .firstWhere(
-            (item) => item!.uuid == Guid(_uartServiceUuid),
-            orElse: () => null,
-          );
-      if (service == null) {
+
+      final services = await device.discoverServices();
+      BluetoothService? uartService;
+
+      for (final service in services) {
+        if (service.uuid == Guid(_uartServiceUuid)) {
+          uartService = service;
+          break;
+        }
+      }
+
+      if (uartService == null) {
         throw StateError('No se encontró el servicio UART de la ESP32');
       }
-      for (final characteristic in service.characteristics) {
+
+      for (final characteristic in uartService.characteristics) {
         if (characteristic.uuid == Guid(_uartWriteUuid)) {
-          _write = characteristic;
+          _writeCharacteristic = characteristic;
         }
+
         if (characteristic.uuid == Guid(_uartReadUuid)) {
-          _read = characteristic;
+          _readCharacteristic = characteristic;
         }
       }
-      if (_read != null &&
-          (_read!.properties.notify || _read!.properties.indicate)) {
-        await _read!.setNotifyValue(true);
-        _receiveSub = _read!.onValueReceived.listen(_handlePacket);
-      }
-      if (mounted) {
-        setState(
-          () => _connectionStatus = _write == null
-              ? 'Conectado, sin canal de escritura'
-              : 'Conectado a ${device.advName.isEmpty ? device.remoteId : device.advName}',
+
+      if (_readCharacteristic != null &&
+          (_readCharacteristic!.properties.notify ||
+              _readCharacteristic!.properties.indicate)) {
+        await _readCharacteristic!.setNotifyValue(true);
+
+        _receiveSubscription = _readCharacteristic!.onValueReceived.listen(
+          _handlePacket,
         );
       }
+
+      if (!mounted) return;
+
+      final deviceName = device.advName.isEmpty
+          ? device.remoteId
+          : device.advName;
+
+      setState(() {
+        _connectionStatus = _writeCharacteristic == null
+            ? 'Conectado · sin canal de escritura'
+            : 'Conectado a $deviceName';
+      });
     } catch (error) {
-      if (mounted) {
-        setState(() => _connectionStatus = 'Error preparando BLE: $error');
-      }
+      if (!mounted) return;
+
+      setState(() {
+        _connectionStatus = 'Error preparando BLE';
+      });
+
+      _showMessage('No se pudo preparar BLE: $error');
     }
   }
 
   void _handlePacket(List<int> value) {
     if (!mounted || value.isEmpty) return;
+
     final bytes = Uint8List.fromList(value);
     final data = ByteData.sublistView(bytes);
+    final packetType = data.getUint8(0);
+
     setState(() {
-      if (data.getUint8(0) == 1 && bytes.length >= 4) {
+      if (packetType == 1 && bytes.length >= 4) {
         _speed = data.getUint8(1);
         _rpm = data.getUint16(2, Endian.little);
         _receivedData = 'Vel: $_speed km/h · RPM: $_rpm';
-      } else if (data.getUint8(0) == 2 && bytes.length >= 3) {
+      } else if (packetType == 2 && bytes.length >= 3) {
         _fuel = data.getUint8(2).toDouble();
         _receivedData = 'Nivel de nafta: ${_fuel.toInt()}%';
       }
     });
   }
 
-  Future<void> _send() async {
-    if (_command.text.trim().isEmpty || _write == null || _sending) return;
+  Future<void> _sendCommand() async {
+    final command = _commandController.text.trim();
+
+    if (command.isEmpty || _writeCharacteristic == null || _sending) {
+      return;
+    }
+
     setState(() => _sending = true);
+
     try {
-      await _write!.write(
-        utf8.encode(_command.text.trim()),
+      final characteristic = _writeCharacteristic!;
+
+      await characteristic.write(
+        utf8.encode(command),
         withoutResponse:
-            _write!.properties.writeWithoutResponse &&
-            !_write!.properties.write,
+            characteristic.properties.writeWithoutResponse &&
+            !characteristic.properties.write,
       );
-      _command.clear();
+
+      _commandController.clear();
     } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('No se pudo enviar: $error')));
-      }
+      _showMessage('No se pudo enviar el comando: $error');
     } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) {
+        setState(() => _sending = false);
+      }
     }
   }
 
   Future<void> _readOnce() async {
-    if (_read == null || !_read!.properties.read) return;
+    final characteristic = _readCharacteristic;
+
+    if (characteristic == null || !characteristic.properties.read) {
+      return;
+    }
+
     try {
-      final value = await _read!.read();
+      final value = await characteristic.read();
+
       if (mounted) {
-        setState(
-          () => _receivedData = utf8.decode(value, allowMalformed: true),
-        );
+        setState(() {
+          _receivedData = utf8.decode(value, allowMalformed: true);
+        });
       }
     } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('No se pudo leer: $error')));
-      }
+      _showMessage('No se pudo leer: $error');
     }
   }
 
-  @override
-  void dispose() {
-    _receiveSub?.cancel();
-    _connectionSub?.cancel();
-    _command.dispose();
-    super.dispose();
+  /// -------------------------------------------------------------------------
+  /// Actions
+  /// -------------------------------------------------------------------------
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  void _showInviteDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Invitar al grupo'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Center(
-              child: Icon(Icons.qr_code_2, size: 160, color: AppColors.text),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Escaneá este código para unirte al auto, o enviá una invitación directa:',
-              style: TextStyle(fontSize: 13, color: AppColors.muted),
-            ),
-            const SizedBox(height: 20),
-            TextField(
-              decoration: InputDecoration(
-                labelText: 'Correo electrónico',
-                prefixIcon: const Icon(Icons.email_outlined),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.send, color: AppColors.accent),
-                  onPressed: () {
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Invitación enviada')),
-                    );
-                  },
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: () {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Enlace copiado al portapapeles'),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.link),
-              label: const Text('Copiar enlace'),
-            ),
-          ],
-        ),
-      ),
-    );
+  void _settleUp() {
+    _showMessage('Pago registrado. Actualizaremos el saldo del grupo.');
   }
 
-  void _showStartJourneySheet(BuildContext context) {
-    showModalBottomSheet(
+  void _inviteMember() {
+    showDialog<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-          left: 24,
-          right: 24,
-          top: 24,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Configurar Viaje',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 24),
+      builder: (dialogContext) {
+        final t = dialogContext.tokens;
 
-            // Start Location
-            TextField(
-              decoration: InputDecoration(
-                labelText: 'Punto de partida',
-                hintText: 'Ubicación actual',
-                prefixIcon: const Icon(
-                  Icons.my_location,
-                  color: AppColors.accent,
-                ),
-                filled: true,
-                fillColor: Theme.of(context).colorScheme.surfaceContainerHighest
-                    .withOpacity(0.3),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
+        return AlertDialog(
+          title: const Text('Invitar al grupo'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(AppIcons.qr, size: 128, color: t.text),
+              const SizedBox(height: 16),
+              const Text(
+                'Escaneá este código para unirte al auto, '
+                'o enviá una invitación directa.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              TextField(
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(
+                  labelText: 'Correo electrónico',
+                  prefixIcon: Icon(Icons.email_outlined),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-
-            // End Location
-            TextField(
-              decoration: InputDecoration(
-                labelText: 'Destino',
-                hintText: 'Ej: Av. Corrientes 980',
-                prefixIcon: const Icon(Icons.flag_outlined),
-                filled: true,
-                fillColor: Theme.of(context).colorScheme.surfaceContainerHighest
-                    .withOpacity(0.3),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // QR Code Section for Non-Members
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.accent.withOpacity(0.1),
-                border: Border.all(color: AppColors.accent.withOpacity(0.2)),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(
+              const SizedBox(height: 12),
+              Row(
                 children: [
-                  const Icon(
-                    Icons.qr_code_2,
-                    size: 42,
-                    color: AppColors.accent,
-                  ),
-                  const SizedBox(width: 16),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Sumar pasajeros',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 15,
-                          ),
-                        ),
-                        Text(
-                          'Mostrá el QR para dividir el costo con no-miembros',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.muted,
-                          ),
-                        ),
-                      ],
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(dialogContext);
+                        _showMessage('Enlace copiado al portapapeles');
+                      },
+                      icon: const Icon(AppIcons.link),
+                      label: const Text('Copiar enlace'),
                     ),
                   ),
-                  IconButton(
+                  const SizedBox(width: 8),
+                  IconButton.filled(
+                    tooltip: 'Enviar invitación',
                     onPressed: () {
-                      // TODO: Navigate to full-screen QR
+                      Navigator.pop(dialogContext);
+                      _showMessage('Invitación enviada');
                     },
-                    icon: const Icon(
-                      Icons.arrow_forward_ios,
-                      size: 16,
-                      color: AppColors.accent,
-                    ),
+                    icon: const Icon(AppIcons.send),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(height: 32),
-
-            // Start Action
-            SizedBox(
-              width: double.infinity,
-              height: 56,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  elevation: 0,
-                ),
-                onPressed: () => Navigator.pop(context),
-                child: const Text(
-                  'Iniciar Recorrido',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-                ),
-              ),
-            ),
-            const SizedBox(height: 32),
-          ],
-        ),
-      ),
+            ],
+          ),
+        );
+      },
     );
   }
 
-  Widget _saldarCard(BuildContext context) {
-    final t = context.tokens;
-    return SectionCard(
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Tu saldo pendiente',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: t.muted,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Debés \$12.400',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: t.accent2,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '3 consumos sin liquidar · Último: Nafta Super',
-                  style: TextStyle(fontSize: 11, color: t.muted),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          // Colors come from elevatedButtonTheme; only size/shape are overridden.
-          // minimumSize is required: the theme's Size.fromHeight(52) has an
-          // infinite minimum width, which breaks inside a Row.
-          ElevatedButton(
-            onPressed: _settleUp,
-            style: ElevatedButton.styleFrom(
-              minimumSize: const Size(0, 34),
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-              textStyle: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            child: const Text('Saldar'),
-          ),
-        ],
+  void _showStartJourneySheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: context.tokens.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-    );
-  }
-
-  Widget _proximoTurnoCard() {
-    final t = context.tokens;
-    return Material(
-      color: t.surface2,
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: t.member1.withValues(alpha: 0.4)),
-      ),
-      child: InkWell(
-        onTap: () => setState(() => _tab = 1), // Compartido tab (calendar)
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          child: Row(
+      builder: (sheetContext) {
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            24,
+            20,
+            MediaQuery.of(sheetContext).viewInsets.bottom + 24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.calendar_today_rounded, size: 18, color: t.member1),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Próximo turno',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: t.muted,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'HOY · 18:00 a 21:00 hs',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        color: t.text,
-                      ),
-                    ),
-                  ],
+              const Text(
+                'Configurar viaje',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -.5,
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: t.member1,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: const Text(
-                  'Vos',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white,
-                  ),
+              const SizedBox(height: 6),
+              Text(
+                'Definí el recorrido antes de comenzar.',
+                style: TextStyle(color: sheetContext.tokens.muted),
+              ),
+              const SizedBox(height: 22),
+              const _LocationField(
+                label: 'Punto de partida',
+                hint: 'Ubicación actual',
+                icon: Icons.my_location_rounded,
+              ),
+              const SizedBox(height: 12),
+              const _LocationField(
+                label: 'Destino',
+                hint: 'Ej. Av. Corrientes 980',
+                icon: Icons.flag_outlined,
+              ),
+              const SizedBox(height: 18),
+              _ActionTile(
+                icon: AppIcons.qr,
+                title: 'Sumar pasajeros',
+                subtitle: 'Mostrá el QR para dividir el costo.',
+                onTap: () {},
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                height: 54,
+                child: FilledButton.icon(
+                  onPressed: () => Navigator.pop(sheetContext),
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  label: const Text('Iniciar viaje'),
                 ),
               ),
             ],
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
+  /// -------------------------------------------------------------------------
+  /// Navigation / pages
+  /// -------------------------------------------------------------------------
+
   @override
   Widget build(BuildContext context) {
-    final pages = [_car(), _shared(), _activity(), _profile()];
+    final pages = [
+      _buildCarPage(),
+      _buildSharedPage(),
+      _buildActivityPage(),
+      _buildProfilePage(),
+    ];
+
     return Scaffold(
       body: SafeArea(
         child: AnimatedSwitcher(
@@ -482,26 +727,28 @@ class _MainScreenState extends State<MainScreen> {
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
-        onDestinationSelected: (value) => setState(() => _tab = value),
+        onDestinationSelected: (index) {
+          setState(() => _tab = index);
+        },
         destinations: const [
           NavigationDestination(
-            icon: Icon(Icons.directions_car_outlined),
-            selectedIcon: Icon(Icons.directions_car),
+            icon: Icon(AppIcons.car),
+            selectedIcon: Icon(AppIcons.car),
             label: 'Auto',
           ),
           NavigationDestination(
-            icon: Icon(Icons.group_outlined),
-            selectedIcon: Icon(Icons.group),
+            icon: Icon(AppIcons.shared),
+            selectedIcon: Icon(AppIcons.shared),
             label: 'Compartido',
           ),
           NavigationDestination(
-            icon: Icon(Icons.bar_chart_outlined),
-            selectedIcon: Icon(Icons.bar_chart),
+            icon: Icon(AppIcons.activity),
+            selectedIcon: Icon(AppIcons.activity),
             label: 'Actividad',
           ),
           NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
+            icon: Icon(AppIcons.profile),
+            selectedIcon: Icon(AppIcons.profile),
             label: 'Perfil',
           ),
         ],
@@ -509,1154 +756,1959 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  Widget _page(Key key, List<Widget> children) => ListView(
-    key: key,
-    padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
-    children: children,
-  );
-  Widget _car() {
-    final connected = _connectionStatus.toLowerCase().startsWith('conectado');
-    return _page(const ValueKey('car'), [
-      PageHeader(
-        title: 'Golf GTI',
-        subtitle: 'Volkswagen · AB 123 CD',
-        trailing: GestureDetector(
-          onTap: () => setState(() => _tab = 3), // Redirects to the Profile tab
-          child: CircleAvatar(
-            backgroundColor: AppColors.accent,
-            child: Text(
-              _initials,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ),
-      ),
-      const SizedBox(height: 16),
-      SectionCard(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Center(
-              child: Icon(
-                Icons.directions_car_outlined,
-                color: AppColors.accent,
-                size: 100,
-              ),
-            ),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Eyebrow('Autonomía'),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${(_fuel * 5.5).round()} km',
-                        style: const TextStyle(
-                          fontSize: 29,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -1,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Text(
-                  '${_fuel.toInt()}%',
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 9),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: LinearProgressIndicator(
-                value: _fuel / 100,
-                minHeight: 7,
-                color: AppColors.accent,
-                backgroundColor: AppPalette.surface2,
-              ),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 10),
-      Row(
-        children: [
-          Expanded(child: _vital('Batería', '12,4 V')),
-          const SizedBox(width: 8),
-          Expanded(child: _vital('Estado', 'OK', dot: AppColors.success)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _vital('Service', '2.100 km', color: AppColors.warning),
-          ),
-        ],
-      ),
-      const SizedBox(height: 10),
-      SectionCard(
-        child: Row(
-          children: [
-            const CircleAvatar(
-              backgroundColor: AppColors.accentSubtle,
-              foregroundColor: AppColors.accent,
-              child: Icon(Icons.location_on_outlined),
-            ),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Eyebrow('Estacionado hace 2 h'),
-                  SizedBox(height: 3),
-                  Text(
-                    'Av. Corrientes 1234',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  SizedBox(height: 2),
-                  Text(
-                    'a 600 m tuyo · lo dejó Sofía',
-                    style: TextStyle(fontSize: 11, color: AppColors.muted),
-                  ),
-                ],
-              ),
-            ),
-            TextButton(onPressed: () {}, child: const Text('Ir')),
-          ],
-        ),
-      ),
-      const SizedBox(height: 10),
-      _proximoTurnoCard(),
-      const SizedBox(height: 16),
-      ElevatedButton.icon(
-        onPressed: () => _showStartJourneySheet(context),
-        icon: const Icon(Icons.play_arrow_rounded),
-        label: const Text('Iniciar viaje'),
-      ),
-      const SizedBox(height: 16),
-      _bleCard(connected),
-    ]);
+  Widget _page({
+    required Key key,
+    required String title,
+    String? subtitle,
+    Widget? trailing,
+    required List<Widget> children,
+  }) {
+    return ListView(
+      key: key,
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
+      children: [
+        PageHeader(title: title, subtitle: subtitle, trailing: trailing),
+        const SizedBox(height: 18),
+        ...children,
+      ],
+    );
   }
 
-  Widget _vital(String label, String value, {Color? dot, Color? color}) =>
-      SectionCard(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Eyebrow(label),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                if (dot != null)
-                  Container(
-                    width: 7,
-                    height: 7,
-                    margin: const EdgeInsets.only(right: 5),
-                    decoration: BoxDecoration(
-                      color: dot,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                Flexible(
-                  child: Text(
-                    value,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: color,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      );
-  Widget _bleCard(bool connected) => SectionCard(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+  /// -------------------------------------------------------------------------
+  /// Auto
+  /// -------------------------------------------------------------------------
+
+  Widget _buildCarPage() {
+    final connected = _connectionStatus.toLowerCase().startsWith('conectado');
+
+    return _page(
+      key: const ValueKey('car'),
+      title: _carData.name,
+      subtitle: '${_carData.brand} · ${_carData.plate}',
+      trailing: _ProfileAvatar(
+        initials: _initials,
+        onTap: () => setState(() => _tab = 3),
+      ),
       children: [
-        Row(
-          children: [
-            Icon(
-              Icons.circle,
-              size: 10,
-              color: connected ? AppColors.success : AppColors.warning,
-            ),
-            const SizedBox(width: 7),
-            Expanded(
-              child: Text(
-                _connectionStatus,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 7),
-        Text(
-          'Último dato: $_receivedData',
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 12, color: AppColors.muted),
+        _CarHero(
+          fuelPercent: _fuel,
+          fuelCapacityLiters: _carData.fuelCapacityLiters,
+          autonomyKm:
+              (_fuel / 100 * _carData.fuelCapacityLiters * _carData.kmPerLiter)
+                  .round(),
+          fuelLiters: _fuel / 100 * _carData.fuelCapacityLiters,
         ),
         const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _command,
-                enabled: _write != null,
-                decoration: const InputDecoration(
-                  isDense: true,
-                  labelText: 'Enviar comando',
-                ),
-              ),
+        _VitalGrid(
+          items: [
+            VitalData(
+              label: 'Batería',
+              value: '${_carData.batteryVoltage.toStringAsFixed(1)} V',
+              icon: AppIcons.battery,
             ),
-            IconButton(
-              onPressed: _write == null ? null : _send,
-              icon: _sending
-                  ? const SizedBox.square(
-                      dimension: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.send_outlined),
+            const VitalData(
+              label: 'Estado',
+              value: 'OK',
+              icon: Icons.check_circle_outline_rounded,
+              valueColor: AppColors.success,
             ),
-            IconButton(
-              onPressed: _read?.properties.read == true ? _readOnce : null,
-              icon: const Icon(Icons.download_outlined),
+            VitalData(
+              label: 'Service',
+              value: _carData.service,
+              icon: AppIcons.service,
+              valueColor: AppColors.warning,
             ),
           ],
         ),
-        const SizedBox(height: 4),
-        const Text(
-          'Simulador de nafta',
-          style: TextStyle(fontSize: 11, color: AppColors.muted),
+        const SizedBox(height: 10),
+        _ParkingCard(car: _carData),
+        if (_carData.nextTurn != null) ...[
+          const SizedBox(height: 10),
+          _NextTurnCard(
+            slot: _carData.nextTurn!,
+            onTap: () => setState(() => _tab = 1),
+          ),
+        ],
+        const SizedBox(height: 16),
+        FilledButton.icon(
+          onPressed: _showStartJourneySheet,
+          icon: const Icon(Icons.play_arrow_rounded),
+          label: const Text('Iniciar viaje'),
         ),
-        Slider(
-          value: _fuel,
-          min: 0,
-          max: 100,
-          onChanged: (value) => setState(() => _fuel = value),
+        const SizedBox(height: 16),
+        _BleCard(
+          connected: connected,
+          status: _connectionStatus,
+          receivedData: _receivedData,
+          speed: _speed,
+          rpm: _rpm,
+          commandController: _commandController,
+          sending: _sending,
+          canWrite: _writeCharacteristic != null,
+          canRead: _readCharacteristic?.properties.read == true,
+          onSend: _sendCommand,
+          onRead: _readOnce,
+          fuel: _fuel,
+          onFuelChanged: (value) {
+            setState(() => _fuel = value);
+          },
         ),
       ],
-    ),
-  );
+    );
+  }
 
-  Widget _shared() => _page(const ValueKey('shared'), [
-    PageHeader(
+  /// -------------------------------------------------------------------------
+  /// Shared
+  /// -------------------------------------------------------------------------
+
+  Widget _buildSharedPage() {
+    return _page(
+      key: const ValueKey('shared'),
       title: 'Compartido',
-      subtitle: 'Familia · 4 miembros',
-      // The trailing IconButton has been removed entirely
-    ),
-    const SizedBox(height: 18),
-    Row(
+      subtitle: 'Familia · ${_members.length} miembros',
+      trailing: IconButton(
+        tooltip: 'Invitar miembro',
+        onPressed: _inviteMember,
+        icon: const Icon(AppIcons.invite),
+      ),
       children: [
-        SizedBox(
-          width: 93, // Squeezed width constraint
-          height: 33,
-          child: Stack(
+        _MemberHeader(members: _members, onInvite: _inviteMember),
+        const SizedBox(height: 16),
+        _FuelSummaryCard(data: _fuelData),
+        const SizedBox(height: 10),
+        _BalanceCard(onSettle: _settleUp),
+        const SizedBox(height: 10),
+        SectionCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Positioned(
-                left: 0,
-                child: _avatar('LM', AppPalette.member1, hasBorder: false),
+              _SectionHeader(
+                title: 'Esta semana',
+                actionLabel: 'Reservar',
+                actionIcon: AppIcons.calendar,
+                onAction: () {},
               ),
-              Positioned(
-                left: 20,
-                child: _avatar('SM', AppPalette.member2, hasBorder: false),
-              ),
-              Positioned(
-                left: 40,
-                child: _avatar('MG', AppPalette.member3, hasBorder: false),
-              ),
-              Positioned(
-                left: 60,
-                child: _avatar('PA', AppPalette.member4, hasBorder: false),
+              const SizedBox(height: 4),
+              ..._schedule.map(
+                (slot) => Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: _ScheduleSlotView(slot: slot),
+                ),
               ),
             ],
-          ),
-        ),
-        const SizedBox(width: 8),
-        InkWell(
-          onTap: _showInviteDialog,
-          borderRadius: BorderRadius.circular(16.5),
-          child: Container(
-            width: 33,
-            height: 33,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: AppColors.muted.withValues(alpha: 0.4),
-                width: 1.5,
-              ),
-            ),
-            alignment: Alignment.center,
-            child: const Icon(Icons.add, size: 18, color: AppColors.muted),
-          ),
-        ),
-        const SizedBox(width: 8),
-        const Expanded(
-          child: Text(
-            'Invitar por QR o link',
-            style: TextStyle(fontSize: 12, color: AppColors.muted),
           ),
         ),
       ],
-    ),
-    const SizedBox(height: 16),
-    _fuelSplitCard(),
-    const SizedBox(height: 10),
-    _saldarCard(context),
-    const SizedBox(height: 10),
-    SectionCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Eyebrow('Esta semana'),
-              TextButton.icon(
-                onPressed: () {},
-                icon: const Icon(Icons.add, size: 16),
-                label: const Text('Reservar'),
-              ),
-            ],
-          ),
-          _calendarSlot('HOY', '18–21', 'Vos', AppPalette.member1),
-          const Divider(),
-          _calendarSlot('SÁB', '09–14', 'Sofía · Pilar', AppPalette.member2),
-          const Divider(),
-          _calendarSlot('DOM', 'todo', 'Martín', AppPalette.member3),
-          const Divider(),
-          _calendarSlot('LUN', '—', 'Libre', AppPalette.surface2),
-        ],
-      ),
-    ),
-  ]);
+    );
+  }
 
-  Widget _fuelSplitCard() => SectionCard(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Eyebrow('Nafta · septiembre'),
-            Text(
-              '142 L',
-              style: TextStyle(fontSize: 11, color: AppColors.muted),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        const Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text(
-              r'$84.200',
-              style: TextStyle(
-                fontSize: 36,
-                fontWeight: FontWeight.w800,
-              ), // Increased size and weight
-            ),
-            SizedBox(width: 7),
-            Padding(
-              padding: EdgeInsets.only(
-                bottom: 6,
-              ), // Adjusted to align with the larger text
-              child: Text(
-                'total del grupo',
-                style: TextStyle(fontSize: 11, color: AppColors.muted),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 11),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: const SizedBox(
-            height: 9,
-            child: Row(
-              children: [
-                Expanded(
-                  flex: 42,
-                  child: ColoredBox(color: AppPalette.member1),
-                ),
-                SizedBox(width: 2),
-                Expanded(
-                  flex: 31,
-                  child: ColoredBox(color: AppPalette.member2),
-                ),
-                SizedBox(width: 2),
-                Expanded(
-                  flex: 18,
-                  child: ColoredBox(color: AppPalette.member3),
-                ),
-                SizedBox(width: 2),
-                Expanded(flex: 9, child: ColoredBox(color: AppPalette.member4)),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        _fuelMember('LM', 'Vos', '42%', r'$35.364', AppPalette.member1),
-        _fuelMember('SM', 'Sofía', '31%', r'$26.102', AppPalette.member2),
-        _fuelMember('MG', 'Martín', '18%', r'$15.156', AppPalette.member3),
-        _fuelMember('PA', 'Papá', '9%', r'$7.578', AppPalette.member4),
-      ],
-    ),
-  );
-  Widget _fuelMember(
-    String initials,
-    String name,
-    String percent,
-    String amount,
-    Color color,
-  ) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Row(
-      children: [
-        _avatar(initials, color),
-        const SizedBox(width: 5),
-        Expanded(
-          child: Text(
-            name,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-          ),
-        ),
-        SizedBox(
-          width: 34,
-          child: Text(
-            percent,
-            style: const TextStyle(fontSize: 11, color: AppColors.muted),
-          ),
-        ),
-        Text(
-          amount,
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-        ),
-      ],
-    ),
-  );
-  Widget _calendarSlot(String day, String time, String person, Color color) =>
-      Row(
-        children: [
-          SizedBox(
-            width: 51,
-            child: Text(
-              '$day\n$time',
-              style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                color: AppColors.muted,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Container(
-              height: 29,
-              padding: const EdgeInsets.symmetric(horizontal: 9),
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              alignment: Alignment.centerLeft,
-              child: Text(
-                person,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: person == 'Libre' ? AppColors.muted : Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ),
-        ],
-      );
-  void _settleUp() => ScaffoldMessenger.of(context).showSnackBar(
-    const SnackBar(
-      content: Text('Pago registrado. Actualizaremos el saldo del grupo.'),
-    ),
-  );
-  Widget _avatar(String name, Color color, {bool hasBorder = true}) =>
-      Container(
-        width: 33,
-        height: 33,
-        decoration: BoxDecoration(
-          color: color,
-          shape: BoxShape.circle,
-          border: hasBorder
-              ? Border.all(
-                  color: Theme.of(context).colorScheme.surface,
-                  width: 2,
-                )
-              : null,
-        ),
-        alignment: Alignment.center,
-        child: Text(
-          name,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      );
-  Widget _activity() => _page(const ValueKey('activity'), [
-    PageHeader(title: 'Actividad', subtitle: 'Golf GTI · últimos 30 días'),
-    const SizedBox(height: 16),
-    Container(
-      decoration: BoxDecoration(
-        color: AppPalette.surface2,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      padding: const EdgeInsets.all(3),
-      child: Row(
-        children: [
-          Expanded(child: _segment('Viajes', !_summary)),
-          Expanded(child: _segment('Resumen', _summary)),
-        ],
-      ),
-    ),
-    if (_summary) ...[const SizedBox(height: 12), _periodPicker()],
-    const SizedBox(height: 16),
-    if (_summary) ..._summaryContent() else ..._tripContent(),
-  ]);
-  Widget _segment(String text, bool selected) => InkWell(
-    onTap: () => setState(() => _summary = text == 'Resumen'),
-    child: Container(
-      padding: const EdgeInsets.symmetric(vertical: 9),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: selected ? Colors.white : Colors.transparent,
-        borderRadius: BorderRadius.circular(9),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-          color: selected ? AppColors.text : AppColors.muted,
-        ),
-      ),
-    ),
-  );
-  List<Widget> _tripContent() => [
-    const Text(
-      'Últimos viajes',
-      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
-    ),
-    const SizedBox(height: 8),
-    SectionCard(
-      child: Column(
-        children: [
-          _trip(
-            'Hoy',
-            'Casa → Trabajo',
-            '12,4 km',
-            '18 min',
-            const ['LM'],
-            const [AppPalette.member1],
-          ),
-          const Divider(),
-          _trip(
-            'Ayer',
-            'Ruta costera',
-            '42,8 km',
-            '51 min',
-            const ['SM', 'LM'],
-            const [AppPalette.member2, AppPalette.member1],
-          ),
-          const Divider(),
-          _trip(
-            'Dom, 31 ago',
-            'Centro → Norte',
-            '8,6 km',
-            '16 min',
-            const ['MG'],
-            const [AppPalette.member3],
-          ),
-          const Divider(),
-          _trip(
-            'Vie, 29 ago',
-            'Belgrano → Palermo',
-            '15,7 km',
-            '26 min',
-            const ['LM', 'SM'],
-            const [AppPalette.member1, AppPalette.member2],
-          ),
-          const Divider(),
-          _trip(
-            'Jue, 28 ago',
-            'Trabajo → Gimnasio',
-            '6,2 km',
-            '14 min',
-            const ['SM'],
-            const [AppPalette.member2],
-          ),
-          const Divider(),
-          _trip(
-            'Mié, 27 ago',
-            'Centro → Tigre',
-            '31,4 km',
-            '43 min',
-            const ['MG', 'PA'],
-            const [AppPalette.member3, AppPalette.member4],
-          ),
-        ],
-      ),
-    ),
-  ];
-  Widget _trip(
-    String day,
-    String route,
-    String km,
-    String duration,
-    List<String> initials,
-    List<Color> colors,
-  ) => Row(
-    children: [
-      SizedBox(
-        width: 75,
-        child: Text(
-          day,
-          style: const TextStyle(fontSize: 11, color: AppColors.muted),
-        ),
-      ),
-      _tripAvatars(initials, colors),
-      const SizedBox(width: 5),
-      Expanded(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              route,
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-            ),
-            Text(
-              duration,
-              style: const TextStyle(fontSize: 11, color: AppColors.muted),
-            ),
-          ],
-        ),
-      ),
-      Text(
-        km,
-        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
-      ),
-    ],
-  );
-  Widget _tripAvatars(List<String> initials, List<Color> colors) => SizedBox(
-    width: initials.length == 1 ? 33 : 49,
-    height: 33,
-    child: Stack(
-      children: List.generate(
-        initials.length,
-        (index) => Positioned(
-          left: index * 17.0,
-          child: Container(
-            width: 33,
-            height: 33,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: colors[index],
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: Theme.of(context).colorScheme.surface,
-                width: 2,
-              ),
-            ),
-            child: Text(
-              initials[index],
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-  Widget _periodPicker() => SizedBox(
-    height: 34,
-    child: ListView.separated(
-      scrollDirection: Axis.horizontal,
-      itemCount: 5,
-      separatorBuilder: (_, index) => const SizedBox(width: 6),
-      itemBuilder: (_, index) {
-        const periods = ['7 d', '30 d', '3 m', '6 m', '1 a'];
-        final value = periods[index];
-        final selected = value == _period;
-        return ChoiceChip(
-          label: Text(value),
-          selected: selected,
-          onSelected: (_) => setState(() => _period = value),
-          selectedColor: AppColors.accent,
-          labelStyle: TextStyle(
-            color: selected ? Colors.white : AppColors.muted,
-            fontWeight: FontWeight.w700,
-            fontSize: 12,
-          ),
-          side: BorderSide(
-            color: selected ? AppColors.accent : AppColors.border,
-          ),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
-        );
-      },
-    ),
-  );
-  List<Widget> _summaryContent() => [
-    Row(
-      children: [
-        Expanded(
-          child: _stat(
-            Icons.route_outlined,
-            'Distancia',
-            '1.284',
-            'km',
-            '↑ 12% vs. agosto',
-            AppColors.success,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _stat(
-            Icons.schedule_outlined,
-            'Al volante',
-            '38',
-            'h 20 min',
-            '↑ 8%',
-            AppColors.success,
-          ),
-        ),
-      ],
-    ),
-    const SizedBox(height: 8),
-    Row(
-      children: [
-        Expanded(
-          child: _stat(
-            Icons.water_drop_outlined,
-            'Nafta',
-            '142',
-            'L · 11,1 L/100',
-            '↓ 6% de consumo',
-            AppColors.success,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _stat(
-            Icons.location_on_outlined,
-            'Más visitado',
-            'Centro',
-            '',
-            '8 viajes · 96 km',
-            AppColors.muted,
-          ),
-        ),
-      ],
-    ),
-    const SizedBox(height: 12),
-    _consumptionChart(),
-    const SizedBox(height: 12),
-    _driverBreakdown(),
-  ];
-  Widget _stat(
-    IconData icon,
-    String label,
-    String value,
-    String unit,
-    String delta,
-    Color deltaColor,
-  ) => SectionCard(
-    padding: const EdgeInsets.all(11),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(icon, size: 13, color: AppColors.muted),
-            const SizedBox(width: 4),
-            Eyebrow(label),
-          ],
-        ),
-        const SizedBox(height: 7),
-        RichText(
-          text: TextSpan(
-            style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
-            children: [
-              TextSpan(
-                text: value,
-                style: const TextStyle(
-                  fontSize: 21,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              TextSpan(
-                text: ' $unit',
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.muted,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          delta,
-          style: TextStyle(
-            fontSize: 10,
-            color: deltaColor,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ],
-    ),
-  );
+  /// -------------------------------------------------------------------------
+  /// Activity
+  /// -------------------------------------------------------------------------
 
-  Widget _consumptionChart() {
-    const values = [38, 52, 31, 64, 47, 80, 36, 27, 57, 69, 44, 100, 61, 49];
-    return SectionCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Eyebrow('Consumo por día'),
-              Text(
-                'pico: sáb 14',
-                style: TextStyle(fontSize: 11, color: AppColors.muted),
-              ),
-            ],
-          ),
+  Widget _buildActivityPage() {
+    return _page(
+      key: const ValueKey('activity'),
+      title: 'Actividad',
+      subtitle: '${_carData.name} · últimos 30 días',
+      children: [
+        _SegmentedControl(
+          labels: const ['Viajes', 'Resumen'],
+          selectedIndex: _showSummary ? 1 : 0,
+          onChanged: (index) {
+            setState(() => _showSummary = index == 1);
+          },
+        ),
+        if (_showSummary) ...[
           const SizedBox(height: 12),
-          SizedBox(
-            height: 104,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: values
-                  .map(
-                    (value) => Expanded(
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 2),
-                        height: value.toDouble() * .78,
-                        decoration: BoxDecoration(
-                          color: value == 100
-                              ? AppColors.accent
-                              : AppColors.accent.withValues(alpha: .72),
-                          borderRadius: const BorderRadius.vertical(
-                            top: Radius.circular(4),
-                          ),
-                        ),
-                      ),
-                    ),
-                  )
-                  .toList(),
-            ),
+          _PeriodPicker(
+            value: _period,
+            onChanged: (value) {
+              setState(() => _period = value);
+            },
           ),
-          const Padding(
-            padding: EdgeInsets.only(top: 6),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  '1 sep',
-                  style: TextStyle(fontSize: 10, color: AppColors.muted),
+          const SizedBox(height: 16),
+          _SummaryContent(data: _activityData),
+        ] else ...[
+          const SizedBox(height: 18),
+          _TripsContent(trips: _trips),
+        ],
+      ],
+    );
+  }
+
+  /// -------------------------------------------------------------------------
+  /// Profile
+  /// -------------------------------------------------------------------------
+
+  Widget _buildProfilePage() {
+    return _page(
+      key: const ValueKey('profile'),
+      title: 'Perfil',
+      subtitle: widget.nombreUsuario,
+      children: [
+        SectionCard(
+          child: Row(
+            children: [
+              _ProfileAvatar(initials: _initials, radius: 27),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _TextStack(
+                  title: widget.nombreUsuario,
+                  subtitle: 'Plan personal',
                 ),
-                Text(
-                  '15 sep',
-                  style: TextStyle(fontSize: 10, color: AppColors.muted),
+              ),
+              const Icon(AppIcons.arrow),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+        const SectionLabel('Vehículo y dispositivo'),
+        const SizedBox(height: 8),
+        SectionCard(
+          padding: EdgeInsets.zero,
+          child: Column(
+            children: [
+              _SettingTile(
+                icon: AppIcons.bluetooth,
+                title: 'Conexión OBD',
+                subtitle: _connectionStatus,
+              ),
+              const Divider(height: 1),
+              _SettingTile(
+                icon: AppIcons.car,
+                title: 'Vehículo',
+                subtitle: '${_carData.brand} ${_carData.name}',
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+        const SectionLabel('Apariencia'),
+        const SizedBox(height: 8),
+        ValueListenableBuilder<ThemeMode>(
+          valueListenable: themeModeNotifier,
+          builder: (_, mode, __) {
+            return SectionCard(
+              padding: EdgeInsets.zero,
+              child: SwitchListTile(
+                value: mode == ThemeMode.dark,
+                onChanged: (enabled) {
+                  themeModeNotifier.value = enabled
+                      ? ThemeMode.dark
+                      : ThemeMode.light;
+                },
+                secondary: const Icon(Icons.dark_mode_outlined),
+                title: const Text('Modo oscuro'),
+                subtitle: const Text('Usar la interfaz oscura'),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 18),
+        const SectionLabel('Alertas'),
+        const SizedBox(height: 8),
+        SectionCard(
+          padding: EdgeInsets.zero,
+          child: Column(
+            children: [
+              _SwitchTile(
+                title: 'Mantenimiento',
+                subtitle: 'Service y fallas del vehículo',
+                value: _maintenanceAlerts,
+                onChanged: (value) {
+                  setState(() => _maintenanceAlerts = value);
+                },
+              ),
+              const Divider(height: 1),
+              _SwitchTile(
+                title: 'Viajes',
+                subtitle: 'Inicio y fin de cada recorrido',
+                value: _tripAlerts,
+                onChanged: (value) {
+                  setState(() => _tripAlerts = value);
+                },
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+        Builder(
+          builder: (context) {
+            final t = context.tokens;
+
+            return OutlinedButton.icon(
+              onPressed: () => Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+              ),
+              icon: const Icon(AppIcons.logout),
+              label: const Text('Cerrar sesión'),
+              style: OutlinedButton.styleFrom(foregroundColor: t.danger),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  String get _initials {
+    final name = widget.nombreUsuario.trim().split('@').first;
+
+    if (name.isEmpty) return 'LM';
+
+    final parts = name
+        .split(RegExp(r'[\s._-]+'))
+        .where((part) => part.isNotEmpty)
+        .toList();
+
+    if (parts.length >= 2) {
+      return '${parts.first[0]}${parts[1][0]}'.toUpperCase();
+    }
+
+    return name.substring(0, name.length.clamp(0, 2)).toUpperCase();
+  }
+
+  @override
+  void dispose() {
+    _receiveSubscription?.cancel();
+    _connectionSubscription?.cancel();
+    _commandController.dispose();
+    super.dispose();
+  }
+}
+
+/// ---------------------------------------------------------------------------
+/// Reusable cards / widgets
+/// ---------------------------------------------------------------------------
+
+class VitalData {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color? valueColor;
+
+  const VitalData({
+    required this.label,
+    required this.value,
+    required this.icon,
+    this.valueColor,
+  });
+}
+
+class _CarHero extends StatelessWidget {
+  final double fuelPercent;
+  final double fuelCapacityLiters;
+  final int autonomyKm;
+  final double fuelLiters;
+
+  const _CarHero({
+    required this.fuelPercent,
+    required this.fuelCapacityLiters,
+    required this.autonomyKm,
+    required this.fuelLiters,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return SectionCard(
+      radius: 20,
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+      child: Column(
+        children: [
+          SizedBox(
+            height: 106,
+            child: Center(child: Icon(AppIcons.car, size: 96, color: t.accent)),
+          ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: _TextStack(
+                  title: '$autonomyKm km',
+                  titleStyle: TextStyle(
+                    fontSize: 30,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -1,
+                    color: t.text,
+                  ),
+                  subtitle: 'AUTONOMÍA',
+                  subtitleStyle: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: .7,
+                    color: t.muted,
+                  ),
+                  spacing: 4,
                 ),
-                Text(
-                  '30 sep',
-                  style: TextStyle(fontSize: 10, color: AppColors.muted),
+              ),
+              _TextStack(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                title: '${fuelPercent.round()}%',
+                titleStyle: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: t.text,
                 ),
-              ],
+                subtitle:
+                    '${fuelLiters.toStringAsFixed(0)} L de '
+                    '${fuelCapacityLiters.toStringAsFixed(0)}',
+                subtitleStyle: TextStyle(fontSize: 11, color: t.muted),
+                spacing: 3,
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(99),
+            child: LinearProgressIndicator(
+              value: (fuelPercent / 100).clamp(0, 1),
+              minHeight: 8,
+              backgroundColor: t.surface2,
+              color: t.accent,
             ),
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _driverBreakdown() => SectionCard(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+class _VitalGrid extends StatelessWidget {
+  final List<VitalData> items;
+
+  const _VitalGrid({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
       children: [
-        const Eyebrow('Kilómetros por conductor'),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            SizedBox(
-              width: 94,
-              height: 94,
-              child: CustomPaint(
-                painter: _DonutPainter(),
-                child: const Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '1.284',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      Text(
-                        'km',
-                        style: TextStyle(fontSize: 10, color: AppColors.muted),
-                      ),
-                    ],
+        for (var i = 0; i < items.length; i++) ...[
+          if (i > 0) const SizedBox(width: 8),
+          Expanded(child: _VitalCard(data: items[i])),
+        ],
+      ],
+    );
+  }
+}
+
+class _VitalCard extends StatelessWidget {
+  final VitalData data;
+
+  const _VitalCard({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return SectionCard(
+      radius: 14,
+      padding: const EdgeInsets.all(11),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(data.icon, size: 17, color: t.muted),
+          const SizedBox(height: 7),
+          Text(
+            data.label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: .5,
+              color: t.muted,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            data.value,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: data.valueColor ?? t.text,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ParkingCard extends StatelessWidget {
+  final CarData car;
+
+  const _ParkingCard({required this.car});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return SectionCard(
+      padding: const EdgeInsets.all(13),
+      child: Row(
+        children: [
+          IconBadge(icon: AppIcons.location, color: t.accent3),
+          const SizedBox(width: 11),
+          Expanded(
+            child: _TextStack(
+              title: car.parkingAddress,
+              subtitle: '${car.parkingMeta} · lo dejó ${car.parkedBy}',
+              titleStyle: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: t.text,
+              ),
+              subtitleStyle: TextStyle(fontSize: 11, color: t.muted),
+            ),
+          ),
+          TextButton(onPressed: () {}, child: const Text('Ir')),
+        ],
+      ),
+    );
+  }
+}
+
+class _NextTurnCard extends StatelessWidget {
+  final ScheduleSlot slot;
+  final VoidCallback onTap;
+
+  const _NextTurnCard({required this.slot, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return Material(
+      color: t.surface2,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.all(13),
+          child: Row(
+            children: [
+              Icon(AppIcons.calendar, size: 19, color: t.member1),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _TextStack(
+                  title: 'Tu próximo turno',
+                  subtitle: '${slot.day} · ${slot.time}',
+                  titleStyle: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: t.muted,
+                    letterSpacing: .4,
+                  ),
+                  subtitleStyle: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: t.text,
+                  ),
+                ),
+              ),
+              Text(
+                slot.person,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: t.member1,
+                ),
+              ),
+              Icon(AppIcons.arrow, size: 18, color: t.muted),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MemberHeader extends StatelessWidget {
+  final List<MemberData> members;
+  final VoidCallback onInvite;
+
+  const _MemberHeader({required this.members, required this.onInvite});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(child: _AvatarStack(members: members)),
+        OutlinedButton.icon(
+          onPressed: onInvite,
+          icon: const Icon(AppIcons.invite, size: 16),
+          label: const Text('Invitar'),
+        ),
+      ],
+    );
+  }
+}
+
+class _AvatarStack extends StatelessWidget {
+  final List<MemberData> members; // 1. Change the type here
+
+  const _AvatarStack({super.key, required this.members});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 24.0 + (members.length - 1) * 16.0,
+      height: 24.0,
+      child: Stack(
+        children: [
+          for (int i = 0; i < members.length; i++)
+            Positioned(
+              left: i * 16.0,
+              child: Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color:
+                      members[i].color, // 2. Access the color from MemberData
+                  border: Border.all(color: context.tokens.surface, width: 2),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  members[i].initials, // 3. Access the initials from MemberData
+                  style: const TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
                   ),
                 ),
               ),
             ),
-            const SizedBox(width: 14),
-            const Expanded(
-              child: Column(
+        ],
+      ),
+    );
+  }
+}
+
+class _Avatar extends StatelessWidget {
+  final String initials;
+  final Color color;
+  final double size;
+
+  const _Avatar({required this.initials, required this.color, this.size = 34});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(color: t.surface, width: size >= 30 ? 2 : 1.5),
+      ),
+      child: Text(
+        initials,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: size * .30,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _FuelSummaryCard extends StatelessWidget {
+  final FuelSummaryData data;
+
+  const _FuelSummaryCard({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return SectionCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'NAFTA · ${data.periodLabel.toUpperCase()}',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: .7,
+                  color: t.muted,
+                ),
+              ),
+              Text(
+                '${data.liters.toStringAsFixed(0)} L',
+                style: TextStyle(fontSize: 11, color: t.muted),
+              ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                data.total,
+                style: TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -1,
+                  color: t.text,
+                ),
+              ),
+              const SizedBox(width: 7),
+              Text(
+                'total del grupo',
+                style: TextStyle(fontSize: 11, color: t.muted),
+              ),
+            ],
+          ),
+          const SizedBox(height: 11),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(99),
+            child: SizedBox(
+              height: 9,
+              child: Row(
                 children: [
-                  _LegendDot(
-                    color: AppColors.accent,
-                    name: 'Vos',
-                    value: '539 km',
+                  for (final member in data.members)
+                    if (member.fuelShare > 0) // Guard against flex: 0
+                      Expanded(
+                        flex: (member.fuelShare * 100).round(),
+                        child: ColoredBox(color: member.color),
+                      ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 13),
+          for (final member in data.members)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  _Avatar(
+                    initials: member.initials,
+                    color: member.color,
+                    size: 27,
                   ),
-                  SizedBox(height: 7),
-                  _LegendDot(
-                    color: AppPalette.member2,
-                    name: 'Sofía',
-                    value: '398 km',
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      member.name,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: t.text,
+                      ),
+                    ),
                   ),
-                  SizedBox(height: 7),
-                  _LegendDot(
-                    color: AppPalette.member3,
-                    name: 'Martín',
-                    value: '231 km',
+                  Text(
+                    '${(member.fuelShare * 100).round()}%',
+                    style: TextStyle(fontSize: 11, color: t.muted),
                   ),
-                  SizedBox(height: 7),
-                  _LegendDot(
-                    color: AppPalette.member4,
-                    name: 'Papá',
-                    value: '116 km',
+                  const SizedBox(width: 8),
+                  Text(
+                    member.fuelAmount,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: t.text,
+                    ),
                   ),
                 ],
               ),
             ),
-          ],
-        ),
-      ],
-    ),
-  );
-
-  Widget _profile() => _page(const ValueKey('profile'), [
-    PageHeader(title: 'Perfil', subtitle: widget.nombreUsuario),
-    const SizedBox(height: 18),
-    SectionCard(
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 25,
-            backgroundColor: AppColors.accent,
-            child: Text(
-              _initials,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.nombreUsuario,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                const Text(
-                  'Plan personal',
-                  style: TextStyle(fontSize: 12, color: AppColors.muted),
-                ),
-              ],
-            ),
-          ),
-          const Icon(Icons.chevron_right, color: AppColors.muted),
         ],
       ),
-    ),
-    const SizedBox(height: 16),
-    const Eyebrow('Vehículo y dispositivo'),
-    const SizedBox(height: 7),
-    SectionCard(
-      padding: EdgeInsets.zero,
-      child: Column(
-        children: [
-          _setting(Icons.bluetooth_outlined, 'Conexión OBD', _connectionStatus),
-          const Divider(height: 1),
-          _setting(
-            Icons.directions_car_outlined,
-            'Vehículo',
-            'Volkswagen Golf GTI',
-          ),
-        ],
-      ),
-    ),
-    const SizedBox(height: 16),
-    const Eyebrow('Apariencia'),
-    const SizedBox(height: 7),
-    ValueListenableBuilder<ThemeMode>(
-      valueListenable: themeModeNotifier,
-      builder: (_, mode, _) => SectionCard(
-        padding: EdgeInsets.zero,
-        child: _switch(
-          'Modo oscuro',
-          'Usar la interfaz oscura',
-          mode == ThemeMode.dark,
-          (enabled) => themeModeNotifier.value = enabled
-              ? ThemeMode.dark
-              : ThemeMode.light,
-        ),
-      ),
-    ),
-    const SizedBox(height: 16),
-    const Eyebrow('Alertas'),
-    const SizedBox(height: 7),
-    SectionCard(
-      padding: EdgeInsets.zero,
-      child: Column(
-        children: [
-          _switch(
-            'Mantenimiento',
-            'Service y fallas del vehículo',
-            _maintenanceAlerts,
-            (v) => setState(() => _maintenanceAlerts = v),
-          ),
-          const Divider(height: 1),
-          _switch(
-            'Viajes',
-            'Inicio y fin de cada recorrido',
-            _tripAlerts,
-            (v) => setState(() => _tripAlerts = v),
-          ),
-        ],
-      ),
-    ),
-    const SizedBox(height: 24),
-    OutlinedButton.icon(
-      onPressed: () => Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-      ),
-      icon: const Icon(Icons.logout, color: AppColors.danger),
-      label: const Text(
-        'Cerrar sesión',
-        style: TextStyle(color: AppColors.danger),
-      ),
-    ),
-  ]);
-  Widget _setting(IconData icon, String title, String subtitle) => ListTile(
-    leading: Icon(icon, color: AppColors.muted),
-    title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
-    subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
-    trailing: const Icon(Icons.chevron_right, color: AppColors.muted),
-  );
-  Widget _switch(
-    String title,
-    String subtitle,
-    bool value,
-    ValueChanged<bool> changed,
-  ) => SwitchListTile(
-    value: value,
-    onChanged: changed,
-    activeTrackColor: AppColors.accent,
-    title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
-    subtitle: Text(subtitle),
-    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
-  );
-  String get _initials {
-    final name = widget.nombreUsuario.trim().split('@').first;
-    return name.isEmpty
-        ? 'LM'
-        : name.substring(0, name.length.clamp(0, 2)).toUpperCase();
+    );
   }
 }
 
-class _LegendDot extends StatelessWidget {
+class _BalanceCard extends StatelessWidget {
+  final VoidCallback onSettle;
+
+  const _BalanceCard({required this.onSettle});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return SectionCard(
+      padding: const EdgeInsets.all(15),
+      child: Row(
+        children: [
+          Expanded(
+            child: _TextStack(
+              title: 'Tu saldo pendiente',
+              subtitle: 'Debés \$12.400',
+              titleStyle: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: t.muted,
+              ),
+              subtitleStyle: TextStyle(
+                fontSize: 21,
+                fontWeight: FontWeight.w800,
+                color: t.accent2,
+              ),
+              spacing: 4,
+            ),
+          ),
+          FilledButton(onPressed: onSettle, child: const Text('Saldar')),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScheduleSlotView extends StatelessWidget {
+  final ScheduleSlot slot;
+
+  const _ScheduleSlotView({required this.slot});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    final textColor = slot.available ? t.muted : Colors.white;
+
+    return Row(
+      children: [
+        SizedBox(
+          width: 52,
+          child: Text(
+            '${slot.day}\n${slot.time}',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              color: t.muted,
+              height: 1.25,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Container(
+            height: 31,
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: slot.color,
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Text(
+              slot.person,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: textColor,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// ---------------------------------------------------------------------------
+/// Activity widgets
+/// ---------------------------------------------------------------------------
+
+class _SegmentedControl extends StatelessWidget {
+  final List<String> labels;
+  final int selectedIndex;
+  final ValueChanged<int> onChanged;
+
+  const _SegmentedControl({
+    required this.labels,
+    required this.selectedIndex,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: t.surface2,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          for (var i = 0; i < labels.length; i++)
+            Expanded(
+              child: GestureDetector(
+                onTap: () => onChanged(i),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  padding: const EdgeInsets.symmetric(vertical: 9),
+                  decoration: BoxDecoration(
+                    color: selectedIndex == i ? t.surface : Colors.transparent,
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Text(
+                    labels[i],
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: selectedIndex == i ? t.text : t.muted,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PeriodPicker extends StatelessWidget {
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  const _PeriodPicker({required this.value, required this.onChanged});
+
+  static const periods = ['7 d', '30 d', '3 m', '6 m', '1 a'];
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (var i = 0; i < periods.length; i++) ...[
+            if (i > 0) const SizedBox(width: 6),
+            ChoiceChip(
+              label: Text(periods[i]),
+              selected: periods[i] == value,
+              onSelected: (_) => onChanged(periods[i]),
+              selectedColor: t.accent,
+              labelStyle: TextStyle(
+                color: periods[i] == value ? Colors.white : t.muted,
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+              ),
+              side: BorderSide(
+                color: periods[i] == value ? t.accent : t.border,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(9),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TripsContent extends StatelessWidget {
+  final List<TripData> trips;
+
+  const _TripsContent({required this.trips});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Últimos viajes',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -.3,
+            color: t.text,
+          ),
+        ),
+        const SizedBox(height: 9),
+        SectionCard(
+          child: Column(
+            children: [
+              for (var i = 0; i < trips.length; i++) ...[
+                _TripRow(trip: trips[i]),
+                if (i < trips.length - 1) const Divider(height: 18),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TripRow extends StatelessWidget {
+  final TripData trip;
+
+  const _TripRow({required this.trip});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return Row(
+      children: [
+        SizedBox(
+          width: 73,
+          child: Text(trip.day, style: TextStyle(fontSize: 11, color: t.muted)),
+        ),
+        _AvatarStack(members: trip.drivers),
+        const SizedBox(width: 6),
+        Expanded(
+          child: _TextStack(
+            title: trip.route,
+            subtitle: trip.duration,
+            titleStyle: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: t.text,
+            ),
+            subtitleStyle: TextStyle(fontSize: 11, color: t.muted),
+          ),
+        ),
+        Text(
+          trip.distance,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+            color: t.text,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SummaryContent extends StatelessWidget {
+  final ActivitySummaryData data;
+
+  const _SummaryContent({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _StatCard(
+                icon: AppIcons.trip,
+                label: 'Distancia',
+                value: data.distance,
+                unit: 'km',
+                delta: '↑ 12% vs. agosto',
+                deltaColor: t.success,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _StatCard(
+                icon: AppIcons.clock,
+                label: 'Al volante',
+                value: data.drivingTime,
+                unit: '',
+                delta: '↑ 8%',
+                deltaColor: t.success,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _StatCard(
+                icon: AppIcons.fuel,
+                label: 'Nafta',
+                value: data.fuel,
+                unit: 'L · 11,1 L/100',
+                delta: '↓ 6% de consumo',
+                deltaColor: t.success,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _StatCard(
+                icon: AppIcons.location,
+                label: 'Más visitado',
+                value: data.mostVisited,
+                unit: '',
+                delta: '8 viajes · 96 km',
+                deltaColor: t.muted,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _ConsumptionChart(values: data.consumption),
+        const SizedBox(height: 12),
+        _DriverBreakdown(data: data.driverDistances),
+      ],
+    );
+  }
+}
+
+class _StatCard extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final String unit;
+  final String delta;
+  final Color deltaColor;
+
+  const _StatCard({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.unit,
+    required this.delta,
+    required this.deltaColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return SectionCard(
+      padding: const EdgeInsets.all(12),
+      radius: 14,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 15, color: t.muted),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: .5,
+                    color: t.muted,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 7),
+          Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: value,
+                  style: TextStyle(
+                    fontSize: 21,
+                    fontWeight: FontWeight.w800,
+                    color: t.text,
+                  ),
+                ),
+                if (unit.isNotEmpty)
+                  TextSpan(
+                    text: ' $unit',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: t.muted,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            delta,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: deltaColor,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ConsumptionChart extends StatelessWidget {
+  final List<double> values;
+
+  const _ConsumptionChart({required this.values});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    final maxValue = values.isEmpty
+        ? 1.0
+        : values.reduce((a, b) => a > b ? a : b);
+
+    // Prevent 0.0 / 0.0 NaN exceptions
+    final safeDivisor = maxValue > 0 ? maxValue : 1.0;
+
+    return SectionCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionHeader(
+            title: 'Consumo por día',
+            trailingText: 'pico: sáb 14',
+          ),
+          const SizedBox(height: 13),
+          SizedBox(
+            height: 104,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (final value in values)
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      child: FractionallySizedBox(
+                        heightFactor:
+                            value / safeDivisor, // Use the safe divisor here
+                        alignment: Alignment.bottomCenter,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color:
+                                value == maxValue &&
+                                    maxValue >
+                                        0 // Ensure 0-value bars aren't solid
+                                ? t.accent
+                                : t.accent.withValues(alpha: .70),
+                            borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(4),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 7),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('1 sep', style: TextStyle(fontSize: 10, color: t.muted)),
+              Text('15 sep', style: TextStyle(fontSize: 10, color: t.muted)),
+              Text('30 sep', style: TextStyle(fontSize: 10, color: t.muted)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DriverBreakdown extends StatelessWidget {
+  final List<MemberDistance> data;
+
+  const _DriverBreakdown({required this.data});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    final total = data.fold<double>(
+      0,
+      (sum, item) => sum + _parseKm(item.distance),
+    );
+
+    return SectionCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionLabel('Kilómetros por conductor'),
+          const SizedBox(height: 13),
+          Row(
+            children: [
+              SizedBox(
+                width: 96,
+                height: 96,
+                child: CustomPaint(
+                  painter: _DonutPainter(
+                    values: data
+                        .map((item) => _parseKm(item.distance))
+                        .toList(),
+                    colors: data.map((item) => item.member.color).toList(),
+                  ),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          total.round().toString(),
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: t.text,
+                          ),
+                        ),
+                        Text(
+                          'km',
+                          style: TextStyle(fontSize: 10, color: t.muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  children: [
+                    for (var i = 0; i < data.length; i++) ...[
+                      _LegendRow(
+                        color: data[i].member.color,
+                        name: data[i].member.name,
+                        value: data[i].distance,
+                      ),
+                      if (i < data.length - 1) const SizedBox(height: 7),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  double _parseKm(String value) {
+    final normalized = value
+        .replaceAll('.', '')
+        .replaceAll('km', '')
+        .replaceAll(',', '.')
+        .trim();
+
+    return double.tryParse(normalized) ?? 0;
+  }
+}
+
+/// ---------------------------------------------------------------------------
+/// BLE card
+/// ---------------------------------------------------------------------------
+
+class _BleCard extends StatelessWidget {
+  final bool connected;
+  final String status;
+  final String receivedData;
+  final int speed;
+  final int rpm;
+  final TextEditingController commandController;
+  final bool sending;
+  final bool canWrite;
+  final bool canRead;
+  final VoidCallback onSend;
+  final VoidCallback onRead;
+  final double fuel;
+  final ValueChanged<double> onFuelChanged;
+
+  const _BleCard({
+    required this.connected,
+    required this.status,
+    required this.receivedData,
+    required this.speed,
+    required this.rpm,
+    required this.commandController,
+    required this.sending,
+    required this.canWrite,
+    required this.canRead,
+    required this.onSend,
+    required this.onRead,
+    required this.fuel,
+    required this.onFuelChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return SectionCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 9,
+                height: 9,
+                decoration: BoxDecoration(
+                  color: connected ? t.success : t.warning,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  status,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: t.text,
+                  ),
+                ),
+              ),
+              Icon(AppIcons.bluetooth, size: 18, color: t.muted),
+            ],
+          ),
+          const SizedBox(height: 7),
+          Text(
+            'Último dato: $receivedData',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 11, color: t.muted),
+          ),
+          if (speed != 0 || rpm != 0) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                _MetricPill(label: 'Velocidad', value: '$speed km/h'),
+                const SizedBox(width: 6),
+                _MetricPill(label: 'RPM', value: '$rpm'),
+              ],
+            ),
+          ],
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: commandController,
+                  enabled: canWrite,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    labelText: 'Enviar comando',
+                    prefixIcon: Icon(AppIcons.send, size: 18),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: 'Enviar',
+                onPressed: canWrite ? onSend : null,
+                icon: sending
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(AppIcons.send),
+              ),
+              IconButton(
+                tooltip: 'Leer',
+                onPressed: canRead ? onRead : null,
+                icon: const Icon(AppIcons.refresh),
+              ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            'Simulador de nafta',
+            style: TextStyle(fontSize: 10, color: t.muted),
+          ),
+          Slider(
+            value: fuel.clamp(0, 100),
+            onChanged: onFuelChanged,
+            min: 0,
+            max: 100,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MetricPill extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _MetricPill({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: t.surface2,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 9,
+                color: t.muted,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 12,
+                color: t.text,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// ---------------------------------------------------------------------------
+/// Generic reusable building blocks
+/// ---------------------------------------------------------------------------
+
+class SectionCard extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final double radius;
+
+  const SectionCard({
+    super.key,
+    required this.child,
+    this.padding = const EdgeInsets.all(14),
+    this.radius = 16,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(color: t.border),
+      ),
+      padding: padding,
+      child: child,
+    );
+  }
+}
+
+class IconBadge extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+
+  const IconBadge({super.key, required this.icon, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 38,
+      height: 38,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .10),
+        shape: BoxShape.circle,
+      ),
+      child: Icon(icon, size: 19, color: color),
+    );
+  }
+}
+
+class _TextStack extends StatelessWidget {
+  final String title;
+  final String? subtitle;
+  final TextStyle? titleStyle;
+  final TextStyle? subtitleStyle;
+  final CrossAxisAlignment crossAxisAlignment;
+  final double spacing;
+
+  const _TextStack({
+    required this.title,
+    this.subtitle,
+    this.titleStyle,
+    this.subtitleStyle,
+    this.crossAxisAlignment = CrossAxisAlignment.start,
+    this.spacing = 3,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return Column(
+      crossAxisAlignment: crossAxisAlignment,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          title,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style:
+              titleStyle ??
+              TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: t.text,
+              ),
+        ),
+        if (subtitle != null) ...[
+          SizedBox(height: spacing),
+          Text(
+            subtitle!,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: subtitleStyle ?? TextStyle(fontSize: 11, color: t.muted),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class SectionLabel extends StatelessWidget {
+  final String text;
+
+  const SectionLabel(this.text, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return Text(
+      text.toUpperCase(),
+      style: TextStyle(
+        fontSize: 10,
+        fontWeight: FontWeight.w800,
+        letterSpacing: .8,
+        color: t.muted,
+      ),
+    );
+  }
+}
+
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  final String? actionLabel;
+  final IconData? actionIcon;
+  final VoidCallback? onAction;
+  final String? trailingText;
+
+  const _SectionHeader({
+    required this.title,
+    this.actionLabel,
+    this.actionIcon,
+    this.onAction,
+    this.trailingText,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            title,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: t.text,
+            ),
+          ),
+        ),
+        if (trailingText != null)
+          Text(trailingText!, style: TextStyle(fontSize: 10, color: t.muted)),
+        if (actionLabel != null)
+          TextButton.icon(
+            onPressed: onAction,
+            icon: Icon(actionIcon, size: 15),
+            label: Text(actionLabel!),
+            style: TextButton.styleFrom(
+              padding: EdgeInsets.zero,
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _LegendRow extends StatelessWidget {
   final Color color;
   final String name;
   final String value;
-  const _LegendDot({
+
+  const _LegendRow({
     required this.color,
     required this.name,
     required this.value,
   });
 
   @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Container(
-        width: 8,
-        height: 8,
-        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-      ),
-      const SizedBox(width: 7),
-      Expanded(
-        child: Text(
-          name,
-          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return Row(
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
-      ),
-      Text(
-        value,
-        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
-      ),
-    ],
-  );
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            name,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: t.text,
+            ),
+          ),
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            color: t.text,
+          ),
+        ),
+      ],
+    );
+  }
 }
 
+class _SettingTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  const _SettingTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return ListTile(
+      leading: Icon(icon, color: t.muted),
+      title: Text(
+        title,
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w700,
+          color: t.text,
+        ),
+      ),
+      subtitle: Text(
+        subtitle,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: 11, color: t.muted),
+      ),
+      trailing: Icon(AppIcons.arrow, color: t.muted),
+    );
+  }
+}
+
+class _SwitchTile extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  const _SwitchTile({
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SwitchListTile(
+      value: value,
+      onChanged: onChanged,
+      title: Text(title),
+      subtitle: Text(subtitle),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
+    );
+  }
+}
+
+class _ProfileAvatar extends StatelessWidget {
+  final String initials;
+  final VoidCallback? onTap;
+  final double radius;
+
+  const _ProfileAvatar({required this.initials, this.onTap, this.radius = 20});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    final avatar = CircleAvatar(
+      radius: radius,
+      backgroundColor: t.accent,
+      child: Text(
+        initials,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: radius * .55,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+
+    return onTap == null
+        ? avatar
+        : Semantics(
+            button: true,
+            label: 'Abrir perfil',
+            child: GestureDetector(onTap: onTap, child: avatar),
+          );
+  }
+}
+
+class _LocationField extends StatelessWidget {
+  final String label;
+  final String hint;
+  final IconData icon;
+
+  const _LocationField({
+    required this.label,
+    required this.hint,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return TextField(
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        prefixIcon: Icon(icon, color: t.accent),
+      ),
+    );
+  }
+}
+
+class _ActionTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _ActionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+
+    return Material(
+      color: t.accent.withValues(alpha: .08),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.all(13),
+          child: Row(
+            children: [
+              IconBadge(icon: icon, color: t.accent),
+              const SizedBox(width: 11),
+              Expanded(
+                child: _TextStack(title: title, subtitle: subtitle),
+              ),
+              Icon(AppIcons.arrow, color: t.muted),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// ---------------------------------------------------------------------------
+/// Small custom painter
+/// ---------------------------------------------------------------------------
+
 class _DonutPainter extends CustomPainter {
+  final List<double> values;
+  final List<Color> colors;
+
+  const _DonutPainter({required this.values, required this.colors});
+
   @override
   void paint(Canvas canvas, Size size) {
-    const colors = [
-      AppPalette.member1,
-      AppPalette.member2,
-      AppPalette.member3,
-      AppPalette.member4,
-    ];
-    const parts = [.42, .31, .18, .09];
-    final rect = Offset.zero & size;
-    var start = -1.5708;
+    if (values.isEmpty || colors.isEmpty) {
+      return;
+    }
+
+    final total = values.fold<double>(0, (sum, value) => sum + value);
+
+    if (total <= 0) return;
+
     final paint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 16
       ..strokeCap = StrokeCap.butt;
-    for (var index = 0; index < parts.length; index++) {
-      paint.color = colors[index];
-      final sweep = parts[index] * 6.28318 - .025;
-      canvas.drawArc(rect.deflate(8), start, sweep, false, paint);
-      start += sweep + .025;
+
+    final rect = Offset.zero & size;
+    var start = -1.5708;
+
+    for (var i = 0; i < values.length && i < colors.length; i++) {
+      final sweep = values[i] / total * 6.28318;
+
+      paint.color = colors[i];
+
+      canvas.drawArc(rect.deflate(8), start, sweep - .025, false, paint);
+
+      start += sweep;
     }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _DonutPainter oldDelegate) {
+    return oldDelegate.values != values || oldDelegate.colors != colors;
+  }
 }

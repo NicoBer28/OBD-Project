@@ -56,29 +56,86 @@ final themeModeNotifier = ValueNotifier<ThemeMode>(ThemeMode.light);
 /// [AppColors] holds the light values only, so widgets that must look right in
 /// both modes read these through `context.tokens` instead.
 class AppTokens {
-  final Color text, muted, surface2, accent2, member1;
+  final Color canvas;
+  final Color text;
+  final Color muted;
+  final Color surface;
+  final Color surface2;
+  final Color border;
+  final Color accent;
+  final Color accentSubtle;
+  final Color accent2;
+  final Color accent2Subtle;
+  final Color accent3;
+  final Color success;
+  final Color warning;
+  final Color danger;
+  final Color member1;
+  final Color member2;
+  final Color member3;
+  final Color member4;
+
   const AppTokens._({
+    required this.canvas,
     required this.text,
     required this.muted,
+    required this.surface,
     required this.surface2,
+    required this.border,
+    required this.accent,
+    required this.accentSubtle,
     required this.accent2,
+    required this.accent2Subtle,
+    required this.accent3,
+    required this.success,
+    required this.warning,
+    required this.danger,
     required this.member1,
+    required this.member2,
+    required this.member3,
+    required this.member4,
   });
 
   static const light = AppTokens._(
+    canvas: AppPalette.canvas,
     text: AppPalette.text,
     muted: AppPalette.muted,
+    surface: AppPalette.surface,
     surface2: AppPalette.surface2,
+    border: AppPalette.border,
+    accent: AppPalette.accent,
+    accentSubtle: AppPalette.accentSubtle,
     accent2: AppPalette.accent2,
+    accent2Subtle: AppPalette.accent2Subtle,
+    accent3: AppPalette.accent3,
+    success: AppPalette.success,
+    warning: AppPalette.warning,
+    danger: AppPalette.danger,
     member1: AppPalette.member1,
+    member2: AppPalette.member2,
+    member3: AppPalette.member3,
+    member4: AppPalette.member4,
   );
 
   static const dark = AppTokens._(
+    canvas: AppPalette.darkCanvas,
     text: AppPalette.darkText,
     muted: AppPalette.darkMuted,
+    surface: AppPalette.darkSurface,
     surface2: AppPalette.darkSurface2,
+    border: AppPalette.darkBorder,
+    accent: AppPalette.darkAccent,
+    accentSubtle: AppPalette.darkAccentSubtle,
     accent2: AppPalette.darkAccent2,
+    accent2Subtle: AppPalette.darkAccent2Subtle,
+    accent3: AppPalette.darkAccent3,
+    success: AppPalette.darkSuccess,
+    warning: AppPalette.darkWarning,
+    danger: AppPalette.darkDanger,
     member1: AppPalette.darkMember1,
+    member2: AppPalette.darkMember2,
+    member3: AppPalette.darkMember3,
+    member4: AppPalette.darkMember4,
   );
 }
 
