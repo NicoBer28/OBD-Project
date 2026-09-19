@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import './register_screen.dart';
-import './bluetooth_scanner_screen.dart';
 import './main_screen.dart';
 
 import 'dart:convert';
@@ -35,8 +34,8 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _ingresar() async {
-    // Si la validación local es correcta, se inicia el flujo BLE.
+void _ingresar() async {
+    // Si la validación local de formato pasa, navegamos directo sin llamar al backend
     if (_formKey.currentState!.validate()) {
       final userEmail = _emailController.text.trim();
       final userPassword = _passwordController.text;
@@ -62,26 +61,8 @@ class _LoginScreenState extends State<LoginScreen> {
           // Primero se busca el dispositivo OBD antes de mostrar el panel.
           navigator.pushReplacement(
             MaterialPageRoute(
-              builder: (context) => BluetoothScannerScreen(
-                nombreUsuario: userEmail,
-                onConnected: (device) {
-                  // Reemplazar la ruta evita volver al login con el botón Atrás.
-                  navigator.pushReplacement(
-                    MaterialPageRoute(
-                      builder: (context) =>
-                          MainScreen(nombreUsuario: userEmail, device: device),
-                    ),
-                  );
-                },
-                onContinueWithoutConnection: () {
-                  // Este camino conserva el simulador para pruebas sin hardware.
-                  navigator.pushReplacement(
-                    MaterialPageRoute(
-                      builder: (context) =>
-                          MainScreen(nombreUsuario: userEmail),
-                    ),
-                  );
-                },
+              builder: (context) => MainScreen(
+                nombreUsuario: userEmail
               ),
             ),
           );

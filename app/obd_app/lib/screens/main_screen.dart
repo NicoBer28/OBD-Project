@@ -1,20 +1,15 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
+import '../src/generated/obd_api.g.dart';
 import '../ui/app_theme.dart';
-import 'login_screen.dart';
+import './login_screen.dart';
+import '../native_bridge.dart';
 
-/// ---------------------------------------------------------------------------
-/// BLE constants
-/// ---------------------------------------------------------------------------
 
-const _uartServiceUuid = '6E400001-B5A3-F393-E0A9-E50E24DCCA9E';
-const _uartWriteUuid = '6E400002-B5A3-F393-E0A9-E50E24DCCA9E';
-const _uartReadUuid = '6E400003-B5A3-F393-E0A9-E50E24DCCA9E';
+
 
 /// ---------------------------------------------------------------------------
 /// UI / domain data
@@ -338,7 +333,6 @@ abstract final class AppIcons {
 
 class MainScreen extends StatefulWidget {
   final String nombreUsuario;
-  final BluetoothDevice? device;
 
   final CarData? car;
   final FuelSummaryData? fuelSummary;
@@ -350,7 +344,6 @@ class MainScreen extends StatefulWidget {
   const MainScreen({
     super.key,
     required this.nombreUsuario,
-    this.device,
     this.car,
     this.fuelSummary,
     this.members,
@@ -363,7 +356,7 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen> implements ObdFlutterApi{
   late final CarData _carData;
   late final FuelSummaryData _fuelData;
   late final List<MemberData> _members;
@@ -380,17 +373,8 @@ class _MainScreenState extends State<MainScreen> {
   double _fuel = DemoData.car.fuelPercent;
   int _speed = 0;
   int _rpm = 0;
+  String _connectionStatus = 'Desconectado';
 
-  BluetoothCharacteristic? _writeCharacteristic;
-  BluetoothCharacteristic? _readCharacteristic;
-  StreamSubscription<List<int>>? _receiveSubscription;
-  StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
-
-  String _connectionStatus = 'Modo demo · sin conexión BLE';
-  String _receivedData = 'Sin datos recibidos';
-  bool _sending = false;
-
-  final _commandController = TextEditingController();
 
   @override
   void initState() {
@@ -405,162 +389,42 @@ class _MainScreenState extends State<MainScreen> {
 
     _fuel = _carData.fuelPercent;
 
-    if (widget.device != null) {
-      _listenToDevice();
-      _prepareBle();
-    }
+    ObdFlutterApi.setUp(this);
+    _solicitarPermisos();
   }
 
   /// -------------------------------------------------------------------------
   /// BLE
   /// -------------------------------------------------------------------------
-
-  void _listenToDevice() {
-    final device = widget.device!;
-
-    _connectionSubscription = device.connectionState.listen((state) {
-      if (!mounted) return;
-
-      setState(() {
-        _connectionStatus = switch (state) {
-          BluetoothConnectionState.connected => 'Conectado',
-          BluetoothConnectionState.disconnected => 'Desconectado',
-          _ => 'Conectando…',
-        };
-      });
-    });
+Future<void> _solicitarPermisos() async {
+    await [
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+      Permission.location,
+      Permission.notification,
+    ].request();
   }
 
-  Future<void> _prepareBle() async {
-    final device = widget.device!;
-
-    try {
-      if (!device.isConnected) {
-        await device.connect(license: License.nonprofit, autoConnect: false);
-      }
-
-      final services = await device.discoverServices();
-      BluetoothService? uartService;
-
-      for (final service in services) {
-        if (service.uuid == Guid(_uartServiceUuid)) {
-          uartService = service;
-          break;
-        }
-      }
-
-      if (uartService == null) {
-        throw StateError('No se encontró el servicio UART de la ESP32');
-      }
-
-      for (final characteristic in uartService.characteristics) {
-        if (characteristic.uuid == Guid(_uartWriteUuid)) {
-          _writeCharacteristic = characteristic;
-        }
-
-        if (characteristic.uuid == Guid(_uartReadUuid)) {
-          _readCharacteristic = characteristic;
-        }
-      }
-
-      if (_readCharacteristic != null &&
-          (_readCharacteristic!.properties.notify ||
-              _readCharacteristic!.properties.indicate)) {
-        await _readCharacteristic!.setNotifyValue(true);
-
-        _receiveSubscription = _readCharacteristic!.onValueReceived.listen(
-          _handlePacket,
-        );
-      }
-
-      if (!mounted) return;
-
-      final deviceName = device.advName.isEmpty
-          ? device.remoteId
-          : device.advName;
-
-      setState(() {
-        _connectionStatus = _writeCharacteristic == null
-            ? 'Conectado · sin canal de escritura'
-            : 'Conectado a $deviceName';
-      });
-    } catch (error) {
-      if (!mounted) return;
-
-      setState(() {
-        _connectionStatus = 'Error preparando BLE';
-      });
-
-      _showMessage('No se pudo preparar BLE: $error');
-    }
+  @override
+  void dispose() {
+    // Nos desuscribimos al cerrar la pantalla
+    ObdFlutterApi.setUp(null);
+    super.dispose();
   }
 
-  void _handlePacket(List<int> value) {
-    if (!mounted || value.isEmpty) return;
-
-    final bytes = Uint8List.fromList(value);
-    final data = ByteData.sublistView(bytes);
-    final packetType = data.getUint8(0);
-
+  // acá llega el dato directo desde el background service nativo
+  @override
+  void onTelemetryUpdated(TelemetryEvent event) {
+    if (!mounted) return;
+    
     setState(() {
-      if (packetType == 1 && bytes.length >= 4) {
-        _speed = data.getUint8(1);
-        _rpm = data.getUint16(2, Endian.little);
-        _receivedData = 'Vel: $_speed km/h · RPM: $_rpm';
-      } else if (packetType == 2 && bytes.length >= 3) {
-        _fuel = data.getUint8(2).toDouble();
-        _receivedData = 'Nivel de nafta: ${_fuel.toInt()}%';
+      _speed = event.speed ?? 0;
+      _rpm = event.rpm ?? 0;
+      _fuel = (event.fuel ?? 0).toDouble();
+      if (_speed > 0 || _rpm > 0) {
+         _connectionStatus = 'Conectado';
       }
     });
-  }
-
-  Future<void> _sendCommand() async {
-    final command = _commandController.text.trim();
-
-    if (command.isEmpty || _writeCharacteristic == null || _sending) {
-      return;
-    }
-
-    setState(() => _sending = true);
-
-    try {
-      final characteristic = _writeCharacteristic!;
-
-      await characteristic.write(
-        utf8.encode(command),
-        withoutResponse:
-            characteristic.properties.writeWithoutResponse &&
-            !characteristic.properties.write,
-      );
-
-      _commandController.clear();
-    } catch (error) {
-      _showMessage('No se pudo enviar el comando: $error');
-    } finally {
-      if (mounted) {
-        setState(() => _sending = false);
-      }
-    }
-  }
-
-  Future<void> _readOnce() async {
-    final characteristic = _readCharacteristic;
-
-    if (characteristic == null || !characteristic.properties.read) {
-      return;
-    }
-
-    try {
-      final value = await characteristic.read();
-
-      if (mounted) {
-        setState(() {
-          _receivedData = utf8.decode(value, allowMalformed: true);
-        });
-      }
-    } catch (error) {
-      _showMessage('No se pudo leer: $error');
-    }
   }
 
   /// -------------------------------------------------------------------------
@@ -709,6 +573,7 @@ class _MainScreenState extends State<MainScreen> {
   /// Navigation / pages
   /// -------------------------------------------------------------------------
 
+
   @override
   Widget build(BuildContext context) {
     final pages = [
@@ -779,8 +644,6 @@ class _MainScreenState extends State<MainScreen> {
   /// -------------------------------------------------------------------------
 
   Widget _buildCarPage() {
-    final connected = _connectionStatus.toLowerCase().startsWith('conectado');
-
     return _page(
       key: const ValueKey('car'),
       title: _carData.name,
@@ -836,22 +699,12 @@ class _MainScreenState extends State<MainScreen> {
           label: const Text('Iniciar viaje'),
         ),
         const SizedBox(height: 16),
-        _BleCard(
-          connected: connected,
-          status: _connectionStatus,
-          receivedData: _receivedData,
+        _TelemetryCard(
           speed: _speed,
           rpm: _rpm,
-          commandController: _commandController,
-          sending: _sending,
-          canWrite: _writeCharacteristic != null,
-          canRead: _readCharacteristic?.properties.read == true,
-          onSend: _sendCommand,
-          onRead: _readOnce,
           fuel: _fuel,
-          onFuelChanged: (value) {
-            setState(() => _fuel = value);
-          },
+          status: _connectionStatus,
+          onFuelChanged: (value) => setState(() => _fuel = value),
         ),
       ],
     );
@@ -973,6 +826,9 @@ class _MainScreenState extends State<MainScreen> {
                 icon: AppIcons.bluetooth,
                 title: 'Conexión OBD',
                 subtitle: _connectionStatus,
+                onTap: () async {
+                  await NativeBleBridge.iniciarVinculacion();
+                },
               ),
               const Divider(height: 1),
               _SettingTile(
@@ -1067,14 +923,6 @@ class _MainScreenState extends State<MainScreen> {
     }
 
     return name.substring(0, name.length.clamp(0, 2)).toUpperCase();
-  }
-
-  @override
-  void dispose() {
-    _receiveSubscription?.cancel();
-    _connectionSubscription?.cancel();
-    _commandController.dispose();
-    super.dispose();
   }
 }
 
@@ -2098,6 +1946,7 @@ class _DriverBreakdown extends StatelessWidget {
     );
   }
 
+
   double _parseKm(String value) {
     final normalized = value
         .replaceAll('.', '')
@@ -2113,40 +1962,25 @@ class _DriverBreakdown extends StatelessWidget {
 /// BLE card
 /// ---------------------------------------------------------------------------
 
-class _BleCard extends StatelessWidget {
-  final bool connected;
-  final String status;
-  final String receivedData;
+class _TelemetryCard extends StatelessWidget {
   final int speed;
   final int rpm;
-  final TextEditingController commandController;
-  final bool sending;
-  final bool canWrite;
-  final bool canRead;
-  final VoidCallback onSend;
-  final VoidCallback onRead;
   final double fuel;
+  final String status;
   final ValueChanged<double> onFuelChanged;
 
-  const _BleCard({
-    required this.connected,
-    required this.status,
-    required this.receivedData,
+  const _TelemetryCard({
     required this.speed,
     required this.rpm,
-    required this.commandController,
-    required this.sending,
-    required this.canWrite,
-    required this.canRead,
-    required this.onSend,
-    required this.onRead,
     required this.fuel,
+    required this.status,
     required this.onFuelChanged,
   });
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final hasData = speed > 0 || rpm > 0;
 
     return SectionCard(
       child: Column(
@@ -2158,7 +1992,7 @@ class _BleCard extends StatelessWidget {
                 width: 9,
                 height: 9,
                 decoration: BoxDecoration(
-                  color: connected ? t.success : t.warning,
+                  color: hasData ? t.success : t.warning,
                   shape: BoxShape.circle,
                 ),
               ),
@@ -2166,8 +2000,6 @@ class _BleCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   status,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
@@ -2178,58 +2010,36 @@ class _BleCard extends StatelessWidget {
               Icon(AppIcons.bluetooth, size: 18, color: t.muted),
             ],
           ),
-          const SizedBox(height: 7),
-          Text(
-            'Último dato: $receivedData',
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 11, color: t.muted),
-          ),
-          if (speed != 0 || rpm != 0) ...[
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                _MetricPill(label: 'Velocidad', value: '$speed km/h'),
-                const SizedBox(width: 6),
-                _MetricPill(label: 'RPM', value: '$rpm'),
-              ],
-            ),
-          ],
-          const SizedBox(height: 10),
+          const SizedBox(height: 16),
           Row(
             children: [
-              Expanded(
-                child: TextField(
-                  controller: commandController,
-                  enabled: canWrite,
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    labelText: 'Enviar comando',
-                    prefixIcon: Icon(AppIcons.send, size: 18),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 4),
-              IconButton(
-                tooltip: 'Enviar',
-                onPressed: canWrite ? onSend : null,
-                icon: sending
-                    ? const SizedBox.square(
-                        dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(AppIcons.send),
-              ),
-              IconButton(
-                tooltip: 'Leer',
-                onPressed: canRead ? onRead : null,
-                icon: const Icon(AppIcons.refresh),
-              ),
+              _MetricPill(label: 'Velocidad', value: '$speed km/h'),
+              const SizedBox(width: 8),
+              _MetricPill(label: 'RPM', value: '$rpm'),
             ],
           ),
-          const SizedBox(height: 3),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.bluetooth_searching),
+              label: const Text('Vincular ESP32 (Fondo)'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue.shade700,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              onPressed: () async {
+                await NativeBleBridge.iniciarVinculacion();
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
           Text(
-            'Simulador de nafta',
+            'Simulador de nafta UI',
             style: TextStyle(fontSize: 10, color: t.muted),
           ),
           Slider(
@@ -2511,11 +2321,13 @@ class _SettingTile extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
+  final VoidCallback? onTap;
 
   const _SettingTile({
     required this.icon,
     required this.title,
     required this.subtitle,
+    this.onTap,
   });
 
   @override
@@ -2538,6 +2350,7 @@ class _SettingTile extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
         style: TextStyle(fontSize: 11, color: t.muted),
       ),
+      onTap: onTap,
       trailing: Icon(AppIcons.arrow, color: t.muted),
     );
   }
@@ -2699,10 +2512,11 @@ class _DonutPainter extends CustomPainter {
     for (var i = 0; i < values.length && i < colors.length; i++) {
       final sweep = values[i] / total * 6.28318;
 
-      paint.color = colors[i];
+      if (sweep > 0.025) {
+        paint.color = colors[i];
 
-      canvas.drawArc(rect.deflate(8), start, sweep - .025, false, paint);
-
+        canvas.drawArc(rect.deflate(8), start, sweep - .025, false, paint);
+      }
       start += sweep;
     }
   }
