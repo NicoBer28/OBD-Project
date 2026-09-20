@@ -48,7 +48,7 @@ class _LoginScreenState extends State<LoginScreen> {
           url,
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
-            'userMail': userEmail,
+            'userEmail': userEmail,
             'userPassword': userPassword,
           }),
         );
