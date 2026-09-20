@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import 'package:obd_app/screens/main_screen.dart';
-import 'package:obd_app/ui/app_theme.dart';
+import 'package:obd_app/core/theme/app_theme.dart';
+import 'package:obd_app/ui/screens/home/main_screen.dart';
 
 void main() {
   // Punto de entrada de Dart. Flutter comienza construyendo OBDCApp.

@@ -1,13 +1,10 @@
-import 'package:flutter/material.dart';
-
-import './register_screen.dart';
-import './main_screen.dart';
-
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-
-import '../ui/app_theme.dart';
+import 'package:obd_app/core/theme/app_theme.dart';
+import 'package:obd_app/ui/screens/auth/register_screen.dart';
+import 'package:obd_app/ui/screens/home/main_screen.dart';
 
 // Login: valida las credenciales localmente y conserva el nombre de usuario.
 // Actualmente no existe una autenticación contra un servidor.
@@ -34,7 +31,7 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-void _ingresar() async {
+  void _ingresar() async {
     // Si la validación local de formato pasa, navegamos directo sin llamar al backend
     if (_formKey.currentState!.validate()) {
       final userEmail = _emailController.text.trim();
@@ -61,9 +58,7 @@ void _ingresar() async {
           // Primero se busca el dispositivo OBD antes de mostrar el panel.
           navigator.pushReplacement(
             MaterialPageRoute(
-              builder: (context) => MainScreen(
-                nombreUsuario: userEmail
-              ),
+              builder: (context) => MainScreen(nombreUsuario: userEmail),
             ),
           );
         } else if (response.statusCode == 401) {

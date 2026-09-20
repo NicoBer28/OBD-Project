@@ -1,10 +1,8 @@
-import 'package:flutter/material.dart';
-
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-
-import '../ui/app_theme.dart';
+import 'package:obd_app/core/theme/app_theme.dart';
 
 // Pantalla de Registro: permite al usuario crear una cuenta validando
 // que los campos de nombre, correo y contraseña cumplan los requisitos básicos.
