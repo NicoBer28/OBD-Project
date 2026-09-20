@@ -1,0 +1,17 @@
+# ---- build ----
+FROM eclipse-temurin:25-jdk AS build
+WORKDIR /app
+COPY .mvn .mvn
+COPY mvnw pom.xml ./
+RUN ./mvnw -q -B dependency:go-offline
+COPY src src
+RUN ./mvnw -q -B -DskipTests package
+
+# ---- run ----
+FROM eclipse-temurin:25-jre
+WORKDIR /app
+COPY --from=build /app/target/*.jar app.jar
+ENV PORT=8080
+EXPOSE 8080
+# Flags tuned for fast startup on a 1 vCPU / 2 GB function.
+ENTRYPOINT ["java","-XX:+UseSerialGC","-XX:TieredStopAtLevel=1","-XX:MaxRAMPercentage=75","-jar","app.jar"]
