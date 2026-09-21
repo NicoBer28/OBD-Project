@@ -33,7 +33,7 @@ class ApiConfig {
 
   static const String _defaultBaseUrl = String.fromEnvironment(
     'OBD_API_BASE_URL',
-    defaultValue: 'http://192.168.1.19:8080',
+    defaultValue: 'https://obd-project-git-development-nicober2005-6633s-projects.vercel.app/',
   );
 
   /// What the app uses unless a test passes something else.
