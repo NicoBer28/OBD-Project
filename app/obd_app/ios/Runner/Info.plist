@@ -70,5 +70,17 @@
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
+    <!-- Permisos para leer el GPS incluso con la pantalla apagada -->
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Requerido para registrar el recorrido del vehículo en segundo plano mientras manejás.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Requerido para registrar el recorrido del vehículo en segundo plano mientras manejás.</string>
+
+	<!-- Permisos para no congelar la app en segundo plano -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+		<string>location</string>
+	</array>
 </dict>
 </plist>
