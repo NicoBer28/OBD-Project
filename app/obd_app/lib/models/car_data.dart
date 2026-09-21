@@ -1,6 +1,5 @@
-import 'package:obd_app/models/schedule_slot.dart';
-
 class CarData {
+  final String id;
   final String name;
   final String brand;
   final String plate;
@@ -12,9 +11,9 @@ class CarData {
   final String parkingAddress;
   final String parkingMeta;
   final String parkedBy;
-  final ScheduleSlot? nextTurn;
 
   const CarData({
+    required this.id,
     required this.name,
     required this.brand,
     required this.plate,
@@ -26,7 +25,6 @@ class CarData {
     required this.parkingAddress,
     required this.parkingMeta,
     required this.parkedBy,
-    this.nextTurn,
   });
 
   int get autonomyKm =>

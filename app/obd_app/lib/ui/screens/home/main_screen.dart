@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:obd_app/controllers/reservations_controller.dart';
 import 'package:obd_app/core/constants/app_icons.dart';
 import 'package:obd_app/core/constants/demo_data.dart';
+import 'package:obd_app/data/in_memory_reservation_repository.dart';
+import 'package:obd_app/data/reservation_repository.dart';
 import 'package:obd_app/models/models.dart';
 import 'package:obd_app/src/generated/obd_api.g.dart';
 import 'package:obd_app/ui/screens/home/tabs/activity_tab.dart';
@@ -22,7 +25,8 @@ class MainScreen extends StatefulWidget {
   final CarData? car;
   final FuelSummaryData? fuelSummary;
   final List<MemberData>? members;
-  final List<ScheduleSlot>? schedule;
+  final ReservationRepository? reservationRepository;
+  final String? currentUserId;
   final List<TripData>? trips;
   final ActivitySummaryData? activity;
 
@@ -32,7 +36,8 @@ class MainScreen extends StatefulWidget {
     this.car,
     this.fuelSummary,
     this.members,
-    this.schedule,
+    this.reservationRepository,
+    this.currentUserId,
     this.trips,
     this.activity,
   });
@@ -45,7 +50,7 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
   late final CarData _carData;
   late final FuelSummaryData _fuelData;
   late final List<MemberData> _members;
-  late final List<ScheduleSlot> _schedule;
+  late final ReservationsController _reservations;
   late final List<TripData> _trips;
   late final ActivitySummaryData _activityData;
 
@@ -67,9 +72,20 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
     _carData = widget.car ?? DemoData.car;
     _fuelData = widget.fuelSummary ?? DemoData.fuel;
     _members = widget.members ?? DemoData.members;
-    _schedule = widget.schedule ?? DemoData.schedule;
     _trips = widget.trips ?? DemoData.trips;
     _activityData = widget.activity ?? DemoData.activity;
+
+    _reservations = ReservationsController(
+      repository: widget.reservationRepository ??
+          InMemoryReservationRepository.demo(
+            carId: _carData.id,
+            userIds: _members.map((m) => m.id).toList(),
+          ),
+      carId: _carData.id,
+      // Placeholder until login gives us the real user id.
+      currentUserId: widget.currentUserId ?? _members.first.id,
+      members: _members,
+    );
 
     _fuel = _carData.fuelPercent;
 
@@ -94,6 +110,7 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
   void dispose() {
     // Nos desuscribimos al cerrar la pantalla
     ObdFlutterApi.setUp(null);
+    _reservations.dispose();
     super.dispose();
   }
 
@@ -121,6 +138,7 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
     final pages = [
       CarTab(
         carData: _carData,
+        reservations: _reservations,
         initials: _initials,
         fuel: _fuel,
         speed: _speed,
@@ -130,7 +148,11 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
         onNavigateToShared: () => setState(() => _tab = 1),
         onNavigateToProfile: () => setState(() => _tab = 3),
       ),
-      SharedTab(members: _members, fuelData: _fuelData, schedule: _schedule),
+      SharedTab(
+        members: _members,
+        fuelData: _fuelData,
+        reservations: _reservations,
+      ),
       ActivityTab(
         carData: _carData,
         trips: _trips,
