@@ -4,7 +4,6 @@ Spring Boot backend for OBD. Authentication is JWT-based: a short-lived access
 token returned in the response body, and a long-lived refresh token delivered
 as an `httpOnly` cookie.
 
-
 ## Database
 
 Postgres is required — the app will not start without it. Create the database
