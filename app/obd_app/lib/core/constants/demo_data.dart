@@ -11,6 +11,7 @@ import 'package:obd_app/models/models.dart';
 class DemoData {
   static List<MemberData> get members => [
     const MemberData(
+      id: 'u1',
       initials: 'LM',
       name: 'Vos',
       color: AppPalette.member1,
@@ -18,6 +19,7 @@ class DemoData {
       fuelAmount: r'$35.364',
     ),
     const MemberData(
+      id: 'u2',
       initials: 'SM',
       name: 'Sofía',
       color: AppPalette.member2,
@@ -25,6 +27,7 @@ class DemoData {
       fuelAmount: r'$26.102',
     ),
     const MemberData(
+      id: 'u3',
       initials: 'MG',
       name: 'Martín',
       color: AppPalette.member3,
@@ -32,6 +35,7 @@ class DemoData {
       fuelAmount: r'$15.156',
     ),
     const MemberData(
+      id: 'u4',
       initials: 'PA',
       name: 'Papá',
       color: AppPalette.member4,
@@ -41,6 +45,7 @@ class DemoData {
   ];
 
   static const car = CarData(
+    id: 'car-1',
     name: 'Golf GTI',
     brand: 'Volkswagen',
     plate: 'AB 123 CD',
@@ -52,12 +57,6 @@ class DemoData {
     parkingAddress: 'Av. Corrientes 1234',
     parkingMeta: 'a 600 m tuyo',
     parkedBy: 'Sofía',
-    nextTurn: ScheduleSlot(
-      day: 'HOY',
-      time: '18:00 – 21:00',
-      person: 'Vos',
-      color: AppPalette.member1,
-    ),
   );
 
   static FuelSummaryData get fuel => FuelSummaryData(
@@ -66,34 +65,6 @@ class DemoData {
     total: r'$84.200',
     members: members,
   );
-
-  static const schedule = [
-    ScheduleSlot(
-      day: 'HOY',
-      time: '18–21',
-      person: 'Vos',
-      color: AppPalette.member1,
-    ),
-    ScheduleSlot(
-      day: 'SÁB',
-      time: '09–14',
-      person: 'Sofía · Pilar',
-      color: AppPalette.member2,
-    ),
-    ScheduleSlot(
-      day: 'DOM',
-      time: 'todo',
-      person: 'Martín',
-      color: AppPalette.member3,
-    ),
-    ScheduleSlot(
-      day: 'LUN',
-      time: '—',
-      person: 'Libre',
-      color: AppPalette.surface2,
-      available: true,
-    ),
-  ];
 
   static List<TripData> get trips {
     final people = members;
