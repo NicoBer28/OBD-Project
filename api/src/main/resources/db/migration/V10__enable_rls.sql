@@ -22,7 +22,10 @@ alter table trips                 enable row level security;
 alter table telemetry             enable row level security;
 alter table invitations           enable row level security;
 alter table devices               enable row level security;
-alter table flyway_schema_history enable row level security;
+
+-- Not flyway_schema_history: Flyway's main connection holds a share lock on
+-- it while a migration runs, so an ALTER from inside a migration blocks until
+-- the statement timeout. The revoke below already hides it from the REST API.
 
 -- Belt and braces on Supabase: also drop the API roles' grants, so the tables
 -- are unreachable even if RLS were ever switched off from the dashboard.
