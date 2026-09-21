@@ -1,0 +1,4189 @@
+diff --git a/app/obd_app/lib/data/api/README.md b/app/obd_app/lib/data/api/README.md
+new file mode 100644
+index 0000000..4b87a46
+--- /dev/null
++++ b/app/obd_app/lib/data/api/README.md
+@@ -0,0 +1,561 @@
++# Cliente de la API — `lib/data/api`
++
++Todo lo que la app necesita para hablar con el backend de Spring que vive en
++`api/`. Un solo import trae el cliente, los modelos y los errores:
++
++```dart
++import 'package:obd_app/data/api/obd_api.dart';
++```
++
++La referencia del servidor (qué devuelve cada endpoint y por qué está diseñado
++así) es [`api/README.md`](../../../../../api/README.md). Este archivo documenta el
++lado Dart: cómo se llama a cada cosa y qué parámetros lleva.
++
++---
++
++## Índice
++
++1. [Configurar a dónde apunta](#1-configurar-a-dónde-apunta)
++2. [Cómo funciona](#2-cómo-funciona)
++3. [Manejo de errores](#3-manejo-de-errores)
++4. [Endpoints](#4-endpoints)
++5. [Recetas](#5-recetas)
++6. [Qué falta](#6-qué-falta)
++
++---
++
++## 1. Configurar a dónde apunta
++
++La URL base sale de un `--dart-define`, así que el mismo código sirve para la
++notebook, el emulador y producción sin tocar fuentes:
++
++```bash
++flutter run --dart-define=OBD_API_BASE_URL=http://10.0.2.2:8080
++```
++
++| Dónde corre la app | URL base |
++|---|---|
++| Emulador de Android | `http://10.0.2.2:8080` |
++| Simulador de iOS | `http://localhost:8080` |
++| Celular físico en la misma Wi-Fi | `http://<ip-de-tu-máquina>:8080` |
++| Producción | `https://<host>` |
++
++Sin `--dart-define` el default es `http://192.168.1.19:8080`, que era la IP
++hardcodeada que ya tenían las pantallas de login y registro
++(`ApiConfig._defaultBaseUrl`). Cambiala ahí si tu LAN usa otra.
++
++> **Android:** el tráfico en texto plano (`http://`) está bloqueado por defecto
++> desde Android 9. Para pegarle a un backend local hace falta un
++> `network_security_config.xml` que permita cleartext para esa IP. Con `https://`
++> no hace falta nada.
++
++Para tests se construye una instancia aparte, sin tocar el singleton:
++
++```dart
++final api = ObdApi(
++  config: const ApiConfig(baseUrl: 'http://test.local'),
++  httpClient: MockClient(...),
++);
++```
++
++---
++
++## 2. Cómo funciona
++
++```
++ObdApi.instance
++  ├── .auth .users .cars .models .devices .groups .invitations .trips .telemetry
++  ├── .session   -> ObdSession: tokens + usuario logueado (ChangeNotifier)
++  └── .client    -> ApiClient: el único lugar que habla HTTP
++```
++
++`ApiClient` se ocupa de las cuatro cosas que si no habría que repetir en cada
++endpoint:
++
++**1. El bearer.** Todo lo que no sea `auth/*` viaja con
++`Authorization: Bearer <accessToken>`. Ningún método de endpoint arma headers.
++
++**2. La cookie de refresh.** La API manda el refresh token como cookie
++`httpOnly`, y `package:http` no tiene cookie jar (en el celular no hay
++navegador que la guarde). Entonces el cliente lee el `Set-Cookie` de la
++respuesta, se guarda el valor en la sesión y lo manda a mano como header
++`Cookie` cuando llama a `POST /auth/refresh`.
++
++**3. Re-autenticación silenciosa.** Si una llamada vuelve `401`, el cliente
++refresca una vez y la reintenta. El access token dura 15 minutos, así que esto
++pasa seguido y el usuario no se entera.
++
++Los refreshes están serializados a propósito: si cinco requests fallan al mismo
++tiempo, comparten **un** refresh. Los refresh tokens son de un solo uso, y
++presentar uno ya rotado revoca toda la familia y obliga a loguearse de nuevo —
++o sea que refrescar cinco veces en paralelo *cerraría* la sesión en vez de
++salvarla.
++
++**4. Los errores.** Cualquier 4xx/5xx se convierte en `ApiException` y un host
++inalcanzable en `NetworkException`. Ningún método de endpoint mira un status
++code.
++
++### La sesión
++
++`ObdSession` guarda el access token, la cookie de refresh, cuándo vence, el
++`userId` y el email. Es un `ChangeNotifier`, así que un widget puede escucharlo
++con `ListenableBuilder` para reaccionar al logout.
++
++**No se persiste nada en disco.** Cerrar la app desloguea. Agregarlo es una
++clase: guardar los tres campos en `flutter_secure_storage` y restaurarlos antes
++de `runApp`. Quedó afuera a propósito — un refresh token en
++`SharedPreferences` en texto plano es peor que volver a pedir la contraseña.
++
++---
++
++## 3. Manejo de errores
++
++```dart
++try {
++  await api.trips.start(carId: auto.id);
++} on ApiException catch (e) {
++  if (e.isConflict) {
++    // 409: alguien ya está usando el auto
++  } else if (e.isNotFound) {
++    // 404: no existe, o no es tuyo — la API no distingue a propósito
++  }
++} on NetworkException {
++  // nunca llegó al servidor
++}
++```
++
++Las dos derivan de `ObdApiException`, que es `sealed`: un `switch` sobre ella
++es exhaustivo, y con `on ObdApiException` se atrapan las dos.
++
++| Getter | Status | Qué significa en esta API |
++|---|---|---|
++| `isValidation` | 400 | Body mal formado, UUID inválido en la ruta, o validación fallida. Mirá `fieldErrors` |
++| `isUnauthorized` | 401 | Sin token, vencido o rechazado |
++| `isForbidden` | 403 | Autenticado pero sin permiso. Solo aparece donde el que llama ya sabe que la cosa existe (no es admin del grupo, no es admin de cuenta) |
++| `isNotFound` | 404 | **No existe *o* no es tuyo.** La API contesta igual en los dos casos para no confirmarle un id a un desconocido |
++| `isConflict` | 409 | Choque de estado: email tomado, patente tomada, auto ya en viaje, invitación ya aceptada, dongle pareado a otro auto |
++| `isServerError` | 5xx | Problema del servidor |
++
++En un `400` el servidor manda un mapa campo → mensaje, que llega en
++`fieldErrors` y se puede colgar directamente de cada `TextFormField`:
++
++```dart
++{'userPassword': 'size must be between 8 and 72'}
++```
++
++En un lote de telemetría las claves vienen indexadas:
++`readings[2].positionComplete`.
++
++---
++
++## 4. Endpoints
++
++Los 31 endpoints de la API, agrupados igual que en el servidor. Base:
++`/api/v1`. Todo menos `auth/*` necesita sesión.
++
++### `api.auth` — autenticación
++
++| Método | Endpoint |
++|---|---|
++| `register(...)` | `POST /auth/register` |
++| `login(...)` | `POST /auth/login` |
++| `refresh()` | `POST /auth/refresh` |
++| `logout()` | `POST /auth/logout` |
++
++```dart
++await api.auth.register(
++  userName: 'Ada',              // requerido, nombre de pila
++  userLastName: 'Lovelace',     // requerido
++  userEmail: 'ada@example.com', // requerido, email válido
++  userPassword: 'supersecret1', // requerido, 8–72 caracteres
++  userPhone: '+54 11 5555 5555' // opcional, se omite si viene vacío
++);
++```
++
++`register` **además loguea**: devuelve los mismos tokens que `login`, así que
++después de crear la cuenta se puede entrar directo.
++
++```dart
++await api.auth.login(
++  userEmail: 'ada@example.com',  // requerido
++  userPassword: 'supersecret1',  // requerido, 8–72
++);
++```
++
++Errores: `login` tira `isUnauthorized` con credenciales malas; `register` tira
++`isConflict` si el email ya existe.
++
++`refresh()` casi nunca se llama a mano — el cliente lo hace solo ante un `401`.
++Devuelve `false` cuando la sesión terminó de verdad (ahí conviene mandar al
++usuario al login).
++
++`logout()` revoca **todos** los refresh tokens del usuario en el servidor y
++limpia la sesión local pase lo que pase.
++
++### `api.users` — perfil
++
++| Método | Endpoint |
++|---|---|
++| `me()` | `GET /users/me` |
++
++Sin parámetros: el usuario es el dueño del token. No existe `GET /users/{id}`,
++a propósito. Devuelve `UserProfile` con `userName` (nombre de pila),
++`userLastName`, `userEmail`, `userPhone`, más `fullName` e `initials` para la UI.
++
++### `api.cars` — autos
++
++| Método | Endpoint |
++|---|---|
++| `create(...)` | `POST /cars` |
++| `list()` | `GET /cars` |
++| `byId(carId)` | `GET /cars/{carId}` |
++| `share(...)` | `PUT /cars/{carId}/group` |
++| `unshare(carId)` | `DELETE /cars/{carId}/group` |
++| `forGroup(groupId)` | `GET /groups/{groupId}/cars` |
++
++```dart
++await api.cars.create(
++  name: "El Gol de Ada",  // requerido, ≤ 60 chars
++  modelId: modelo.modelId,// requerido, sale de api.models.list()
++  licensePlate: 'AB123CD',// opcional, ≤ 16 chars
++  mileage: 120000,        // opcional, ≥ 0
++);
++```
++
++El dueño sale del token, nunca del body. Nafta, batería y posición **no** se
++aceptan acá: solo llegan desde el dispositivo.
++
++`list()` trae los autos propios **más** los compartidos con algún grupo del
++usuario, ordenados por nombre. Vacío para un usuario nuevo, nunca error.
++
++Los campos de telemetría del `Car` (`fuelLevel`, `batteryLevel`, `latitude`,
++`longitude`, `mileage`, `snapshotAt`) son una copia cacheada de la última
++lectura; `snapshotAt` dice de cuál. Todos `null` en un auto que nunca reportó
++(`car.hasSnapshot == false`).
++
++```dart
++await api.cars.share(carId: auto.id, groupId: grupo.id);
++```
++
++Un auto está en **un grupo a la vez**, por eso es `PUT`: compartir con un
++segundo grupo lo *mueve*. Solo el dueño. Al des-compartir, un viaje abierto
++queda como está — un viaje es el registro de lo que pasó, no un permiso.
++
++Errores: `create` tira `isNotFound` con un `modelId` desconocido e
++`isConflict` si ya tenés un auto con esa patente (las patentes son únicas **por
++dueño**, no globalmente). `share` tira `isNotFound` tanto si el auto no es tuyo
++como si no pertenecés al grupo.
++
++### `api.models` — catálogo de modelos
++
++| Método | Endpoint |
++|---|---|
++| `list()` | `GET /models` |
++| `create(...)` | `POST /models` (solo admin) |
++
++De acá sale el `modelId` que pide `cars.create`. El formulario de alta de auto
++debería ser un selector sobre `list()`, no dos campos de texto libre — el
++catálogo es curado justamente para que la tabla no se llene de `VW` / `vw` /
++`Volkswagen`. Vienen ocho modelos sembrados con ids fijos, así que nunca está
++vacío.
++
++```dart
++await api.models.create(
++  modelBrand: 'Renault',              // requerido, ≤ 60
++  modelName: 'Clio',                  // requerido, ≤ 60
++  modelProtocol: 'ISO 15765-4 (CAN)', // requerido, ≤ 40
++);
++```
++
++Requiere una cuenta con rol `ADMIN` (el rol de cuenta, no el de grupo).
++`register` siempre crea usuarios comunes y ningún endpoint promueve a nadie, así
++que el primer admin se hace con SQL:
++`update users set role = 'ADMIN' where email = '…';` (toma efecto en el
++siguiente login). Para todos los demás: `isForbidden`.
++
++### `api.devices` — dongles OBD
++
++| Método | Endpoint |
++|---|---|
++| `pair(...)` | `PUT /cars/{carId}/device` |
++| `forCar(carId)` / `forCarOrNull(carId)` | `GET /cars/{carId}/device` |
++| `unpair(carId)` | `DELETE /cars/{carId}/device` |
++| `resolve(serial)` / `resolveOrNull(serial)` | `GET /devices/{serial}` |
++
++Todos los dongles se anuncian con el mismo nombre BLE (`OBD-C`), así que un
++celular que ve uno no puede distinguir dos autos de la misma familia. El mapeo
++serial → auto vive en el servidor: todos los celulares resuelven igual, y mover
++un dongle de auto re-rutea a todos de una.
++
++```dart
++await api.devices.pair(
++  carId: auto.id,             // requerido, un auto propio
++  serial: 'a4:cf:12:8b:3c:7e' // requerido, ≤ 64 chars: letras, dígitos, : _ -
++);
++```
++
++El serial se guarda normalizado (trim + mayúsculas), así que se manda tal cual
++lo reporte el stack BLE. Parear un serial nuevo **reemplaza** el dongle del
++auto; parear el mismo otra vez es no-op. Solo el dueño: los miembros del grupo
++manejan el auto, pero qué aparato habla por él lo decide el dueño.
++
++`resolve(serial)` es el *"¿de qué auto es este dongle?"* que pregunta el
++celular apenas se conecta, para mostrar el nombre del auto y ofrecer iniciar un
++viaje. No es obligatorio antes de subir: `telemetry.upload` acepta el serial y
++hace esa búsqueda solo.
++
++Las variantes `…OrNull` devuelven `null` en vez de tirar cuando simplemente no
++hay dongle, que es el estado normal de un auto sin parear.
++
++Errores: `pair` tira `isConflict` si el serial está pareado a **otro** auto
++(hay que desparearlo allá primero, para que mover un dongle sea siempre
++deliberado). `resolve` tira `isNotFound` igual para un serial inexistente que
++para uno de un auto que no podés ver.
++
++### `api.groups` — grupos ("familias")
++
++| Método | Endpoint |
++|---|---|
++| `create(name:)` | `POST /groups` |
++| `list()` | `GET /groups` |
++| `members(groupId)` | `GET /groups/{groupId}/members` |
++
++`name` es requerido, ≤ 60 chars, y **no es único**: dos familias sin relación
++pueden llamarse igual. El creador queda como `ADMIN` en la misma transacción.
++
++`list()` trae los grupos del usuario con `memberCount` y `callerRole` — el rol
++*de este usuario* en *ese* grupo, así una pantalla decide si muestra "invitar"
++sin una segunda request (`grupo.callerIsAdmin`).
++
++`members(groupId)` trae nombre, email y rol de cada uno, admins primero. Cada
++fila ya trae todo lo que necesita la pantalla: no hay `GET /users/{id}` para
++resolver ids, y una request por miembro sería justo el N+1 que esto evita.
++
++Errores: `members` tira `isNotFound` tanto para un no-miembro como para un
++grupo que no existe.
++
++### `api.invitations` — invitaciones
++
++| Método | Endpoint |
++|---|---|
++| `invite(...)` | `POST /invitations/invite/{groupId}` |
++| `pending()` | `GET /invitations/pending` |
++| `accept(invitationId)` | `POST /invitations/{id}/accept` |
++
++```dart
++await api.invitations.invite(
++  groupId: grupo.id,          // requerido, un grupo donde seas ADMIN
++  email: 'grace@example.com', // requerido, se guarda en minúsculas
++);
++```
++
++Las invitaciones van por **email, no por id de usuario**, porque el caso normal
++en una app familiar es invitar a alguien que todavía no la instaló: la fila
++espera, y cuando ese email se registra la invitación ya está ahí. Invitar no
++escribe nada en la tabla de miembros — entrar es consentimiento, lo hace el
++invitado.
++
++La respuesta es idéntica exista o no una cuenta con ese email, así que esto no
++sirve como oráculo de "¿este mail está registrado?". Caducan a los 7 días.
++
++`pending()` no lleva parámetros: el email sale siempre del token, que es lo que
++impide listar (y después aceptar) las invitaciones de otro. Devuelve solo las
++aceptables ahora mismo, con el **nombre** del grupo.
++
++`accept(id)` marca la invitación y entra al grupo como `MEMBER` en una sola
++sentencia atómica. Después aparece en `api.groups.list()`.
++
++Errores: `invite` tira `isNotFound` si no sos miembro (un `403` confirmaría que
++el grupo existe), `isForbidden` si sos miembro pero no admin, `isConflict` si
++ese email ya es miembro. `accept` tira `isNotFound` para una invitación
++desconocida **o** dirigida a otro, e `isConflict` si ya fue aceptada o venció.
++
++### `api.trips` — viajes
++
++| Método | Endpoint |
++|---|---|
++| `start(...)` | `POST /trips` |
++| `mine()` | `GET /trips` |
++| `forCar(carId)` | `GET /cars/{carId}/trips` |
++| `active(carId)` | `GET /cars/{carId}/trips/active` |
++| `finish(...)` | `POST /trips/{tripId}/finish` |
++| `cancel(tripId)` | `DELETE /trips/{tripId}` |
++
++```dart
++final viaje = await api.trips.start(
++  carId: auto.id,   // requerido, un auto que podés usar
++  initialFuel: 70,  // opcional; si falta, se usa el fuelLevel cacheado del auto
++);
++```
++
++El conductor sale del token y la hora del reloj del servidor: un viaje no se
++puede registrar a nombre de otro ni antedatar. **Un solo viaje abierto por
++auto**, garantizado por un índice único parcial, no por un chequeo en el
++servicio: arranques en paralelo dan un `201` y el resto `409`.
++
++```dart
++await api.trips.finish(
++  viaje.id,
++  tripFinalFuel: 50, // opcional, ≥ 0. Ausente = gasto desconocido, no cero
++  tripDistance: 140, // opcional, > 0
++);
++```
++
++Solo el conductor cierra su viaje — el dueño del auto no puede cerrárselo por
++abajo. `tripFinalFuel` puede ser mayor al inicial: cargó nafta, y `fuelUsed`
++sale negativo en vez de "validarse".
++
++`active(carId)` es el *"¿quién tiene el auto ahora?"*: devuelve `null` cuando
++está libre (la API contesta `204`, que es una respuesta normal — un `404` acá
++significa "no existe ese auto").
++
++`cancel(tripId)` borra un viaje empezado por error, como si nunca hubiera
++pasado. Solo uno **abierto** y propio: uno terminado es historia, tiene un
++gasto asociado, y se queda.
++
++`mine()` son los viajes que manejó el usuario, en cualquier auto.
++`forCar(carId)` es la historia **del auto**: todos los viajes de todos los
++conductores, que es para lo que sirve un auto compartido — quién lo usó y quién
++gastó la nafta. Los dos sin paginar por ahora.
++
++### `api.telemetry` — lecturas
++
++| Método | Endpoint |
++|---|---|
++| `upload(...)` | `POST /telemetry` |
++| `history(...)` | `GET /telemetry` |
++| `readAll(...)` | `GET /telemetry` en loop |
++
++El ESP32 habla BLE y nunca HTTP, así que **el celular es el relay**: guarda lo
++que mandó el dongle y lo sube en lotes, quizá tarde, quizá repitiendo algo de
++lo que no estaba seguro. Los dos endpoints están hechos para eso.
++
++```dart
++await api.telemetry.upload(
++  serial: 'a4:cf:12:8b:3c:7e', // exactamente uno de serial / carId
++  readings: [
++    TelemetryReading(
++      recordedAt: DateTime.now().toUtc(), // requerido: hora del *dispositivo*
++      latitude: -34.6037,   // opcional, pero lat y lng van juntas o ninguna
++      longitude: -58.3816,
++      speed: 40,            // opcional, ≥ 0
++      fuelLevel: 70,        // opcional, ≥ 0
++      batteryLevel: 85,     // opcional, ≥ 0
++      mileage: 120000,      // opcional, ≥ 0
++      raw: {'pids': {'04': '5020'}}, // opcional: el frame tal cual
++    ),
++  ],
++);
++```
++
++| Parámetro | Requerido | Notas |
++|---|---|---|
++| `serial` / `carId` | exactamente uno | Pasar los dos o ninguno es `ArgumentError` del lado Dart y `400` del lado servidor |
++| `readings` | sí | 1–500 lecturas |
++
++**Con `serial`** el servidor resuelve el auto pareado: el celular no sabe —ni
++se le pregunta— en qué auto está, así que no puede equivocarse, y además se
++actualiza el `lastSeenAt` del dongle. **Con `carId`** se nombra el auto
++directo, para autos sin dongle, carga manual o tests.
++
++Lo que vuelve (`TelemetryIngestResult`) es todo sobre el próximo paso del
++cliente:
++
++| Campo | Para qué |
++|---|---|
++| `stored` / `duplicates` | Cuántas eran nuevas y cuántas ya estaban. **Las dos son éxito**: un reintento que encuentra sus lecturas hizo su trabajo. Sirven para recortar el buffer |
++| `carId` | En qué auto cayeron — subiendo por serial, así es como el celular se entera |
++| `tripId` | El viaje abierto del auto, o `null`: la señal para ofrecerle al conductor iniciar uno |
++| `snapshotUpdated` | Si se movió el estado cacheado del auto. `false` = no hay nada que redibujar |
++| `latestRecordedAt` | El cursor de sincronización |
++
++Una lectura mal formada rechaza **el lote entero**, con los errores indexados
++(`readings[2].positionComplete`): aplicar la mitad dejaría al celular sin saber
++qué borrar del buffer. Los duplicados, en cambio, son éxito — no hay `409`.
++
++```dart
++final pagina = await api.telemetry.history(
++  carId: auto.id,     // requerido
++  since: ultimoCursor,// opcional: lecturas estrictamente posteriores
++  limit: 500,         // opcional, 1–500, default 100
++);
++// guardar pagina.nextSince y repetir mientras pagina.hasMore
++```
++
++Viene **de la más vieja a la más nueva**. Lo más nuevo primero con un límite no
++se puede paginar bien: se saltea en silencio lo que cayó entre las N más nuevas
++y el cursor. `since` es exclusivo porque el cliente devuelve un valor que ya
++tiene (`nextSince` de la página anterior o `latestRecordedAt` de una subida).
++
++`readAll(carId:, since:)` hace ese loop y devuelve todo junto.
++
++---
++
++## 5. Recetas
++
++### Del dongle a la base
++
++El camino completo, en orden:
++
++```dart
++// 1. Una vez, el dueño: decir qué dongle es de qué auto.
++await api.devices.pair(carId: auto.id, serial: serialLeidoPorBle);
++
++// 2. El celular se conecta a "OBD-C" y lee el serial por BLE.
++//    (Falta la mitad del firmware: todavía no expone el serial.)
++
++// 3. Opcional: "¿de qué auto es esto?" para mostrarlo y ofrecer el viaje.
++final device = await api.devices.resolveOrNull(serialLeidoPorBle);
++
++// 4. Subir el buffer. El celular nunca dice qué auto es.
++final r = await api.telemetry.upload(serial: serialLeidoPorBle, readings: buffer);
++if (!r.hasOpenTrip) { /* ofrecer iniciar viaje */ }
++
++// 5. Cualquier miembro lee la historia.
++final pagina = await api.telemetry.history(carId: r.carId, since: cursor);
++```
++
++### Compartir un auto con la familia
++
++```dart
++final grupo = await api.groups.create(name: 'Familia Lazzari');
++await api.cars.share(carId: auto.id, groupId: grupo.id);
++await api.invitations.invite(groupId: grupo.id, email: 'grace@example.com');
++
++// Del lado de Grace:
++final invitaciones = await api.invitations.pending();
++await api.invitations.accept(invitaciones.first.id);
++// Ahora el auto le aparece en api.cars.list() y puede iniciar viajes.
++```
++
++### Reemplazar los datos de demo
++
++Las pantallas todavía se dibujan con `DemoData`. El reemplazo es por partes,
++sin tocar los widgets: `CarTab` ya recibe un `CarData`, así que alcanza con
++mapear `Car` (API) → `CarData` (UI) y pasárselo a `MainScreen`. Lo mismo para
++`members` desde `api.groups.members()` y `trips` desde
++`api.trips.forCar(carId)`.
++
++`ReservationRepository` es el caso más limpio: ya está definido como interfaz
++justamente para esto. Una `ApiReservationRepository` que la implemente cambia
++una línea en `MainScreen` — aunque las reservas todavía no tienen endpoints en
++el backend.
++
++---
++
++## 6. Qué falta
++
++- **Persistir la sesión.** Hoy cerrar la app desloguea (ver arriba).
++- **Reservas.** La app las tiene en memoria; la API no las expone todavía.
++- **Paginar viajes.** `GET /trips` y `GET /cars/{id}/trips` vienen sin paginar
++  del servidor, así que `mine()` y `forCar()` tampoco paginan.
++- **Nafta: ¿porcentaje o litros?** El servidor todavía no lo define (acepta
++  cualquier valor ≥ 0), así que `fuelLevel` y `fuelUsed` se tratan como números
++  opacos y no se les pone unidad en la UI.
++- **El firmware no expone un serial.** La API de dispositivos está completa,
++  pero hasta que el ESP32 publique el Device Information Service (`0x180A`,
++  Serial Number `0x2A25`) el serial es lo que tipee la persona que parea.
++- **Generar el cliente.** El `ROADMAP.md` de la API propone agregar springdoc:
++  con eso estos modelos se generarían desde el contrato en vez de escribirse a
++  mano. Este cliente es más legible y documenta el *por qué*, pero es una
++  segunda copia del contrato que hay que mantener en sincronía.
+diff --git a/app/obd_app/lib/data/api/api_client.dart b/app/obd_app/lib/data/api/api_client.dart
+new file mode 100644
+index 0000000..0d51f23
+--- /dev/null
++++ b/app/obd_app/lib/data/api/api_client.dart
+@@ -0,0 +1,259 @@
++import 'dart:convert';
++
++import 'package:http/http.dart' as http;
++import 'package:obd_app/data/api/api_config.dart';
++import 'package:obd_app/data/api/api_exception.dart';
++import 'package:obd_app/data/api/models/api_models.dart';
++import 'package:obd_app/data/api/session.dart';
++
++/// A successful response, already decoded.
++class ApiResponse {
++  const ApiResponse({
++    required this.statusCode,
++    required this.headers,
++    required this.body,
++  });
++
++  final int statusCode;
++  final Map<String, String> headers;
++
++  /// Decoded JSON: a `Map`, a `List`, or null for `204 No Content`.
++  final Object? body;
++
++  bool get isEmpty => body == null;
++
++  Map<String, dynamic> get asMap =>
++      body is Map<String, dynamic> ? body as Map<String, dynamic> : const {};
++
++  /// `Location` header — `POST /cars` and `POST /groups` set it.
++  String? get location => headers['location'];
++}
++
++/// The one place that knows how to talk HTTP to the OBD API.
++///
++/// It handles the four things every endpoint would otherwise repeat:
++///
++/// 1. **Bearer auth.** Every call except `auth/*` carries the access token.
++/// 2. **The refresh cookie.** `package:http` has no cookie jar, so the
++///    `Set-Cookie: refreshToken=...` that `login` returns is read off the
++///    response and sent back by hand on `POST /auth/refresh`.
++/// 3. **Silent re-auth.** A `401` on an authenticated call triggers one
++///    refresh and one retry. Concurrent 401s share a single refresh, so five
++///    parallel requests do not burn five single-use refresh tokens — reusing a
++///    rotated-out token revokes the whole family and forces a re-login.
++/// 4. **Errors.** A 4xx/5xx becomes an [ApiException] carrying the server's
++///    `ProblemDetail`; an unreachable host becomes a [NetworkException]. No
++///    endpoint method ever inspects a status code.
++class ApiClient {
++  ApiClient({ApiConfig? config, http.Client? httpClient, ObdSession? session})
++    : config = config ?? ApiConfig.defaults,
++      session = session ?? ObdSession(),
++      _http = httpClient ?? http.Client(),
++      _ownsHttpClient = httpClient == null;
++
++  /// Name of the cookie the API sets (`RefreshCookie.NAME`).
++  static const String refreshCookieName = 'refreshToken';
++
++  final ApiConfig config;
++  final ObdSession session;
++  final http.Client _http;
++  final bool _ownsHttpClient;
++
++  Future<bool>? _refreshInFlight;
++
++  static final RegExp _refreshCookiePattern = RegExp(
++    '(?:^|[,;]\\s*)$refreshCookieName=([^;,]*)',
++  );
++
++  Future<ApiResponse> get(
++    String path, {
++    Map<String, Object?> query = const {},
++    bool authenticated = true,
++  }) => send('GET', path, query: query, authenticated: authenticated);
++
++  Future<ApiResponse> post(
++    String path, {
++    Object? body,
++    Map<String, Object?> query = const {},
++    bool authenticated = true,
++  }) => send(
++    'POST',
++    path,
++    body: body,
++    query: query,
++    authenticated: authenticated,
++  );
++
++  Future<ApiResponse> put(
++    String path, {
++    Object? body,
++    bool authenticated = true,
++  }) => send('PUT', path, body: body, authenticated: authenticated);
++
++  Future<ApiResponse> delete(String path, {bool authenticated = true}) =>
++      send('DELETE', path, authenticated: authenticated);
++
++  /// Performs one request. [path] is relative to `/api/v1`.
++  ///
++  /// Throws [ApiException] for any 4xx/5xx and [NetworkException] when the
++  /// request never completed.
++  Future<ApiResponse> send(
++    String method,
++    String path, {
++    Object? body,
++    Map<String, Object?> query = const {},
++    bool authenticated = true,
++    Map<String, String> headers = const {},
++    bool retryOn401 = true,
++  }) async {
++    final uri = config.resolve(path, query);
++    final requestHeaders = <String, String>{
++      'Accept': 'application/json',
++      ...headers,
++    };
++
++    if (authenticated) {
++      final token = session.accessToken;
++      if (token == null) {
++        // Fail like the server would, so callers have one error type to
++        // handle instead of two.
++        throw ApiException(
++          statusCode: 401,
++          title: 'Unauthorized',
++          detail: 'No access token — log in first',
++          uri: uri,
++        );
++      }
++      requestHeaders['Authorization'] = 'Bearer $token';
++    }
++
++    final response = await _dispatch(method, uri, requestHeaders, body);
++    _rememberRefreshCookie(response.headers);
++
++    if (response.statusCode == 401 &&
++        authenticated &&
++        retryOn401 &&
++        session.refreshToken != null) {
++      if (await refreshSession()) {
++        return send(
++          method,
++          path,
++          body: body,
++          query: query,
++          authenticated: authenticated,
++          headers: headers,
++          retryOn401: false,
++        );
++      }
++    }
++
++    if (response.statusCode >= 400) {
++      throw ApiException.fromBody(response.statusCode, _text(response), uri: uri);
++    }
++
++    return ApiResponse(
++      statusCode: response.statusCode,
++      headers: response.headers,
++      body: _decode(response),
++    );
++  }
++
++  /// Exchanges the stored refresh cookie for a new access token.
++  ///
++  /// Returns false when the session is gone for good (the caller should send
++  /// the user back to the login screen). Single-flight: callers that arrive
++  /// while a refresh is running await the same one.
++  Future<bool> refreshSession() {
++    final running = _refreshInFlight;
++    if (running != null) return running;
++
++    final future = _refresh();
++    _refreshInFlight = future;
++    return future.whenComplete(() => _refreshInFlight = null);
++  }
++
++  /// Closes the underlying HTTP client, unless one was supplied by the caller
++  /// (whoever owns it should close it).
++  void close() {
++    if (_ownsHttpClient) _http.close();
++  }
++
++  Future<bool> _refresh() async {
++    final cookie = session.refreshToken;
++    if (cookie == null) return false;
++
++    final uri = config.resolve('/auth/refresh');
++    try {
++      final response = await _dispatch('POST', uri, {
++        'Accept': 'application/json',
++        'Cookie': '$refreshCookieName=$cookie',
++      }, null);
++
++      if (response.statusCode >= 400) {
++        // Expired, already used, or revoked: this session is finished.
++        session.clear();
++        return false;
++      }
++
++      _rememberRefreshCookie(response.headers);
++      final decoded = _decode(response);
++      if (decoded is! Map<String, dynamic>) {
++        session.clear();
++        return false;
++      }
++      session.save(AuthSession.fromJson(decoded));
++      return true;
++    } on NetworkException {
++      // Offline. The tokens may still be perfectly good, so keep them and let
++      // the next call try again.
++      return false;
++    }
++  }
++
++  Future<http.Response> _dispatch(
++    String method,
++    Uri uri,
++    Map<String, String> headers,
++    Object? body,
++  ) async {
++    try {
++      final request = http.Request(method, uri);
++      request.headers.addAll(headers);
++      if (body != null) {
++        request.headers['Content-Type'] = 'application/json; charset=utf-8';
++        request.body = jsonEncode(body);
++      }
++      final streamed = await _http.send(request).timeout(config.timeout);
++      return await http.Response.fromStream(streamed);
++    } catch (error) {
++      throw NetworkException(uri: uri, cause: error);
++    }
++  }
++
++  /// Decodes as UTF-8 explicitly: `http.Response.body` falls back to latin-1
++  /// when the response carries no charset, which mangles accented text — and
++  /// `application/problem+json` carries none.
++  String _text(http.Response response) =>
++      utf8.decode(response.bodyBytes, allowMalformed: true);
++
++  Object? _decode(http.Response response) {
++    if (response.statusCode == 204 || response.bodyBytes.isEmpty) return null;
++    try {
++      return jsonDecode(_text(response));
++    } on FormatException {
++      return null;
++    }
++  }
++
++  void _rememberRefreshCookie(Map<String, String> headers) {
++    final raw = headers['set-cookie'];
++    if (raw == null) return;
++
++    final match = _refreshCookiePattern.firstMatch(raw);
++    if (match == null) return;
++
++    final value = match.group(1) ?? '';
++    // Logout clears the cookie by setting it empty.
++    session.rememberRefreshToken(value.isEmpty ? null : value);
++  }
++}
+diff --git a/app/obd_app/lib/data/api/api_config.dart b/app/obd_app/lib/data/api/api_config.dart
+new file mode 100644
+index 0000000..7f13ff8
+--- /dev/null
++++ b/app/obd_app/lib/data/api/api_config.dart
+@@ -0,0 +1,72 @@
++/// Where the API lives and how long we wait for it.
++///
++/// The host is read from a compile-time define so the same source can point at
++/// a laptop on the LAN, an emulator or production without editing code:
++///
++/// ```bash
++/// flutter run --dart-define=OBD_API_BASE_URL=http://10.0.2.2:8080
++/// ```
++///
++/// Useful values:
++///
++/// | Running on            | Base URL                    |
++/// |-----------------------|-----------------------------|
++/// | Android emulator      | `http://10.0.2.2:8080`      |
++/// | iOS simulator         | `http://localhost:8080`     |
++/// | Physical phone (LAN)  | `http://<your-ip>:8080`     |
++/// | Production            | `https://<host>`            |
++class ApiConfig {
++  const ApiConfig({
++    required this.baseUrl,
++    this.timeout = const Duration(seconds: 15),
++  });
++
++  /// Scheme + host + port, no trailing slash, no `/api/v1`.
++  final String baseUrl;
++
++  /// Applied per request. The phone is often on a flaky network, so a request
++  /// that hangs must fail rather than block the UI for ever.
++  final Duration timeout;
++
++  /// Everything the API exposes lives under this prefix.
++  static const String prefix = '/api/v1';
++
++  static const String _defaultBaseUrl = String.fromEnvironment(
++    'OBD_API_BASE_URL',
++    defaultValue: 'http://192.168.1.19:8080',
++  );
++
++  /// What the app uses unless a test passes something else.
++  static const ApiConfig defaults = ApiConfig(baseUrl: _defaultBaseUrl);
++
++  /// Builds the absolute URL for [path] (given without the `/api/v1` prefix).
++  ///
++  /// Null entries in [query] are dropped, so an optional parameter can be
++  /// passed straight through. [DateTime]s are sent as UTC ISO-8601, which is
++  /// what the API's `Instant` fields expect.
++  Uri resolve(String path, [Map<String, Object?> query = const {}]) {
++    final host = baseUrl.endsWith('/')
++        ? baseUrl.substring(0, baseUrl.length - 1)
++        : baseUrl;
++    final route = path.startsWith('/') ? path : '/$path';
++    final uri = Uri.parse('$host$prefix$route');
++
++    final params = <String, String>{};
++    query.forEach((key, value) {
++      if (value == null) return;
++      params[key] = value is DateTime
++          ? value.toUtc().toIso8601String()
++          : '$value';
++    });
++
++    return params.isEmpty ? uri : uri.replace(queryParameters: params);
++  }
++
++  ApiConfig copyWith({String? baseUrl, Duration? timeout}) => ApiConfig(
++    baseUrl: baseUrl ?? this.baseUrl,
++    timeout: timeout ?? this.timeout,
++  );
++
++  @override
++  String toString() => 'ApiConfig($baseUrl$prefix)';
++}
+diff --git a/app/obd_app/lib/data/api/api_exception.dart b/app/obd_app/lib/data/api/api_exception.dart
+new file mode 100644
+index 0000000..20dab65
+--- /dev/null
++++ b/app/obd_app/lib/data/api/api_exception.dart
+@@ -0,0 +1,133 @@
++import 'dart:convert';
++
++/// Anything that can go wrong while talking to the API.
++///
++/// Sealed so a `switch` over it is exhaustive: either the server answered and
++/// refused ([ApiException]), or it never answered at all ([NetworkException]).
++sealed class ObdApiException implements Exception {
++  const ObdApiException();
++
++  /// Short, technical description. Screens translate this into user-facing
++  /// copy — the data layer does not know what language the UI speaks.
++  String get message;
++}
++
++/// The server answered with 4xx/5xx.
++///
++/// The API returns RFC 7807 `ProblemDetail` bodies:
++///
++/// ```json
++/// { "type": "about:blank", "title": "Conflict", "status": 409,
++///   "detail": "That email is already registered" }
++/// ```
++///
++/// and, for a validation failure, an extra `errors` object keyed by field:
++///
++/// ```json
++/// { "title": "Validation failed", "status": 400,
++///   "errors": { "userPassword": "size must be between 8 and 72" } }
++/// ```
++class ApiException extends ObdApiException {
++  const ApiException({
++    required this.statusCode,
++    this.title,
++    this.detail,
++    this.fieldErrors = const {},
++    this.uri,
++  });
++
++  /// Parses a `ProblemDetail` body; falls back to the raw text when the body
++  /// is not JSON (a proxy error page, for instance).
++  factory ApiException.fromBody(int statusCode, String body, {Uri? uri}) {
++    String? title;
++    String? detail;
++    final errors = <String, String>{};
++
++    if (body.trim().isNotEmpty) {
++      try {
++        final decoded = jsonDecode(body);
++        if (decoded is Map) {
++          title = decoded['title'] as String?;
++          detail = decoded['detail'] as String?;
++          final raw = decoded['errors'];
++          if (raw is Map) {
++            raw.forEach((key, value) => errors['$key'] = '$value');
++          }
++        } else {
++          detail = body;
++        }
++      } on FormatException {
++        detail = body;
++      }
++    }
++
++    return ApiException(
++      statusCode: statusCode,
++      title: title,
++      detail: detail,
++      fieldErrors: Map.unmodifiable(errors),
++      uri: uri,
++    );
++  }
++
++  final int statusCode;
++
++  /// `title` from the problem detail, e.g. `Conflict`.
++  final String? title;
++
++  /// `detail` from the problem detail, e.g. `That car is already on a trip`.
++  final String? detail;
++
++  /// Field name to message, from a `400`. Telemetry batches key by index:
++  /// `readings[2].positionComplete`.
++  final Map<String, String> fieldErrors;
++
++  /// The request that failed. Handy in logs; never shown to a user.
++  final Uri? uri;
++
++  /// Malformed body, bad UUID in the path, or a failed validation.
++  bool get isValidation => statusCode == 400;
++
++  /// Missing, expired or rejected access token.
++  bool get isUnauthorized => statusCode == 401;
++
++  /// Authenticated but not allowed — only raised where the caller already
++  /// knows the thing exists (not a group admin, not an account admin).
++  bool get isForbidden => statusCode == 403;
++
++  /// Does not exist **or** is not yours. The API answers both the same way on
++  /// purpose, so an id is never confirmed to a stranger.
++  bool get isNotFound => statusCode == 404;
++
++  /// State conflict: email taken, plate taken, car already on a trip,
++  /// invitation already accepted, dongle paired elsewhere.
++  bool get isConflict => statusCode == 409;
++
++  bool get isServerError => statusCode >= 500;
++
++  @override
++  String get message {
++    if (fieldErrors.isNotEmpty) {
++      return fieldErrors.entries.map((e) => '${e.key}: ${e.value}').join('\n');
++    }
++    return detail ?? title ?? 'HTTP $statusCode';
++  }
++
++  @override
++  String toString() => 'ApiException($statusCode: $message)';
++}
++
++/// The request never completed: no route to the host, DNS failure, TLS error,
++/// or the configured timeout elapsed.
++class NetworkException extends ObdApiException {
++  const NetworkException({required this.uri, required this.cause});
++
++  final Uri uri;
++  final Object cause;
++
++  @override
++  String get message => 'Could not reach $uri ($cause)';
++
++  @override
++  String toString() => 'NetworkException($message)';
++}
+diff --git a/app/obd_app/lib/data/api/endpoints/auth_api.dart b/app/obd_app/lib/data/api/endpoints/auth_api.dart
+new file mode 100644
+index 0000000..3b3911b
+--- /dev/null
++++ b/app/obd_app/lib/data/api/endpoints/auth_api.dart
+@@ -0,0 +1,95 @@
++import 'package:obd_app/data/api/api_client.dart';
++import 'package:obd_app/data/api/models/api_models.dart';
++
++/// `/api/v1/auth/*` — the only endpoints that do **not** need a token.
++///
++/// Each of the three that issue tokens stores them in the client's session, so
++/// a caller never has to touch `ObdSession` by hand: after `login` every other
++/// endpoint simply works.
++class AuthApi {
++  const AuthApi(this._client);
++
++  final ApiClient _client;
++
++  /// `POST /api/v1/auth/register` — creates the account **and logs it in**.
++  ///
++  /// | Parameter | Required | Notes |
++  /// |---|---|---|
++  /// | [userName] | yes | first name, non-blank |
++  /// | [userLastName] | yes | non-blank |
++  /// | [userEmail] | yes | valid email |
++  /// | [userPassword] | yes | 8–72 characters |
++  /// | [userPhone] | no | e.g. `+39 320 1234567`; omitted when blank |
++  ///
++  /// Throws `ApiException` with `isConflict` when the email is taken, or
++  /// `isValidation` (with `fieldErrors`) when a field is rejected.
++  Future<AuthSession> register({
++    required String userName,
++    required String userLastName,
++    required String userEmail,
++    required String userPassword,
++    String? userPhone,
++  }) async {
++    final phone = userPhone?.trim();
++    final response = await _client.post(
++      '/auth/register',
++      authenticated: false,
++      body: {
++        'userName': userName,
++        'userLastName': userLastName,
++        'userEmail': userEmail,
++        'userPassword': userPassword,
++        if (phone != null && phone.isNotEmpty) 'userPhone': phone,
++      },
++    );
++
++    final auth = AuthSession.fromJson(response.asMap);
++    _client.session.save(auth);
++    return auth;
++  }
++
++  /// `POST /api/v1/auth/login`.
++  ///
++  /// Throws `ApiException` with `isUnauthorized` on bad credentials.
++  Future<AuthSession> login({
++    required String userEmail,
++    required String userPassword,
++  }) async {
++    final response = await _client.post(
++      '/auth/login',
++      authenticated: false,
++      body: {'userEmail': userEmail, 'userPassword': userPassword},
++    );
++
++    final auth = AuthSession.fromJson(response.asMap);
++    _client.session.save(auth);
++    return auth;
++  }
++
++  /// `POST /api/v1/auth/refresh` — new access token, rotated refresh token.
++  ///
++  /// Normally there is no reason to call this: the client does it by itself
++  /// when a request comes back `401`. Returns false when the session is over.
++  ///
++  /// Refresh tokens are single-use. Presenting one that has already been
++  /// rotated out revokes the whole family, so never call this concurrently by
++  /// hand — go through the client, which serialises refreshes.
++  Future<bool> refresh() => _client.refreshSession();
++
++  /// `POST /api/v1/auth/logout` — revokes every refresh token for this user
++  /// and clears the cookie. `204 No Content`.
++  ///
++  /// The local session is cleared either way: if the call fails, the tokens
++  /// are still no use to this app.
++  Future<void> logout() async {
++    if (!_client.session.isAuthenticated) {
++      _client.session.clear();
++      return;
++    }
++    try {
++      await _client.post('/auth/logout');
++    } finally {
++      _client.session.clear();
++    }
++  }
++}
+diff --git a/app/obd_app/lib/data/api/endpoints/cars_api.dart b/app/obd_app/lib/data/api/endpoints/cars_api.dart
+new file mode 100644
+index 0000000..24716de
+--- /dev/null
++++ b/app/obd_app/lib/data/api/endpoints/cars_api.dart
+@@ -0,0 +1,104 @@
++import 'package:obd_app/data/api/api_client.dart';
++import 'package:obd_app/data/api/models/api_models.dart';
++import 'package:obd_app/data/api/models/json.dart';
++
++/// `/api/v1/cars/*` plus `GET /groups/{groupId}/cars`.
++///
++/// Every read here goes through one server-side predicate — owner **or**
++/// member of the group the car is shared with — so a car that shows up in
++/// [list] is by construction a car you can start a trip on and upload
++/// telemetry for.
++class CarsApi {
++  const CarsApi(this._client);
++
++  final ApiClient _client;
++
++  /// `POST /api/v1/cars` — registers a car owned by the caller. `201`.
++  ///
++  /// | Parameter | Required | Notes |
++  /// |---|---|---|
++  /// | [name] | yes | ≤ 60 chars; the label shown in car lists |
++  /// | [modelId] | yes | a `modelId` from `ModelsApi.list()` |
++  /// | [licensePlate] | no | ≤ 16 chars; trimmed and upper-cased server-side |
++  /// | [mileage] | no | odometer at registration, ≥ 0 |
++  ///
++  /// The owner comes from the token, never the body. Fuel, battery and
++  /// position are not accepted here — they only ever arrive from the device.
++  ///
++  /// Throws `ApiException`: `isNotFound` for an unknown [modelId],
++  /// `isConflict` when you already have a car with that plate (plates are
++  /// unique per owner, not globally), `isValidation` otherwise.
++  Future<Car> create({
++    required String name,
++    required String modelId,
++    String? licensePlate,
++    int? mileage,
++  }) async {
++    final plate = licensePlate?.trim();
++    final response = await _client.post(
++      '/cars',
++      body: {
++        'name': name,
++        'modelId': modelId,
++        if (plate != null && plate.isNotEmpty) 'licensePlate': plate,
++        if (mileage != null) 'mileage': mileage,
++      },
++    );
++    return Car.fromJson(response.asMap);
++  }
++
++  /// `GET /api/v1/cars` — every car the caller may use: their own plus any
++  /// shared with a group they belong to, ordered by name.
++  ///
++  /// Empty for a new user, never an error.
++  Future<List<Car>> list() async {
++    final response = await _client.get('/cars');
++    return parseList(response.body, Car.fromJson);
++  }
++
++  /// `GET /api/v1/cars/{carId}` — one car.
++  ///
++  /// A client that already has [list] gains nothing here; it is for deep links
++  /// and for refreshing one car's snapshot after an upload.
++  ///
++  /// Throws `ApiException` with `isNotFound` both when the car does not exist
++  /// and when it belongs to someone you share no group with.
++  Future<Car> byId(String carId) async {
++    final response = await _client.get('/cars/$carId');
++    return Car.fromJson(response.asMap);
++  }
++
++  /// `PUT /api/v1/cars/{carId}/group` — shares a car you **own** with a group
++  /// you **belong to**. Every member can then see it, drive it and upload for
++  /// it.
++  ///
++  /// `PUT`, not `POST`: a car is in at most one group at a time, so sharing
++  /// with a second group moves it. Re-sharing with the same group is a no-op.
++  ///
++  /// Throws `ApiException` with `isNotFound` if the car is not yours *or* you
++  /// are not in [groupId] — so this cannot be used to probe group ids.
++  Future<Car> share({required String carId, required String groupId}) async {
++    final response = await _client.put(
++      '/cars/$carId/group',
++      body: {'groupId': groupId},
++    );
++    return Car.fromJson(response.asMap);
++  }
++
++  /// `DELETE /api/v1/cars/{carId}/group` — un-shares. Owner-only, idempotent,
++  /// `204`.
++  ///
++  /// Members lose access immediately, but an **open trip is left alone**: a
++  /// trip is a record of what happened, not a permission. They just cannot
++  /// start the next one.
++  Future<void> unshare(String carId) => _client.delete('/cars/$carId/group');
++
++  /// `GET /api/v1/groups/{groupId}/cars` — the cars shared with a group, for
++  /// any member of it. `[]` when nobody has shared one yet.
++  ///
++  /// Throws `ApiException` with `isNotFound` if the caller is not a member.
++  Future<List<Car>> forGroup(String groupId) async {
++    final response = await _client.get('/groups/$groupId/cars');
++    return parseList(response.body, Car.fromJson);
++  }
++}
+diff --git a/app/obd_app/lib/data/api/endpoints/devices_api.dart b/app/obd_app/lib/data/api/endpoints/devices_api.dart
+new file mode 100644
+index 0000000..935e91b
+--- /dev/null
++++ b/app/obd_app/lib/data/api/endpoints/devices_api.dart
+@@ -0,0 +1,100 @@
++import 'package:obd_app/data/api/api_client.dart';
++import 'package:obd_app/data/api/api_exception.dart';
++import 'package:obd_app/data/api/models/api_models.dart';
++
++/// `/api/v1/cars/{carId}/device` and `GET /api/v1/devices/{serial}`.
++///
++/// ### Why this exists
++///
++/// Every dongle advertises the same BLE name (`OBD-C`), so a phone that sees
++/// one cannot tell two family cars apart. The mapping serial → car lives on
++/// the server, which means:
++///
++/// * every phone in the family resolves the same dongle to the same car;
++/// * moving a dongle to another car re-routes everyone at once;
++/// * the driver is never asked "which car is this?".
++///
++/// The serial is keyed on what the firmware exposes rather than the BLE MAC,
++/// because iOS hides the real address and hands each app a different random
++/// UUID for the same peripheral.
++class DevicesApi {
++  const DevicesApi(this._client);
++
++  final ApiClient _client;
++
++  /// `PUT /api/v1/cars/{carId}/device` — pairs a dongle to a car you **own**.
++  ///
++  /// | Parameter | Required | Notes |
++  /// |---|---|---|
++  /// | [carId] | yes | a car the caller owns |
++  /// | [serial] | yes | ≤ 64 chars; letters, digits, `:`, `_`, `-`. Trimmed and upper-cased server-side, so send it however the BLE stack reports it |
++  ///
++  /// `PUT` semantics: pairing a new serial replaces the car's current dongle
++  /// (and clears `lastSeenAt`); pairing the same one again is a no-op.
++  /// Owner-only — group members may drive the car, but which device speaks for
++  /// it is the owner's call.
++  ///
++  /// Throws [ApiException] with `isNotFound` if the car is not yours, or
++  /// `isConflict` if that serial is paired to a **different** car (unpair it
++  /// there first, so a move is always deliberate).
++  Future<Device> pair({required String carId, required String serial}) async {
++    final response = await _client.put(
++      '/cars/$carId/device',
++      body: {'serial': serial},
++    );
++    return Device.fromJson(response.asMap);
++  }
++
++  /// `GET /api/v1/cars/{carId}/device` — the dongle paired to a car you may
++  /// read (owner or group member).
++  ///
++  /// Throws [ApiException] with `isNotFound` in two cases the `detail` tells
++  /// apart: `No such car`, or `No device is paired to this car`.
++  Future<Device> forCar(String carId) async {
++    final response = await _client.get('/cars/$carId/device');
++    return Device.fromJson(response.asMap);
++  }
++
++  /// `GET /api/v1/cars/{carId}/device`, returning null instead of throwing
++  /// when the car simply has no dongle — which is the ordinary state of a car
++  /// nobody has paired yet, not an error worth a try/catch at the call site.
++  Future<Device?> forCarOrNull(String carId) async {
++    try {
++      return await forCar(carId);
++    } on ApiException catch (error) {
++      if (error.isNotFound) return null;
++      rethrow;
++    }
++  }
++
++  /// `DELETE /api/v1/cars/{carId}/device` — unpairs. Owner-only, idempotent,
++  /// `204`. The serial is free to pair elsewhere afterwards.
++  Future<void> unpair(String carId) => _client.delete('/cars/$carId/device');
++
++  /// `GET /api/v1/devices/{serial}` — **"which car is this dongle?"**, what a
++  /// phone asks the moment it connects, to show the driver the car's name and
++  /// offer to start a trip.
++  ///
++  /// Not a prerequisite for uploading: `TelemetryApi.upload` takes the serial
++  /// directly and does this lookup itself.
++  ///
++  /// Throws [ApiException] with `isNotFound` both for an unknown serial and
++  /// for one paired to a car the caller may not see — identically, so a phone
++  /// outside the family cannot confirm that a dongle exists.
++  Future<Device> resolve(String serial) async {
++    final response = await _client.get(
++      '/devices/${Uri.encodeComponent(serial)}',
++    );
++    return Device.fromJson(response.asMap);
++  }
++
++  /// [resolve], but null for an unknown serial.
++  Future<Device?> resolveOrNull(String serial) async {
++    try {
++      return await resolve(serial);
++    } on ApiException catch (error) {
++      if (error.isNotFound) return null;
++      rethrow;
++    }
++  }
++}
+diff --git a/app/obd_app/lib/data/api/endpoints/groups_api.dart b/app/obd_app/lib/data/api/endpoints/groups_api.dart
+new file mode 100644
+index 0000000..0a3398b
+--- /dev/null
++++ b/app/obd_app/lib/data/api/endpoints/groups_api.dart
+@@ -0,0 +1,50 @@
++import 'package:obd_app/data/api/api_client.dart';
++import 'package:obd_app/data/api/models/api_models.dart';
++import 'package:obd_app/data/api/models/json.dart';
++
++/// `/api/v1/groups/*` — "families".
++///
++/// A group is what makes a car shared: `CarsApi.share()` points a car at one,
++/// and from then on every member of it can drive the car, read its history and
++/// upload for it.
++class GroupsApi {
++  const GroupsApi(this._client);
++
++  final ApiClient _client;
++
++  /// `POST /api/v1/groups` — creates a group and enrols the caller as its
++  /// first member with the `ADMIN` role, in one transaction. `201`.
++  ///
++  /// | Parameter | Required | Notes |
++  /// |---|---|---|
++  /// | [name] | yes | non-blank, ≤ 60 chars. **Not unique** — it is a label, not an identifier |
++  Future<Group> create({required String name}) async {
++    final response = await _client.post('/groups', body: {'name': name});
++    return Group.fromJson(response.asMap);
++  }
++
++  /// `GET /api/v1/groups` — every group the caller belongs to, by name.
++  ///
++  /// `callerRole` is *this* caller's role in *that* group, so a screen can
++  /// decide whether to show "invite" without a second request. Empty for a
++  /// user in no groups; never an error.
++  Future<List<Group>> list() async {
++    final response = await _client.get('/groups');
++    return parseList(response.body, Group.fromJson);
++  }
++
++  /// `GET /api/v1/groups/{groupId}/members` — who is in a group, admins first
++  /// then by name. Any member may read it, whatever their role.
++  ///
++  /// Each row carries the member's name and email, so a members screen can be
++  /// drawn from this list alone — there is no `GET /users/{id}` to resolve ids
++  /// with.
++  ///
++  /// Throws `ApiException` with `isNotFound` for a non-member **and** for a
++  /// group that does not exist: the same answer, so an id is never confirmed
++  /// to an outsider.
++  Future<List<GroupMember>> members(String groupId) async {
++    final response = await _client.get('/groups/$groupId/members');
++    return parseList(response.body, GroupMember.fromJson);
++  }
++}
+diff --git a/app/obd_app/lib/data/api/endpoints/invitations_api.dart b/app/obd_app/lib/data/api/endpoints/invitations_api.dart
+new file mode 100644
+index 0000000..af90f4b
+--- /dev/null
++++ b/app/obd_app/lib/data/api/endpoints/invitations_api.dart
+@@ -0,0 +1,70 @@
++import 'package:obd_app/data/api/api_client.dart';
++import 'package:obd_app/data/api/models/api_models.dart';
++import 'package:obd_app/data/api/models/json.dart';
++
++/// `/api/v1/invitations/*` — how someone joins a group.
++///
++/// Invitations are keyed by **email, not user id**, because the common case in
++/// a family app is inviting someone who has not installed the app yet: the row
++/// waits, and when that address registers the invitation is simply there.
++///
++/// Inviting writes nothing to the membership table. Joining is consent — the
++/// invitee accepts.
++class InvitationsApi {
++  const InvitationsApi(this._client);
++
++  final ApiClient _client;
++
++  /// `POST /api/v1/invitations/invite/{groupId}` — an **admin** of the group
++  /// invites an email address.
++  ///
++  /// | Parameter | Required | Notes |
++  /// |---|---|---|
++  /// | [groupId] | yes | a group the caller administers |
++  /// | [email] | yes | valid email; trimmed and lowercased server-side |
++  ///
++  /// The response is identical whether or not that email has an account, so
++  /// this cannot be used as an "is this address registered?" oracle.
++  /// Invitations expire after 7 days; re-inviting the same address reclaims a
++  /// lapsed row.
++  ///
++  /// Throws `ApiException`: `isNotFound` if the caller is not a member (a
++  /// `403` would confirm the group exists), `isForbidden` if they are a member
++  /// but not an admin, `isConflict` if that email already belongs to a member.
++  Future<Invitation> invite({
++    required String groupId,
++    required String email,
++  }) async {
++    final response = await _client.post(
++      '/invitations/invite/$groupId',
++      body: {'email': email},
++    );
++    return Invitation.fromJson(response.asMap);
++  }
++
++  /// `GET /api/v1/invitations/pending` — the caller's own pending
++  /// invitations, newest first. No parameters: the email always comes from the
++  /// token, which is what stops one person listing (and then accepting)
++  /// another's.
++  ///
++  /// Accepted and expired rows are filtered out, so every id returned can be
++  /// accepted right now. `[]` for most users most of the time.
++  Future<List<PendingInvitation>> pending() async {
++    final response = await _client.get('/invitations/pending');
++    return parseList(response.body, PendingInvitation.fromJson);
++  }
++
++  /// `POST /api/v1/invitations/{invitationId}/accept` — accepts an invitation
++  /// addressed to the caller's email **and joins the group as `MEMBER`**, in
++  /// one atomic statement. No body.
++  ///
++  /// The caller shows up in `GroupsApi.list()` immediately afterwards.
++  ///
++  /// Throws `ApiException`: `isNotFound` for an unknown invitation **or** one
++  /// addressed to someone else (deliberately indistinguishable),
++  /// `isConflict` if it was already accepted or has expired.
++  Future<Invitation> accept(String invitationId) async {
++    final response = await _client.post('/invitations/$invitationId/accept');
++    return Invitation.fromJson(response.asMap);
++  }
++}
+diff --git a/app/obd_app/lib/data/api/endpoints/models_api.dart b/app/obd_app/lib/data/api/endpoints/models_api.dart
+new file mode 100644
+index 0000000..9a6f9a6
+--- /dev/null
++++ b/app/obd_app/lib/data/api/endpoints/models_api.dart
+@@ -0,0 +1,54 @@
++import 'package:obd_app/data/api/api_client.dart';
++import 'package:obd_app/data/api/models/api_models.dart';
++import 'package:obd_app/data/api/models/json.dart';
++
++/// `/api/v1/models` — the car model catalog.
++///
++/// This is where the `modelId` that `POST /cars` requires comes from: the
++/// create-car form should be a picker over [list], not two free-text fields.
++class ModelsApi {
++  const ModelsApi(this._client);
++
++  final ApiClient _client;
++
++  /// `GET /api/v1/models` — the whole catalog, ordered by brand then model.
++  ///
++  /// Unpaged on purpose: it is small and curated. Eight models are seeded by
++  /// the migrations with fixed ids, so this is never empty.
++  Future<List<CarModel>> list() async {
++    final response = await _client.get('/models');
++    return parseList(response.body, CarModel.fromJson);
++  }
++
++  /// `POST /api/v1/models` — adds a model. **Admin-only** (the account-level
++  /// role, not a group role). `201`.
++  ///
++  /// | Parameter | Required | Notes |
++  /// |---|---|---|
++  /// | [modelBrand] | yes | ≤ 60 chars |
++  /// | [modelName] | yes | ≤ 60 chars |
++  /// | [modelProtocol] | yes | ≤ 40 chars, e.g. `ISO 15765-4 (CAN)` |
++  ///
++  /// `register` always creates plain users, and no endpoint promotes an
++  /// account, so the first admin is made with SQL:
++  /// `update users set role = 'ADMIN' where email = '…';` (effective on the
++  /// next login, when the role is read into the token).
++  ///
++  /// Throws `ApiException` with `isForbidden` for a non-admin and
++  /// `isConflict` when that brand/model pair already exists.
++  Future<CarModel> create({
++    required String modelBrand,
++    required String modelName,
++    required String modelProtocol,
++  }) async {
++    final response = await _client.post(
++      '/models',
++      body: {
++        'modelBrand': modelBrand,
++        'modelName': modelName,
++        'modelProtocol': modelProtocol,
++      },
++    );
++    return CarModel.fromJson(response.asMap);
++  }
++}
+diff --git a/app/obd_app/lib/data/api/endpoints/telemetry_api.dart b/app/obd_app/lib/data/api/endpoints/telemetry_api.dart
+new file mode 100644
+index 0000000..3bd9082
+--- /dev/null
++++ b/app/obd_app/lib/data/api/endpoints/telemetry_api.dart
+@@ -0,0 +1,121 @@
++import 'package:obd_app/data/api/api_client.dart';
++import 'package:obd_app/data/api/models/api_models.dart';
++
++/// `/api/v1/telemetry` — the readings themselves.
++///
++/// The ESP32 speaks BLE and never HTTP, so **the phone is the relay**: it
++/// buffers what the dongle sent and uploads it in batches, possibly late,
++/// possibly repeating something it was unsure about. Both endpoints are shaped
++/// for that: a retry is always safe on the way up, and history is read forward
++/// from a cursor on the way down.
++class TelemetryApi {
++  const TelemetryApi(this._client);
++
++  final ApiClient _client;
++
++  /// `POST /api/v1/telemetry` — stores a batch and refreshes the car's cached
++  /// snapshot. `200` (not `201`: an all-duplicate batch creates nothing).
++  ///
++  /// **Name the car exactly one way:**
++  ///
++  /// * [serial] — the dongle's serial as read over BLE. The normal path: the
++  ///   server resolves it to the paired car, so the phone never has to know
++  ///   which car it is plugged into and cannot get it wrong. Also refreshes
++  ///   the dongle's `lastSeenAt`.
++  /// * [carId] — the car directly. For a car with no dongle, manual entry, or
++  ///   tests. Says nothing about hardware, so `lastSeenAt` is untouched.
++  ///
++  /// | Parameter | Required | Notes |
++  /// |---|---|---|
++  /// | [serial] / [carId] | exactly one | passing both or neither is a `400` |
++  /// | [readings] | yes | 1–500 entries |
++  ///
++  /// Per reading: `recordedAt` is required and is *device* time; latitude and
++  /// longitude go together or not at all; speed, fuel, battery and mileage are
++  /// each ≥ 0; `raw` is any JSON, kept verbatim.
++  ///
++  /// A malformed reading rejects the **whole batch** with errors keyed by
++  /// index (`readings[2].positionComplete`) — half-applying would leave the
++  /// phone's buffer state unknowable. Duplicates, by contrast, are success:
++  /// they come back in `duplicates`, and there is deliberately no `409`.
++  ///
++  /// Throws `ApiException`: `isNotFound` for an unknown car, an unknown
++  /// serial, or one paired to a car the caller may not see (all the same
++  /// answer); `isValidation` for a bad batch.
++  Future<TelemetryIngestResult> upload({
++    required List<TelemetryReading> readings,
++    String? serial,
++    String? carId,
++  }) async {
++    if ((serial == null) == (carId == null)) {
++      throw ArgumentError('Pass exactly one of serial or carId');
++    }
++    if (readings.isEmpty || readings.length > 500) {
++      throw ArgumentError('A batch holds between 1 and 500 readings');
++    }
++
++    final response = await _client.post(
++      '/telemetry',
++      body: {
++        if (serial != null) 'serial': serial,
++        if (carId != null) 'carId': carId,
++        'readings': readings.map((r) => r.toJson()).toList(),
++      },
++    );
++    return TelemetryIngestResult.fromJson(response.asMap);
++  }
++
++  /// `GET /api/v1/telemetry` — one page of a car's readings after a cursor,
++  /// **oldest first**.
++  ///
++  /// | Query parameter | Required | Notes |
++  /// |---|---|---|
++  /// | [carId] | yes | must be a car the caller may read |
++  /// | [since] | no | returns readings recorded **strictly after** it. Absent means from the beginning |
++  /// | [limit] | no | 1–500, default 100 |
++  ///
++  /// [since] is exclusive because the client passes back a value it was
++  /// already given (`nextSince` from the last page, or `latestRecordedAt` from
++  /// an upload) and therefore already holds that row.
++  ///
++  /// Throws `ApiException` with `isValidation` for a limit outside 1–500 or an
++  /// unparseable [since], `isNotFound` if the car is not readable.
++  Future<TelemetryPage> history({
++    required String carId,
++    DateTime? since,
++    int? limit,
++  }) async {
++    final response = await _client.get(
++      '/telemetry',
++      query: {'carId': carId, 'since': since, 'limit': limit},
++    );
++    return TelemetryPage.fromJson(response.asMap);
++  }
++
++  /// Walks [history] to the end and returns everything after [since].
++  ///
++  /// The loop is the whole point of the cursor design: ascending order with an
++  /// exclusive cursor covers the series with no gaps and no repeats.
++  ///
++  /// [maxPages] is a seat belt, not a limit of the API — at the default page
++  /// size it reads 25 000 readings before giving up, which is far more than a
++  /// phone should pull in one go.
++  Future<List<TelemetryRecord>> readAll({
++    required String carId,
++    DateTime? since,
++    int pageSize = 500,
++    int maxPages = 50,
++  }) async {
++    final all = <TelemetryRecord>[];
++    var cursor = since;
++
++    for (var page = 0; page < maxPages; page++) {
++      final result = await history(carId: carId, since: cursor, limit: pageSize);
++      all.addAll(result.readings);
++      cursor = result.nextSince ?? cursor;
++      if (!result.hasMore) break;
++    }
++
++    return all;
++  }
++}
+diff --git a/app/obd_app/lib/data/api/endpoints/trips_api.dart b/app/obd_app/lib/data/api/endpoints/trips_api.dart
+new file mode 100644
+index 0000000..5bb0b4c
+--- /dev/null
++++ b/app/obd_app/lib/data/api/endpoints/trips_api.dart
+@@ -0,0 +1,110 @@
++import 'package:obd_app/data/api/api_client.dart';
++import 'package:obd_app/data/api/models/api_models.dart';
++import 'package:obd_app/data/api/models/json.dart';
++
++/// `/api/v1/trips/*` plus the two per-car reads.
++///
++/// A trip ("viaje") records that someone is using a car. The driver always
++/// comes from the token and both timestamps from the server clock, so a trip
++/// can be neither logged in someone else's name nor back-dated.
++class TripsApi {
++  const TripsApi(this._client);
++
++  final ApiClient _client;
++
++  /// `POST /api/v1/trips` — starts a trip and leaves it open. `201`.
++  ///
++  /// | Parameter | Required | Notes |
++  /// |---|---|---|
++  /// | [carId] | yes | a car the caller may use: their own, or one shared with a group they belong to |
++  /// | [initialFuel] | no | reading at the start, ≥ 0. Defaults to the car's cached `fuelLevel` — what the dongle last reported |
++  ///
++  /// At most one trip may be open per car, enforced by a partial unique index
++  /// rather than a check in the service: parallel starts yield one `201` and
++  /// the rest `409`.
++  ///
++  /// Throws `ApiException`: `isNotFound` if the car does not exist **or** the
++  /// caller may not use it, `isConflict` if the car is already on a trip.
++  Future<Trip> start({required String carId, int? initialFuel}) async {
++    final response = await _client.post(
++      '/trips',
++      body: {'carId': carId, if (initialFuel != null) 'initialFuel': initialFuel},
++    );
++    return Trip.fromJson(response.asMap);
++  }
++
++  /// `GET /api/v1/trips` — every trip the **caller** drove, in any car, newest
++  /// first, open and finished alike (`active` tells them apart).
++  ///
++  /// The driver is always the token holder; there is no way to ask for someone
++  /// else's history. Unpaged for now.
++  Future<List<Trip>> mine() async {
++    final response = await _client.get('/trips');
++    return parseList(response.body, Trip.fromJson);
++  }
++
++  /// `GET /api/v1/cars/{carId}/trips` — **the car's** history: every trip on
++  /// it by every driver, newest first, for anyone who may read the car.
++  ///
++  /// This is what a shared car's history is for — who used it, and who used
++  /// the fuel.
++  Future<List<Trip>> forCar(String carId) async {
++    final response = await _client.get('/cars/$carId/trips');
++    return parseList(response.body, Trip.fromJson);
++  }
++
++  /// `GET /api/v1/cars/{carId}/trips/active` — **"who has the car right
++  /// now?"**.
++  ///
++  /// Returns null when the car is idle (the API answers `204 No Content`,
++  /// which is a normal answer, not an error — `404` here means "no such
++  /// car").
++  Future<Trip?> active(String carId) async {
++    final response = await _client.get('/cars/$carId/trips/active');
++    if (response.isEmpty) return null;
++    return Trip.fromJson(response.asMap);
++  }
++
++  /// `POST /api/v1/trips/{tripId}/finish` — the **driver** ends their trip.
++  ///
++  /// | Parameter | Required | Notes |
++  /// |---|---|---|
++  /// | [tripId] | yes | must be the caller's own open trip |
++  /// | [tripFinalFuel] | no | reading at the end, ≥ 0. Absent means the expense is *unknown*, not zero |
++  /// | [tripDistance] | no | > 0 |
++  ///
++  /// The end time is the server clock. [tripFinalFuel] may exceed the initial
++  /// reading — the driver refuelled, and `fuelUsed` comes out negative rather
++  /// than being validated away.
++  ///
++  /// Only the driver can finish their own trip: the car's owner cannot close
++  /// it out from under them. A double tap is a `409`, not a second reading
++  /// overwriting the first.
++  ///
++  /// Throws `ApiException`: `isNotFound` for an unknown trip **or** someone
++  /// else's, `isConflict` if it has already ended.
++  Future<Trip> finish(
++    String tripId, {
++    int? tripFinalFuel,
++    int? tripDistance,
++  }) async {
++    final response = await _client.post(
++      '/trips/$tripId/finish',
++      body: {
++        if (tripFinalFuel != null) 'tripFinalFuel': tripFinalFuel,
++        if (tripDistance != null) 'tripDistance': tripDistance,
++      },
++    );
++    return Trip.fromJson(response.asMap);
++  }
++
++  /// `DELETE /api/v1/trips/{tripId}` — cancels a trip started by mistake, as
++  /// if it never happened. `204`.
++  ///
++  /// Only an **open** trip of the caller's own: a finished trip is history, it
++  /// carries an expense, and it stays.
++  ///
++  /// Throws `ApiException`: `isNotFound` for an unknown trip or someone
++  /// else's, `isConflict` for one that has already ended.
++  Future<void> cancel(String tripId) => _client.delete('/trips/$tripId');
++}
+diff --git a/app/obd_app/lib/data/api/endpoints/users_api.dart b/app/obd_app/lib/data/api/endpoints/users_api.dart
+new file mode 100644
+index 0000000..15c80a6
+--- /dev/null
++++ b/app/obd_app/lib/data/api/endpoints/users_api.dart
+@@ -0,0 +1,20 @@
++import 'package:obd_app/data/api/api_client.dart';
++import 'package:obd_app/data/api/models/api_models.dart';
++
++/// `/api/v1/users/*`.
++class UsersApi {
++  const UsersApi(this._client);
++
++  final ApiClient _client;
++
++  /// `GET /api/v1/users/me` — the caller's own profile. No parameters: the
++  /// user is the token holder, and there is deliberately no
++  /// `GET /users/{id}` to look anyone else up with.
++  ///
++  /// Throws `ApiException` with `isNotFound` if the account behind a
++  /// still-valid token was deleted.
++  Future<UserProfile> me() async {
++    final response = await _client.get('/users/me');
++    return UserProfile.fromJson(response.asMap);
++  }
++}
+diff --git a/app/obd_app/lib/data/api/models/api_models.dart b/app/obd_app/lib/data/api/models/api_models.dart
+new file mode 100644
+index 0000000..f1f6ae0
+--- /dev/null
++++ b/app/obd_app/lib/data/api/models/api_models.dart
+@@ -0,0 +1,11 @@
++/// Every model returned by, or sent to, the OBD API.
++///
++/// Named `api_models.dart` rather than `models.dart` so it is never confused
++/// with `lib/models/models.dart`, which holds the UI's own view models.
++library;
++
++export 'auth_models.dart';
++export 'car_models.dart';
++export 'group_models.dart';
++export 'telemetry_models.dart';
++export 'trip_models.dart';
+diff --git a/app/obd_app/lib/data/api/models/auth_models.dart b/app/obd_app/lib/data/api/models/auth_models.dart
+new file mode 100644
+index 0000000..939be1d
+--- /dev/null
++++ b/app/obd_app/lib/data/api/models/auth_models.dart
+@@ -0,0 +1,80 @@
++import 'package:obd_app/data/api/models/json.dart';
++
++/// `AuthResponseDTO` — what `register`, `login` and `refresh` return.
++///
++/// The refresh token is **not** here: it travels as an `httpOnly` cookie and
++/// is picked up by `ApiClient`, not by this class.
++class AuthSession {
++  const AuthSession({
++    required this.accessToken,
++    required this.tokenType,
++    required this.expireInSeconds,
++    required this.userId,
++    required this.email,
++  });
++
++  factory AuthSession.fromJson(Map<String, dynamic> json) => AuthSession(
++    accessToken: json.str('accessToken') ?? '',
++    tokenType: json.str('tokenType') ?? 'Bearer',
++    expireInSeconds: json.integer('expireInSeconds') ?? 0,
++    userId: json.str('userId') ?? '',
++    email: json.str('email') ?? '',
++  );
++
++  /// Short-lived JWT. Sent as `Authorization: Bearer <accessToken>`.
++  final String accessToken;
++
++  /// Always `Bearer`.
++  final String tokenType;
++
++  /// Lifetime of [accessToken] — 900 (15 minutes) at the time of writing.
++  final int expireInSeconds;
++
++  /// UUID of the account that just signed in.
++  final String userId;
++
++  final String email;
++
++  @override
++  String toString() => 'AuthSession($email, expires in ${expireInSeconds}s)';
++}
++
++/// `UserDTO.Read` — the caller's own profile (`GET /users/me`).
++class UserProfile {
++  const UserProfile({
++    required this.id,
++    required this.userName,
++    required this.userLastName,
++    required this.userEmail,
++    this.userPhone,
++  });
++
++  factory UserProfile.fromJson(Map<String, dynamic> json) => UserProfile(
++    id: json.str('id') ?? '',
++    // First name, not a nickname: the same field `register` takes.
++    userName: json.str('userName') ?? '',
++    userLastName: json.str('userLastName') ?? '',
++    userEmail: json.str('userEmail') ?? '',
++    userPhone: json.str('userPhone'),
++  );
++
++  final String id;
++  final String userName;
++  final String userLastName;
++  final String userEmail;
++  final String? userPhone;
++
++  String get fullName => '$userName $userLastName'.trim();
++
++  /// Two letters for the avatar, e.g. `AL` for Ada Lovelace.
++  String get initials {
++    final first = userName.isNotEmpty ? userName[0] : '';
++    final last = userLastName.isNotEmpty ? userLastName[0] : '';
++    final letters = '$first$last'.trim();
++    if (letters.isNotEmpty) return letters.toUpperCase();
++    return userEmail.isNotEmpty ? userEmail[0].toUpperCase() : '?';
++  }
++
++  @override
++  String toString() => 'UserProfile($fullName, $userEmail)';
++}
+diff --git a/app/obd_app/lib/data/api/models/car_models.dart b/app/obd_app/lib/data/api/models/car_models.dart
+new file mode 100644
+index 0000000..8236080
+--- /dev/null
++++ b/app/obd_app/lib/data/api/models/car_models.dart
+@@ -0,0 +1,198 @@
++import 'package:obd_app/data/api/models/json.dart';
++
++/// `CarDTO.Read` — a car the caller may use.
++///
++/// Everything from [mileage] down is a **cached snapshot** of the last reading
++/// the dongle reported, refreshed by `POST /telemetry`. All null on a car that
++/// has never reported, and never accepted from a client.
++class Car {
++  const Car({
++    required this.id,
++    required this.name,
++    required this.model,
++    this.licensePlate,
++    this.mileage,
++    this.fuelLevel,
++    this.batteryLevel,
++    this.latitude,
++    this.longitude,
++    this.snapshotAt,
++    this.group,
++  });
++
++  factory Car.fromJson(Map<String, dynamic> json) => Car(
++    id: json.str('id') ?? '',
++    name: json.str('name') ?? '',
++    licensePlate: json.str('licensePlate'),
++    model: CarModelRef.fromJson(json.object('model')),
++    mileage: json.integer('mileage'),
++    fuelLevel: json.integer('fuelLevel'),
++    batteryLevel: json.integer('batteryLevel'),
++    latitude: json.decimal('latitude'),
++    longitude: json.decimal('longitude'),
++    snapshotAt: json.instant('snapshotAt'),
++    group: CarGroupRef.fromJsonOrNull(json.object('group')),
++  );
++
++  final String id;
++
++  /// The label shown in car lists, e.g. `Ada's Gol`.
++  final String name;
++
++  /// Trimmed and upper-cased by the server; unique per owner, not globally.
++  final String? licensePlate;
++
++  final CarModelRef model;
++
++  final int? mileage;
++
++  /// Percentage or litres is still undecided server-side, so treat it as an
++  /// opaque number for now (see the API's ROADMAP §2).
++  final int? fuelLevel;
++
++  final int? batteryLevel;
++  final double? latitude;
++  final double? longitude;
++
++  /// `recordedAt` of the reading the snapshot came from — "last seen".
++  final DateTime? snapshotAt;
++
++  /// The group this car is shared with, or null (the common case).
++  final CarGroupRef? group;
++
++  bool get isShared => group != null;
++
++  bool get hasPosition => latitude != null && longitude != null;
++
++  /// Has the car ever reported?
++  bool get hasSnapshot => snapshotAt != null;
++
++  @override
++  String toString() => 'Car($name, ${licensePlate ?? 'no plate'})';
++}
++
++/// The `model` block nested inside a car. Different field names from the
++/// catalog's own shape — see [CarModel].
++class CarModelRef {
++  const CarModelRef({
++    required this.id,
++    required this.brand,
++    required this.model,
++    required this.protocol,
++  });
++
++  factory CarModelRef.fromJson(Map<String, dynamic>? json) {
++    if (json == null) {
++      return const CarModelRef(id: '', brand: '', model: '', protocol: '');
++    }
++    return CarModelRef(
++      id: json.str('id') ?? '',
++      brand: json.str('brand') ?? '',
++      model: json.str('model') ?? '',
++      protocol: json.str('protocol') ?? '',
++    );
++  }
++
++  final String id;
++  final String brand;
++  final String model;
++
++  /// OBD-II protocol, e.g. `ISO 15765-4 (CAN)`.
++  final String protocol;
++
++  String get label => '$brand $model'.trim();
++
++  @override
++  String toString() => label;
++}
++
++/// The `group` block nested inside a car: just enough to name it.
++class CarGroupRef {
++  const CarGroupRef({required this.id, required this.name});
++
++  static CarGroupRef? fromJsonOrNull(Map<String, dynamic>? json) {
++    if (json == null) return null;
++    return CarGroupRef(id: json.str('id') ?? '', name: json.str('name') ?? '');
++  }
++
++  final String id;
++  final String name;
++
++  @override
++  String toString() => name;
++}
++
++/// `ModelDTO.Read` — one entry of the car model catalog (`GET /models`).
++///
++/// The catalog is curated: `POST /cars` takes a [modelId] from here rather
++/// than free text, so the table cannot fill up with `VW` / `vw` /
++/// `Volkswagen` variants of the same car.
++class CarModel {
++  const CarModel({
++    required this.modelId,
++    required this.modelBrand,
++    required this.modelName,
++    required this.modelProtocol,
++  });
++
++  factory CarModel.fromJson(Map<String, dynamic> json) => CarModel(
++    modelId: json.str('modelId') ?? '',
++    modelBrand: json.str('modelBrand') ?? '',
++    modelName: json.str('modelName') ?? '',
++    modelProtocol: json.str('modelProtocol') ?? '',
++  );
++
++  final String modelId;
++  final String modelBrand;
++  final String modelName;
++  final String modelProtocol;
++
++  String get label => '$modelBrand $modelName'.trim();
++
++  @override
++  String toString() => label;
++}
++
++/// `DeviceDTO.Read` — the OBD dongle paired to a car.
++///
++/// The mapping lives on the server so every phone in the family resolves the
++/// same serial to the same car, and so a dongle moved between cars re-routes
++/// everyone at once.
++class Device {
++  const Device({
++    required this.id,
++    required this.serial,
++    required this.carId,
++    required this.carName,
++    this.pairedAt,
++    this.lastSeenAt,
++  });
++
++  factory Device.fromJson(Map<String, dynamic> json) => Device(
++    id: json.str('id') ?? '',
++    serial: json.str('serial') ?? '',
++    carId: json.str('carId') ?? '',
++    carName: json.str('carName') ?? '',
++    pairedAt: json.instant('pairedAt'),
++    lastSeenAt: json.instant('lastSeenAt'),
++  );
++
++  final String id;
++
++  /// Stored trimmed and upper-cased, so `a4:cf:12` and `A4:CF:12` are one
++  /// device.
++  final String serial;
++
++  final String carId;
++  final String carName;
++  final DateTime? pairedAt;
++
++  /// Server clock, set only by uploads that name the serial. Null until the
++  /// dongle has delivered its first batch.
++  final DateTime? lastSeenAt;
++
++  bool get hasReported => lastSeenAt != null;
++
++  @override
++  String toString() => 'Device($serial -> $carName)';
++}
+diff --git a/app/obd_app/lib/data/api/models/group_models.dart b/app/obd_app/lib/data/api/models/group_models.dart
+new file mode 100644
+index 0000000..1ab9eb4
+--- /dev/null
++++ b/app/obd_app/lib/data/api/models/group_models.dart
+@@ -0,0 +1,185 @@
++import 'package:obd_app/data/api/models/json.dart';
++
++/// A member's role **inside a group**. Unrelated to the account-level role
++/// that guards `POST /models`.
++enum GroupRole {
++  admin,
++  member;
++
++  static GroupRole? parse(String? value) => switch (value?.toUpperCase()) {
++    'ADMIN' => GroupRole.admin,
++    'MEMBER' => GroupRole.member,
++    _ => null,
++  };
++
++  /// The wire value the API uses.
++  String get wire => name.toUpperCase();
++
++  bool get isAdmin => this == GroupRole.admin;
++}
++
++/// `GroupDTO.Read` — a "family" the caller belongs to.
++class Group {
++  const Group({
++    required this.id,
++    required this.name,
++    this.createdAt,
++    this.memberCount = 0,
++    this.callerRole,
++  });
++
++  factory Group.fromJson(Map<String, dynamic> json) => Group(
++    id: json.str('id') ?? '',
++    name: json.str('name') ?? '',
++    createdAt: json.instant('createdAt'),
++    memberCount: json.integer('memberCount') ?? 0,
++    callerRole: GroupRole.parse(json.str('callerRole')),
++  );
++
++  final String id;
++
++  /// Not unique — two unrelated families may both be "Los Lopez". The name is
++  /// a label, not an identifier.
++  final String name;
++
++  final DateTime? createdAt;
++
++  /// Counted from `group_members` on every read, never stored.
++  final int memberCount;
++
++  /// *This* caller's role in *this* group: the same person can be admin of one
++  /// group and a plain member of another.
++  final GroupRole? callerRole;
++
++  /// May the caller invite people to this group?
++  bool get callerIsAdmin => callerRole?.isAdmin ?? false;
++
++  @override
++  String toString() => 'Group($name, $memberCount members)';
++}
++
++/// `GroupDTO.Member` — one row of `GET /groups/{groupId}/members`.
++///
++/// Carries the name and email directly because there is no
++/// `GET /users/{id}` to resolve ids against.
++class GroupMember {
++  const GroupMember({
++    required this.userId,
++    required this.name,
++    required this.email,
++    this.role,
++  });
++
++  factory GroupMember.fromJson(Map<String, dynamic> json) => GroupMember(
++    userId: json.str('userId') ?? '',
++    // First name, as in GET /users/me.
++    name: json.str('name') ?? '',
++    email: json.str('email') ?? '',
++    role: GroupRole.parse(json.str('role')),
++  );
++
++  final String userId;
++  final String name;
++  final String email;
++  final GroupRole? role;
++
++  bool get isAdmin => role?.isAdmin ?? false;
++
++  @override
++  String toString() => 'GroupMember($name, ${role?.wire})';
++}
++
++/// Derived from the timestamps server-side, never stored.
++enum InvitationStatus {
++  pending,
++  accepted,
++  expired;
++
++  static InvitationStatus? parse(String? value) =>
++      switch (value?.toUpperCase()) {
++        'PENDING' => InvitationStatus.pending,
++        'ACCEPTED' => InvitationStatus.accepted,
++        'EXPIRED' => InvitationStatus.expired,
++        _ => null,
++      };
++
++  String get wire => name.toUpperCase();
++}
++
++/// `InvitationDTO.Read` — the **admin's** view, returned by
++/// `POST /invitations/invite/{groupId}` and by accepting one.
++class Invitation {
++  const Invitation({
++    required this.invitationId,
++    required this.groupId,
++    required this.invitationEmail,
++    this.invitationBy,
++    this.invitationCreatedAt,
++    this.invitationExpiresAt,
++    this.invitationStatus,
++  });
++
++  factory Invitation.fromJson(Map<String, dynamic> json) => Invitation(
++    invitationId: json.str('invitationId') ?? '',
++    groupId: json.str('groupId') ?? '',
++    invitationEmail: json.str('invitationEmail') ?? '',
++    invitationBy: json.str('invitationBy'),
++    invitationCreatedAt: json.instant('invitationCreatedAt'),
++    invitationExpiresAt: json.instant('invitationExpiresAt'),
++    invitationStatus: InvitationStatus.parse(json.str('invitationStatus')),
++  );
++
++  final String invitationId;
++  final String groupId;
++
++  /// Trimmed and lowercased by the server.
++  final String invitationEmail;
++
++  /// User id of the admin who sent it.
++  final String? invitationBy;
++
++  final DateTime? invitationCreatedAt;
++
++  /// Seven days after creation.
++  final DateTime? invitationExpiresAt;
++
++  final InvitationStatus? invitationStatus;
++
++  bool get isPending => invitationStatus == InvitationStatus.pending;
++
++  @override
++  String toString() => 'Invitation($invitationEmail, ${invitationStatus?.wire})';
++}
++
++/// `InvitationDTO.Pending` — the **invitee's** view
++/// (`GET /invitations/pending`).
++///
++/// A different shape on purpose: the invitee sees the group's *name*, not the
++/// inviter's user id. Every id listed here can be accepted right now.
++class PendingInvitation {
++  const PendingInvitation({
++    required this.id,
++    required this.groupId,
++    required this.groupName,
++    this.invitationCreatedAt,
++    this.invitationExpiresAt,
++  });
++
++  factory PendingInvitation.fromJson(Map<String, dynamic> json) =>
++      PendingInvitation(
++        id: json.str('id') ?? '',
++        groupId: json.str('groupId') ?? '',
++        groupName: json.str('groupName') ?? '',
++        invitationCreatedAt: json.instant('invitationCreatedAt'),
++        invitationExpiresAt: json.instant('invitationExpiresAt'),
++      );
++
++  final String id;
++  final String groupId;
++  final String groupName;
++  final DateTime? invitationCreatedAt;
++  final DateTime? invitationExpiresAt;
++
++  @override
++  String toString() => 'PendingInvitation($groupName)';
++}
+diff --git a/app/obd_app/lib/data/api/models/json.dart b/app/obd_app/lib/data/api/models/json.dart
+new file mode 100644
+index 0000000..9851f35
+--- /dev/null
++++ b/app/obd_app/lib/data/api/models/json.dart
+@@ -0,0 +1,63 @@
++/// Tolerant readers for decoded JSON maps.
++///
++/// Two things make a plain `json['x'] as int?` unsafe here:
++///
++/// * JSON has one number type, so a latitude of exactly `-34` arrives as an
++///   `int` and a cast to `double` throws.
++/// * A field the API stopped sending (or has not started sending yet) becomes
++///   `null`, and a hard cast turns that into a crash in the middle of a list.
++///
++/// These return `null` instead of throwing, so a single odd field degrades one
++/// value rather than the whole screen.
++extension JsonMap on Map<String, dynamic> {
++  String? str(String key) {
++    final value = this[key];
++    return value == null ? null : '$value';
++  }
++
++  int? integer(String key) {
++    final value = this[key];
++    if (value is num) return value.toInt();
++    if (value is String) return int.tryParse(value);
++    return null;
++  }
++
++  double? decimal(String key) {
++    final value = this[key];
++    if (value is num) return value.toDouble();
++    if (value is String) return double.tryParse(value);
++    return null;
++  }
++
++  bool flag(String key, {bool fallback = false}) {
++    final value = this[key];
++    if (value is bool) return value;
++    if (value is String) return value.toLowerCase() == 'true';
++    return fallback;
++  }
++
++  /// Parses an ISO-8601 `Instant` into a UTC [DateTime].
++  DateTime? instant(String key) {
++    final value = this[key];
++    if (value is! String || value.isEmpty) return null;
++    return DateTime.tryParse(value)?.toUtc();
++  }
++
++  Map<String, dynamic>? object(String key) {
++    final value = this[key];
++    return value is Map<String, dynamic> ? value : null;
++  }
++}
++
++/// Maps a decoded JSON array onto [parse], skipping anything that is not an
++/// object.
++List<T> parseList<T>(
++  Object? body,
++  T Function(Map<String, dynamic> json) parse,
++) {
++  if (body is! List) return const [];
++  return body
++      .whereType<Map<String, dynamic>>()
++      .map(parse)
++      .toList(growable: false);
++}
+diff --git a/app/obd_app/lib/data/api/models/telemetry_models.dart b/app/obd_app/lib/data/api/models/telemetry_models.dart
+new file mode 100644
+index 0000000..1a34171
+--- /dev/null
++++ b/app/obd_app/lib/data/api/models/telemetry_models.dart
+@@ -0,0 +1,211 @@
++import 'package:obd_app/data/api/models/json.dart';
++
++/// One reading **being uploaded** (`TelemetryDTO.Reading`).
++///
++/// Every field but [recordedAt] is optional: a frame that only carries fuel is
++/// a perfectly good reading, and the server merges it into the car's snapshot
++/// without blanking the fields it did not mention.
++///
++/// Two rules the server enforces, worth respecting locally to avoid a `400`
++/// that rejects the whole batch:
++///
++/// * [latitude] and [longitude] go together or not at all — half a position is
++///   no position.
++/// * [recordedAt] may not be more than five minutes in the future. A dongle
++///   with a broken clock would otherwise stamp a row that stays "the latest"
++///   for ever.
++class TelemetryReading {
++  const TelemetryReading({
++    required this.recordedAt,
++    this.latitude,
++    this.longitude,
++    this.speed,
++    this.fuelLevel,
++    this.batteryLevel,
++    this.mileage,
++    this.raw,
++  });
++
++  /// When the reading was **taken** on the device, not when it is uploaded.
++  /// This is what places it in the car's history.
++  final DateTime recordedAt;
++
++  final double? latitude;
++  final double? longitude;
++  final int? speed;
++  final int? fuelLevel;
++  final int? batteryLevel;
++  final int? mileage;
++
++  /// The frame exactly as the device sent it — a map, a list or a bare string
++  /// like `"01045020"`. Stored verbatim as `jsonb`; the decoder is unfinished,
++  /// so a value discarded here is gone for good.
++  final Object? raw;
++
++  /// Both coordinates or neither.
++  bool get hasValidPosition => (latitude == null) == (longitude == null);
++
++  bool get isInTheFuture =>
++      recordedAt.toUtc().isAfter(
++        DateTime.now().toUtc().add(const Duration(minutes: 5)),
++      );
++
++  Map<String, dynamic> toJson() => {
++    'recordedAt': recordedAt.toUtc().toIso8601String(),
++    if (latitude != null) 'latitude': latitude,
++    if (longitude != null) 'longitude': longitude,
++    if (speed != null) 'speed': speed,
++    if (fuelLevel != null) 'fuelLevel': fuelLevel,
++    if (batteryLevel != null) 'batteryLevel': batteryLevel,
++    if (mileage != null) 'mileage': mileage,
++    if (raw != null) 'raw': raw,
++  };
++
++  @override
++  String toString() => 'TelemetryReading(${recordedAt.toIso8601String()})';
++}
++
++/// One reading **read back** (`TelemetryDTO.Read`). Same fields plus the two
++/// the server adds: which trip it belongs to and when it actually arrived.
++class TelemetryRecord {
++  const TelemetryRecord({
++    required this.recordedAt,
++    this.tripId,
++    this.receivedAt,
++    this.latitude,
++    this.longitude,
++    this.speed,
++    this.fuelLevel,
++    this.batteryLevel,
++    this.mileage,
++    this.raw,
++  });
++
++  factory TelemetryRecord.fromJson(Map<String, dynamic> json) =>
++      TelemetryRecord(
++        tripId: json.str('tripId'),
++        recordedAt: json.instant('recordedAt') ?? DateTime.now().toUtc(),
++        receivedAt: json.instant('receivedAt'),
++        latitude: json.decimal('latitude'),
++        longitude: json.decimal('longitude'),
++        speed: json.integer('speed'),
++        fuelLevel: json.integer('fuelLevel'),
++        batteryLevel: json.integer('batteryLevel'),
++        mileage: json.integer('mileage'),
++        raw: json['raw'],
++      );
++
++  /// The trip this reading was stamped with at ingestion, or null when the car
++  /// was reporting outside any trip.
++  final String? tripId;
++
++  final DateTime recordedAt;
++
++  /// Server clock. Only this explains why a reading taken in a tunnel arrived
++  /// an hour late.
++  final DateTime? receivedAt;
++
++  final double? latitude;
++  final double? longitude;
++  final int? speed;
++  final int? fuelLevel;
++  final int? batteryLevel;
++  final int? mileage;
++  final Object? raw;
++
++  bool get hasPosition => latitude != null && longitude != null;
++
++  @override
++  String toString() => 'TelemetryRecord(${recordedAt.toIso8601String()})';
++}
++
++/// `TelemetryDTO.Page` — one page of history, **oldest first**.
++///
++/// Ascending order with an exclusive cursor is what makes paging correct:
++/// newest-first with a limit silently skips whatever falls between the newest
++/// N and the cursor.
++class TelemetryPage {
++  const TelemetryPage({
++    required this.carId,
++    required this.readings,
++    required this.hasMore,
++    this.nextSince,
++  });
++
++  factory TelemetryPage.fromJson(Map<String, dynamic> json) => TelemetryPage(
++    carId: json.str('carId') ?? '',
++    readings: parseList(json['readings'], TelemetryRecord.fromJson),
++    nextSince: json.instant('nextSince'),
++    hasMore: json.flag('hasMore'),
++  );
++
++  final String carId;
++  final List<TelemetryRecord> readings;
++
++  /// Pass this back as `since` on the next call. When the page is empty it is
++  /// the cursor you passed in, so it can always be stored unconditionally.
++  final DateTime? nextSince;
++
++  /// Keep calling while this is true.
++  final bool hasMore;
++
++  @override
++  String toString() =>
++      'TelemetryPage(${readings.length} readings, hasMore: $hasMore)';
++}
++
++/// `TelemetryDTO.Ingested` — what an upload returns.
++///
++/// Everything here is about the *client's* next move: which rows to drop from
++/// the buffer, whether to redraw, and where to resume.
++class TelemetryIngestResult {
++  const TelemetryIngestResult({
++    required this.carId,
++    required this.stored,
++    required this.duplicates,
++    required this.snapshotUpdated,
++    this.tripId,
++    this.latestRecordedAt,
++  });
++
++  factory TelemetryIngestResult.fromJson(Map<String, dynamic> json) =>
++      TelemetryIngestResult(
++        carId: json.str('carId') ?? '',
++        stored: json.integer('stored') ?? 0,
++        duplicates: json.integer('duplicates') ?? 0,
++        tripId: json.str('tripId'),
++        snapshotUpdated: json.flag('snapshotUpdated'),
++        latestRecordedAt: json.instant('latestRecordedAt'),
++      );
++
++  /// The car the readings landed on. When uploading by serial, this is how the
++  /// phone learns which car it is plugged into.
++  final String carId;
++
++  /// How many rows were new.
++  final int stored;
++
++  /// How many were already there, from an earlier upload. **Success, not an
++  /// error**: a retry that finds its readings present has done its job.
++  final int duplicates;
++
++  /// The car's open trip these readings were stamped with. Null means the car
++  /// is reporting with no trip open — the cue to prompt the driver to start
++  /// one.
++  final String? tripId;
++
++  /// False when the whole batch was older than what the car already knew:
++  /// nothing to redraw.
++  final bool snapshotUpdated;
++
++  /// The newest `recordedAt` in the batch; the client's sync cursor.
++  final DateTime? latestRecordedAt;
++
++  int get accepted => stored + duplicates;
++
++  bool get hasOpenTrip => tripId != null;
++
++  @override
++  String toString() =>
++      'TelemetryIngestResult(stored: $stored, duplicates: $duplicates)';
++}
+diff --git a/app/obd_app/lib/data/api/models/trip_models.dart b/app/obd_app/lib/data/api/models/trip_models.dart
+new file mode 100644
+index 0000000..4ebea0c
+--- /dev/null
++++ b/app/obd_app/lib/data/api/models/trip_models.dart
+@@ -0,0 +1,72 @@
++import 'package:obd_app/data/api/models/json.dart';
++
++/// `TripDTO.Read` — one "viaje".
++///
++/// A car's current trip, and therefore its current driver, **is** the open row
++/// here: the car holds no pointer back to it, so the two can never disagree.
++/// At most one trip may be open per car, enforced by a partial unique index.
++class Trip {
++  const Trip({
++    required this.id,
++    required this.carId,
++    required this.driverId,
++    required this.active,
++    this.startedAt,
++    this.endedAt,
++    this.initialFuel,
++    this.finalFuel,
++    this.fuelUsed,
++    this.distance,
++  });
++
++  factory Trip.fromJson(Map<String, dynamic> json) => Trip(
++    id: json.str('id') ?? '',
++    carId: json.str('carId') ?? '',
++    driverId: json.str('driverId') ?? '',
++    startedAt: json.instant('startedAt'),
++    endedAt: json.instant('endedAt'),
++    initialFuel: json.integer('initialFuel'),
++    finalFuel: json.integer('finalFuel'),
++    fuelUsed: json.integer('fuelUsed'),
++    distance: json.integer('distance'),
++    active: json.flag('active'),
++  );
++
++  final String id;
++  final String carId;
++
++  /// Always the token holder at the time the trip started — a trip cannot be
++  /// logged in someone else's name.
++  final String driverId;
++
++  /// Server clock, not the client's.
++  final DateTime? startedAt;
++
++  /// Null while the trip is running.
++  final DateTime? endedAt;
++
++  /// Defaults to the car's cached `fuelLevel` when the client sends nothing.
++  final int? initialFuel;
++
++  final int? finalFuel;
++
++  /// `initialFuel - finalFuel`, computed on every read and never stored. Null
++  /// while running, and afterwards if either reading is missing. May be
++  /// negative: the driver refuelled.
++  final int? fuelUsed;
++
++  final int? distance;
++
++  /// `endedAt == null`, spelled out by the API so clients do not infer it.
++  final bool active;
++
++  /// How long the trip ran (so far, if it is still open).
++  Duration? get elapsed {
++    final start = startedAt;
++    if (start == null) return null;
++    return (endedAt ?? DateTime.now().toUtc()).difference(start);
++  }
++
++  @override
++  String toString() => 'Trip($id, ${active ? 'active' : 'finished'})';
++}
+diff --git a/app/obd_app/lib/data/api/obd_api.dart b/app/obd_app/lib/data/api/obd_api.dart
+new file mode 100644
+index 0000000..931c40a
+--- /dev/null
++++ b/app/obd_app/lib/data/api/obd_api.dart
+@@ -0,0 +1,105 @@
++import 'package:http/http.dart' as http;
++import 'package:obd_app/data/api/api_client.dart';
++import 'package:obd_app/data/api/api_config.dart';
++import 'package:obd_app/data/api/endpoints/auth_api.dart';
++import 'package:obd_app/data/api/endpoints/cars_api.dart';
++import 'package:obd_app/data/api/endpoints/devices_api.dart';
++import 'package:obd_app/data/api/endpoints/groups_api.dart';
++import 'package:obd_app/data/api/endpoints/invitations_api.dart';
++import 'package:obd_app/data/api/endpoints/models_api.dart';
++import 'package:obd_app/data/api/endpoints/telemetry_api.dart';
++import 'package:obd_app/data/api/endpoints/trips_api.dart';
++import 'package:obd_app/data/api/endpoints/users_api.dart';
++import 'package:obd_app/data/api/session.dart';
++
++export 'package:obd_app/data/api/api_client.dart' show ApiClient, ApiResponse;
++export 'package:obd_app/data/api/api_config.dart';
++export 'package:obd_app/data/api/api_exception.dart';
++export 'package:obd_app/data/api/endpoints/auth_api.dart';
++export 'package:obd_app/data/api/endpoints/cars_api.dart';
++export 'package:obd_app/data/api/endpoints/devices_api.dart';
++export 'package:obd_app/data/api/endpoints/groups_api.dart';
++export 'package:obd_app/data/api/endpoints/invitations_api.dart';
++export 'package:obd_app/data/api/endpoints/models_api.dart';
++export 'package:obd_app/data/api/endpoints/telemetry_api.dart';
++export 'package:obd_app/data/api/endpoints/trips_api.dart';
++export 'package:obd_app/data/api/endpoints/users_api.dart';
++export 'package:obd_app/data/api/models/api_models.dart';
++export 'package:obd_app/data/api/session.dart';
++
++/// The whole OBD API, grouped by resource.
++///
++/// ```dart
++/// final api = ObdApi.instance;
++///
++/// await api.auth.login(userEmail: 'ada@example.com', userPassword: '…');
++/// final cars = await api.cars.list();
++/// final trip = await api.trips.start(carId: cars.first.id);
++/// ```
++///
++/// One import (`package:obd_app/data/api/obd_api.dart`) brings in this class,
++/// every model and every error type.
++///
++/// [instance] is a process-wide singleton because the app has no dependency
++/// injection and the session has to be shared by every screen. Tests build
++/// their own with a fake `http.Client` and never touch it.
++class ObdApi {
++  ObdApi({ApiConfig? config, http.Client? httpClient, ObdSession? session})
++    : this.fromClient(
++        ApiClient(config: config, httpClient: httpClient, session: session),
++      );
++
++  ObdApi.fromClient(this.client)
++    : auth = AuthApi(client),
++      users = UsersApi(client),
++      cars = CarsApi(client),
++      models = ModelsApi(client),
++      devices = DevicesApi(client),
++      groups = GroupsApi(client),
++      invitations = InvitationsApi(client),
++      trips = TripsApi(client),
++      telemetry = TelemetryApi(client);
++
++  /// The shared instance the UI uses.
++  static final ObdApi instance = ObdApi();
++
++  final ApiClient client;
++
++  /// register · login · refresh · logout
++  final AuthApi auth;
++
++  /// GET /users/me
++  final UsersApi users;
++
++  /// create · list · byId · share · unshare · forGroup
++  final CarsApi cars;
++
++  /// The car model catalog: list · create (admin)
++  final ModelsApi models;
++
++  /// Dongle pairing: pair · forCar · unpair · resolve
++  final DevicesApi devices;
++
++  /// create · list · members
++  final GroupsApi groups;
++
++  /// invite · pending · accept
++  final InvitationsApi invitations;
++
++  /// start · mine · forCar · active · finish · cancel
++  final TripsApi trips;
++
++  /// upload · history · readAll
++  final TelemetryApi telemetry;
++
++  /// Who is signed in. Listen to it to react to logout.
++  ObdSession get session => client.session;
++
++  /// True once `auth.login` (or `register`) has succeeded.
++  bool get isAuthenticated => session.isAuthenticated;
++
++  /// Where this instance is pointed.
++  ApiConfig get config => client.config;
++
++  void dispose() => client.close();
++}
+diff --git a/app/obd_app/lib/data/api/session.dart b/app/obd_app/lib/data/api/session.dart
+new file mode 100644
+index 0000000..f3e315b
+--- /dev/null
++++ b/app/obd_app/lib/data/api/session.dart
+@@ -0,0 +1,83 @@
++import 'package:flutter/foundation.dart';
++import 'package:obd_app/data/api/models/api_models.dart';
++
++/// Who is signed in, and the two tokens that prove it.
++///
++/// A [ChangeNotifier] so a widget can rebuild when the session starts or ends
++/// (`ListenableBuilder`), which is how an app-wide "logged out" redirect is
++/// wired without a state-management package.
++///
++/// **Nothing is written to disk.** Closing the app signs the user out. Adding
++/// persistence is one class: store [accessToken], [refreshToken] and
++/// [expiresAt] in `flutter_secure_storage` on every change and restore them
++/// before `runApp`. It was left out on purpose — a refresh token in plain
++/// `SharedPreferences` is worse than asking for the password again.
++class ObdSession extends ChangeNotifier {
++  String? _accessToken;
++  String? _refreshToken;
++  DateTime? _expiresAt;
++  String? _userId;
++  String? _email;
++
++  /// Short-lived JWT sent as `Authorization: Bearer <token>`.
++  String? get accessToken => _accessToken;
++
++  /// The value of the `refreshToken` cookie the server set. In a browser this
++  /// is invisible to JavaScript; on a phone there is no cookie jar at all, so
++  /// the client holds it and sends it back by hand on `POST /auth/refresh`.
++  String? get refreshToken => _refreshToken;
++
++  /// When [accessToken] stops being accepted (issued-at + `expireInSeconds`).
++  DateTime? get expiresAt => _expiresAt;
++
++  String? get userId => _userId;
++
++  String? get email => _email;
++
++  bool get isAuthenticated => _accessToken != null;
++
++  /// True once the access token is past its advertised lifetime. The client
++  /// does not pre-emptively refresh on this — it reacts to a real `401` — but
++  /// it is useful for deciding whether to bother calling at all.
++  bool get isExpired {
++    final expiry = _expiresAt;
++    return expiry != null && DateTime.now().isAfter(expiry);
++  }
++
++  /// Stores what `register` / `login` / `refresh` returned.
++  void save(AuthSession auth) {
++    _accessToken = auth.accessToken;
++    _expiresAt = DateTime.now().add(Duration(seconds: auth.expireInSeconds));
++    _userId = auth.userId;
++    _email = auth.email;
++    notifyListeners();
++  }
++
++  /// Called by the client for every `Set-Cookie: refreshToken=...` it sees.
++  /// A cleared cookie (logout) arrives as null.
++  void rememberRefreshToken(String? value) {
++    if (_refreshToken == value) return;
++    _refreshToken = value;
++    notifyListeners();
++  }
++
++  /// Forgets everything. Called on logout and whenever a refresh is refused.
++  void clear() {
++    if (_accessToken == null &&
++        _refreshToken == null &&
++        _userId == null &&
++        _email == null) {
++      return;
++    }
++    _accessToken = null;
++    _refreshToken = null;
++    _expiresAt = null;
++    _userId = null;
++    _email = null;
++    notifyListeners();
++  }
++
++  @override
++  String toString() =>
++      'ObdSession(${isAuthenticated ? _email : 'signed out'})';
++}
+diff --git a/app/obd_app/lib/main.dart b/app/obd_app/lib/main.dart
+index 7a202db..9f038bf 100644
+--- a/app/obd_app/lib/main.dart
++++ b/app/obd_app/lib/main.dart
+@@ -1,7 +1,7 @@
+ import 'package:flutter/material.dart';
+ 
+ import 'package:obd_app/core/theme/app_theme.dart';
+-import 'package:obd_app/ui/screens/home/main_screen.dart';
++import 'package:obd_app/ui/screens/auth/login_screen.dart';
+ 
+ void main() {
+   // Punto de entrada de Dart. Flutter comienza construyendo OBDCApp.
+@@ -22,7 +22,10 @@ class OBDCApp extends StatelessWidget {
+         theme: buildAppTheme(),
+         darkTheme: buildAppTheme(Brightness.dark),
+         themeMode: mode,
+-        home: const MainScreen(nombreUsuario: 'sixseven'),
++        // La app arranca en el login. Antes entraba directo a MainScreen con
++        // un usuario de prueba; ahora MainScreen se construye recién cuando
++        // `POST /api/v1/auth/login` (o `/register`) devolvió una sesión.
++        home: const LoginScreen(),
+       ),
+     );
+   }
+diff --git a/app/obd_app/lib/ui/screens/auth/login_screen.dart b/app/obd_app/lib/ui/screens/auth/login_screen.dart
+index 4379e99..4dbb974 100644
+--- a/app/obd_app/lib/ui/screens/auth/login_screen.dart
++++ b/app/obd_app/lib/ui/screens/auth/login_screen.dart
+@@ -1,13 +1,15 @@
+-import 'dart:convert';
+-
+ import 'package:flutter/material.dart';
+-import 'package:http/http.dart' as http;
+ import 'package:obd_app/core/theme/app_theme.dart';
++import 'package:obd_app/data/api/obd_api.dart';
+ import 'package:obd_app/ui/screens/auth/register_screen.dart';
+ import 'package:obd_app/ui/screens/home/main_screen.dart';
+ 
+-// Login: valida las credenciales localmente y conserva el nombre de usuario.
+-// Actualmente no existe una autenticación contra un servidor.
++/// Login: la primera pantalla de la app.
++///
++/// Valida el formato localmente y después autentica contra la API
++/// (`POST /api/v1/auth/login`). Si el login sale bien, el access token y la
++/// cookie de refresh quedan guardados en `ObdApi.instance.session` y el resto
++/// de las pantallas ya pueden llamar a cualquier endpoint.
+ class LoginScreen extends StatefulWidget {
+   const LoginScreen({super.key});
+ 
+@@ -23,6 +25,10 @@ class _LoginScreenState extends State<LoginScreen> {
+   final _emailController = TextEditingController();
+   final _passwordController = TextEditingController();
+ 
++  // Mientras hay una request en vuelo el botón se bloquea, así un doble tap
++  // no dispara dos logins.
++  bool _cargando = false;
++
+   // Los controllers deben liberarse cuando el State deja de existir.
+   @override
+   void dispose() {
+@@ -31,65 +37,65 @@ class _LoginScreenState extends State<LoginScreen> {
+     super.dispose();
+   }
+ 
+-  void _ingresar() async {
+-    // Si la validación local de formato pasa, navegamos directo sin llamar al backend
+-    if (_formKey.currentState!.validate()) {
+-      final userEmail = _emailController.text.trim();
+-      final userPassword = _passwordController.text;
++  Future<void> _ingresar() async {
++    if (_cargando || !_formKey.currentState!.validate()) return;
+ 
+-      final navigator = Navigator.of(context);
+-      final scaffoldMessenger = ScaffoldMessenger.of(context);
++    final api = ObdApi.instance;
++    final messenger = ScaffoldMessenger.of(context);
++    final navigator = Navigator.of(context);
+ 
+-      final url = Uri.parse('http://192.168.1.19:8080/api/v1/auth/login');
++    setState(() => _cargando = true);
+ 
++    try {
++      await api.auth.login(
++        userEmail: _emailController.text.trim(),
++        userPassword: _passwordController.text,
++      );
++
++      // Con la sesión abierta pedimos el perfil real en vez de mostrar el
++      // correo: `userName` es el nombre de pila que el usuario cargó al
++      // registrarse.
++      var nombre = api.session.email ?? _emailController.text.trim();
+       try {
+-        // Disparamos la petición a la API
+-        final response = await http.post(
+-          url,
+-          headers: {'Content-Type': 'application/json'},
+-          body: jsonEncode({
+-            'userEmail': userEmail,
+-            'userPassword': userPassword,
+-          }),
+-        );
+-
+-        // Si las credenciales coinciden en la base de datos, el 200 es que salio todo bien
+-        if (response.statusCode == 200) {
+-          // Primero se busca el dispositivo OBD antes de mostrar el panel.
+-          navigator.pushReplacement(
+-            MaterialPageRoute(
+-              builder: (context) => MainScreen(nombreUsuario: userEmail),
+-            ),
+-          );
+-        } else if (response.statusCode == 401) {
+-          // 401 Unauthorized: email o contraseña incorrectos
+-          scaffoldMessenger.showSnackBar(
+-            const SnackBar(
+-              content: Text('Correo o contraseña incorrectos'),
+-              backgroundColor: Colors.red,
+-            ),
+-          );
+-        } else {
+-          // eror del servidor
+-          scaffoldMessenger.showSnackBar(
+-            SnackBar(
+-              content: Text('Error del servidor (${response.statusCode})'),
+-              backgroundColor: Colors.orange,
+-            ),
+-          );
+-        }
+-      } catch (error) {
+-        // problema de wifi o servidor apagado
+-        scaffoldMessenger.showSnackBar(
+-          const SnackBar(
+-            content: Text('No se pudo conectar. Revisá tu conexión Wi-Fi.'),
+-            backgroundColor: Colors.red,
+-          ),
+-        );
++        final perfil = await api.users.me();
++        if (perfil.userName.isNotEmpty) nombre = perfil.userName;
++      } on ObdApiException {
++        // El perfil es un lujo, no un requisito: si falla seguimos con el mail.
+       }
++
++      if (!mounted) return;
++      navigator.pushReplacement(
++        MaterialPageRoute(builder: (_) => MainScreen(nombreUsuario: nombre)),
++      );
++    } on ApiException catch (error) {
++      messenger.showSnackBar(
++        SnackBar(
++          content: Text(_mensajeDeError(error)),
++          backgroundColor: error.isUnauthorized ? Colors.red : Colors.orange,
++        ),
++      );
++    } on NetworkException {
++      messenger.showSnackBar(
++        const SnackBar(
++          content: Text('No se pudo conectar. Revisá tu conexión Wi-Fi.'),
++          backgroundColor: Colors.red,
++        ),
++      );
++    } finally {
++      if (mounted) setState(() => _cargando = false);
+     }
+   }
+ 
++  /// Traduce los códigos que devuelve la API a algo legible.
++  String _mensajeDeError(ApiException error) {
++    if (error.isUnauthorized) return 'Correo o contraseña incorrectos';
++    if (error.isValidation) return 'Revisá los datos ingresados';
++    if (error.isServerError) {
++      return 'El servidor tuvo un problema. Probá de nuevo.';
++    }
++    return 'Error del servidor (${error.statusCode})';
++  }
++
+   @override
+   Widget build(BuildContext context) {
+     return Scaffold(
+@@ -130,9 +136,11 @@ class _LoginScreenState extends State<LoginScreen> {
+                 ),
+                 const SizedBox(height: 28),
+ 
+-                // Input de Email
++                // Campo: Correo (userEmail)
+                 TextFormField(
+                   controller: _emailController,
++                  enabled: !_cargando,
++                  keyboardType: TextInputType.emailAddress,
+                   decoration: const InputDecoration(
+                     labelText: 'Correo electronico',
+                     border: OutlineInputBorder(),
+@@ -153,7 +161,9 @@ class _LoginScreenState extends State<LoginScreen> {
+                 // Campo: Contraseña (userPassword)
+                 TextFormField(
+                   controller: _passwordController,
++                  enabled: !_cargando,
+                   obscureText: true, // Oculta la contraseña con puntitos
++                  onFieldSubmitted: (_) => _ingresar(),
+                   decoration: const InputDecoration(
+                     labelText: 'Contraseña',
+                     border: OutlineInputBorder(),
+@@ -168,33 +178,42 @@ class _LoginScreenState extends State<LoginScreen> {
+                   },
+                 ),
+                 const SizedBox(height: 28),
++
+                 // Botón de Ingreso
+                 SizedBox(
+                   width: double.infinity,
+                   height: 52,
+                   child: ElevatedButton(
+-                    onPressed: _ingresar,
+-                    child: const Text(
+-                      'INGRESAR',
+-                      style: TextStyle(
+-                        fontSize: 15,
+-                        fontWeight: FontWeight.w700,
+-                      ),
+-                    ),
++                    onPressed: _cargando ? null : _ingresar,
++                    child: _cargando
++                        ? const SizedBox(
++                            width: 20,
++                            height: 20,
++                            child: CircularProgressIndicator(strokeWidth: 2),
++                          )
++                        : const Text(
++                            'INGRESAR',
++                            style: TextStyle(
++                              fontSize: 15,
++                              fontWeight: FontWeight.w700,
++                            ),
++                          ),
+                   ),
+                 ),
+ 
+                 const SizedBox(height: 16),
+                 // Botón para ir a Registro
+                 TextButton(
+-                  onPressed: () {
+-                    Navigator.push(
+-                      context,
+-                      MaterialPageRoute(
+-                        builder: (context) => const RegisterScreen(),
+-                      ),
+-                    );
+-                  },
++                  onPressed: _cargando
++                      ? null
++                      : () {
++                          Navigator.push(
++                            context,
++                            MaterialPageRoute(
++                              builder: (context) => const RegisterScreen(),
++                            ),
++                          );
++                        },
+                   child: const Text(
+                     '¿No tenés cuenta? Registrate acá',
+                     style: TextStyle(fontSize: 16),
+diff --git a/app/obd_app/lib/ui/screens/auth/register_screen.dart b/app/obd_app/lib/ui/screens/auth/register_screen.dart
+index ba463fc..80922a3 100644
+--- a/app/obd_app/lib/ui/screens/auth/register_screen.dart
++++ b/app/obd_app/lib/ui/screens/auth/register_screen.dart
+@@ -1,11 +1,14 @@
+-import 'dart:convert';
+-
+ import 'package:flutter/material.dart';
+-import 'package:http/http.dart' as http;
+ import 'package:obd_app/core/theme/app_theme.dart';
++import 'package:obd_app/data/api/obd_api.dart';
++import 'package:obd_app/ui/screens/home/main_screen.dart';
+ 
+-// Pantalla de Registro: permite al usuario crear una cuenta validando
+-// que los campos de nombre, correo y contraseña cumplan los requisitos básicos.
++/// Registro: crea la cuenta contra `POST /api/v1/auth/register`.
++///
++/// Ese endpoint además deja la sesión abierta (devuelve los mismos tokens que
++/// el login), así que al terminar entramos directo a la app en vez de volver
++/// al login a pedir la contraseña de nuevo. Si preferís el flujo anterior,
++/// reemplazá el `pushAndRemoveUntil` por `navigator.pop()`.
+ class RegisterScreen extends StatefulWidget {
+   const RegisterScreen({super.key});
+ 
+@@ -25,6 +28,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
+   final _telefonoController =
+       TextEditingController(); // Para userPhone (Opcional)
+ 
++  bool _cargando = false;
++
+   // Los controllers deben liberarse cuando el State deja de existir.
+   @override
+   void dispose() {
+@@ -36,83 +41,81 @@ class _RegisterScreenState extends State<RegisterScreen> {
+     super.dispose();
+   }
+ 
+-  // le ponemos async a la funcion para que no se congele la app mientras que se complete la comunicacion
+-  void _registrarse() async {
+-    // Si la validación local es correcta (ningún validator devuelve error).
+-    if (_formKey.currentState!.validate()) {
+-      // Extraemos los valores exactos que vamos a mandar por HTTP después
+-      // el trim le saca los espacios de mas al principio y al final
+-      final userName = _nombreController.text.trim();
+-      final userLastName = _apellidoController.text.trim();
+-      final userEmail = _emailController.text.trim();
+-      final userPassword = _passwordController.text;
+-      final userPhone = _telefonoController.text.trim();
++  Future<void> _registrarse() async {
++    if (_cargando || !_formKey.currentState!.validate()) return;
+ 
+-      final navigator = Navigator.of(context);
+-      final scaffoldMessenger = ScaffoldMessenger.of(context);
++    final api = ObdApi.instance;
++    final messenger = ScaffoldMessenger.of(context);
++    final navigator = Navigator.of(context);
++    final nombre = _nombreController.text.trim();
+ 
+-      // Armamos la URL
+-      final url = Uri.parse('http://192.168.1.19:8080/api/v1/auth/register');
+-      
+-      try {
+-        // 2. Disparamos la petición HTTP POST
+-        // el await para todo el codigo hasta que java responda
+-        final response = await http.post(
+-          url,
+-          headers: {
+-            'Content-Type': 'application/json',
+-          }, // Le avisamos a Java que le mandamos un JSON
+-          body: jsonEncode({
+-            'userName': userName,
+-            'userLastName': userLastName,
+-            'userEmail': userEmail,
+-            'userPassword': userPassword,
+-            // Solo mandamos el teléfono si el usuario escribió algo
+-            if (userPhone.isNotEmpty) 'userPhone': userPhone,
+-          }),
+-        );
++    setState(() => _cargando = true);
+ 
+-        // 3. Analizamos qué nos respondió la API
+-        if (response.statusCode == 200) {
+-          // El código 200 significa "Todo OK" en la web
+-          scaffoldMessenger.showSnackBar(
+-            const SnackBar(
+-              content: Text('¡Cuenta creada con éxito!'),
+-              backgroundColor: Colors.green,
+-            ),
+-          );
+-          // Como venimos desde la pantalla de Login usando Navigator.push,
+-          // navigator.pop() cierra esta pantalla y nos devuelve al Login.
+-          navigator.pop();
+-        } else if (response.statusCode == 409) {
+-          // Si devuelve 409 Email ya existe
+-          scaffoldMessenger.showSnackBar(
+-            const SnackBar(
+-              content: Text('Ese correo ya está registrado'),
+-              backgroundColor: Colors.red,
+-            ),
+-          );
+-        } else {
+-          // error de validacion de api
+-          scaffoldMessenger.showSnackBar(
+-            const SnackBar(
+-              content: Text('Revisá los datos ingresados'),
+-              backgroundColor: Colors.orange,
+-            ),
+-          );
+-        }
+-      } catch (error) {
+-        // Esto salta si la Mac está apagada o el celu no está en el mismo Wi-Fi
+-        scaffoldMessenger.showSnackBar(
+-          const SnackBar(
+-            content: Text('No se pudo conectar con el servidor.'),
+-            backgroundColor: Colors.red,
+-          ),
+-        );
++    try {
++      // register crea la cuenta Y la loguea: el cliente guarda los tokens solo.
++      await api.auth.register(
++        userName: nombre,
++        userLastName: _apellidoController.text.trim(),
++        userEmail: _emailController.text.trim(),
++        userPassword: _passwordController.text,
++        userPhone: _telefonoController.text,
++      );
++
++      messenger.showSnackBar(
++        const SnackBar(
++          content: Text('¡Cuenta creada con éxito!'),
++          backgroundColor: Colors.green,
++        ),
++      );
++
++      if (!mounted) return;
++      // Sacamos el login de la pila: ya hay sesión abierta.
++      navigator.pushAndRemoveUntil(
++        MaterialPageRoute(builder: (_) => MainScreen(nombreUsuario: nombre)),
++        (route) => false,
++      );
++    } on ApiException catch (error) {
++      messenger.showSnackBar(
++        SnackBar(
++          content: Text(_mensajeDeError(error)),
++          backgroundColor: error.isConflict ? Colors.red : Colors.orange,
++        ),
++      );
++    } on NetworkException {
++      messenger.showSnackBar(
++        const SnackBar(
++          content: Text('No se pudo conectar con el servidor.'),
++          backgroundColor: Colors.red,
++        ),
++      );
++    } finally {
++      if (mounted) setState(() => _cargando = false);
++    }
++  }
++
++  /// La API devuelve 409 si el mail ya existe y 400 con un mapa campo →
++  /// mensaje si algo no pasó la validación; mostramos el primero de esos.
++  String _mensajeDeError(ApiException error) {
++    if (error.isConflict) return 'Ese correo ya está registrado';
++    if (error.isValidation) {
++      if (error.fieldErrors.isNotEmpty) {
++        final primero = error.fieldErrors.entries.first;
++        return '${_etiquetaDe(primero.key)}: ${primero.value}';
+       }
++      return 'Revisá los datos ingresados';
+     }
++    return 'Error del servidor (${error.statusCode})';
+   }
+ 
++  String _etiquetaDe(String campo) => switch (campo) {
++    'userName' => 'Nombre',
++    'userLastName' => 'Apellido',
++    'userEmail' => 'Correo',
++    'userPassword' => 'Contraseña',
++    'userPhone' => 'Teléfono',
++    _ => campo,
++  };
++
+   @override
+   Widget build(BuildContext context) {
+     return Scaffold(
+@@ -165,13 +168,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
+                 // Campo: Nombre (userName)
+                 TextFormField(
+                   controller: _nombreController,
++                  enabled: !_cargando,
+                   decoration: const InputDecoration(
+                     labelText: 'Nombre',
+                     border: OutlineInputBorder(),
+                     prefixIcon: Icon(Icons.person),
+                   ),
+                   validator: (value) {
+-                    if (value == null || value.isEmpty) {
++                    if (value == null || value.trim().isEmpty) {
+                       return 'Por favor, ingresá tu nombre';
+                     }
+                     return null;
+@@ -182,13 +186,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
+                 // Campo: Apellido (userLastName)
+                 TextFormField(
+                   controller: _apellidoController,
++                  enabled: !_cargando,
+                   decoration: const InputDecoration(
+                     labelText: 'Apellido',
+                     border: OutlineInputBorder(),
+                     prefixIcon: Icon(Icons.badge),
+                   ),
+                   validator: (value) {
+-                    if (value == null || value.isEmpty) {
++                    if (value == null || value.trim().isEmpty) {
+                       return 'Por favor, ingresá tu apellido';
+                     }
+                     return null;
+@@ -199,6 +204,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
+                 // Campo: Correo Electrónico (userEmail)
+                 TextFormField(
+                   controller: _emailController,
++                  enabled: !_cargando,
+                   keyboardType: TextInputType
+                       .emailAddress, // Muestra el teclado con el "@"
+                   decoration: const InputDecoration(
+@@ -221,6 +227,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
+                 // Campo: Teléfono (userPhone) - Opcional según API
+                 TextFormField(
+                   controller: _telefonoController,
++                  enabled: !_cargando,
+                   keyboardType: TextInputType.phone,
+                   decoration: const InputDecoration(
+                     labelText: 'Teléfono (Opcional)',
+@@ -233,6 +240,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
+                 // Campo: Contraseña (userPassword)
+                 TextFormField(
+                   controller: _passwordController,
++                  enabled: !_cargando,
+                   obscureText: true, // Oculta la contraseña con puntitos
+                   decoration: const InputDecoration(
+                     labelText: 'Contraseña',
+@@ -244,6 +252,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
+                     if (value == null || value.length < 8) {
+                       return 'La contraseña debe tener al menos 8 caracteres';
+                     }
++                    if (value.length > 72) {
++                      return 'La contraseña no puede superar los 72 caracteres';
++                    }
+                     return null;
+                   },
+                 ),
+@@ -254,14 +265,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
+                   width: double.infinity, // Ocupa todo el ancho disponible
+                   height: 52,
+                   child: ElevatedButton(
+-                    onPressed: _registrarse,
+-                    child: const Text(
+-                      'REGISTRARSE',
+-                      style: TextStyle(
+-                        fontSize: 15,
+-                        fontWeight: FontWeight.w700,
+-                      ),
+-                    ),
++                    onPressed: _cargando ? null : _registrarse,
++                    child: _cargando
++                        ? const SizedBox(
++                            width: 20,
++                            height: 20,
++                            child: CircularProgressIndicator(strokeWidth: 2),
++                          )
++                        : const Text(
++                            'REGISTRARSE',
++                            style: TextStyle(
++                              fontSize: 15,
++                              fontWeight: FontWeight.w700,
++                            ),
++                          ),
+                   ),
+                 ),
+               ],
+diff --git a/app/obd_app/lib/ui/screens/home/tabs/profile_tab.dart b/app/obd_app/lib/ui/screens/home/tabs/profile_tab.dart
+index 635cad4..179a4ca 100644
+--- a/app/obd_app/lib/ui/screens/home/tabs/profile_tab.dart
++++ b/app/obd_app/lib/ui/screens/home/tabs/profile_tab.dart
+@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
+ import 'package:obd_app/core/constants/app_icons.dart';
+ import 'package:obd_app/core/native_bridge.dart';
+ import 'package:obd_app/core/theme/app_theme.dart';
++import 'package:obd_app/data/api/obd_api.dart';
+ import 'package:obd_app/models/models.dart';
+ import 'package:obd_app/ui/screens/auth/login_screen.dart';
+ import 'package:obd_app/ui/widgets/widgets.dart';
+@@ -32,6 +33,23 @@ class ProfileTab extends StatelessWidget {
+     required this.onTripAlertsChanged,
+   });
+ 
++  /// Revoca la sesión en el servidor (`POST /api/v1/auth/logout`, que invalida
++  /// todos los refresh tokens del usuario) y recién después vuelve al login.
++  ///
++  /// Si la llamada falla igual limpiamos la sesión local: los tokens que
++  /// quedaron no le sirven a esta app, y dejar al usuario adentro porque el
++  /// servidor no contestó sería peor.
++  Future<void> _cerrarSesion(BuildContext context) async {
++    final navigator = Navigator.of(context);
++
++    await ObdApi.instance.auth.logout();
++
++    navigator.pushAndRemoveUntil(
++      MaterialPageRoute(builder: (_) => const LoginScreen()),
++      (route) => false,
++    );
++  }
++
+   @override
+   Widget build(BuildContext context) {
+     return ListView(
+@@ -126,10 +144,7 @@ class ProfileTab extends StatelessWidget {
+         ),
+         const SizedBox(height: 24),
+         OutlinedButton.icon(
+-          onPressed: () => Navigator.pushReplacement(
+-            context,
+-            MaterialPageRoute(builder: (_) => const LoginScreen()),
+-          ),
++          onPressed: () => _cerrarSesion(context),
+           icon: const Icon(AppIcons.logout),
+           label: const Text('Cerrar sesión'),
+           style: OutlinedButton.styleFrom(foregroundColor: context.tokens.danger),
+diff --git a/app/obd_app/test/data/api/api_client_test.dart b/app/obd_app/test/data/api/api_client_test.dart
+new file mode 100644
+index 0000000..562dc7f
+--- /dev/null
++++ b/app/obd_app/test/data/api/api_client_test.dart
+@@ -0,0 +1,638 @@
++import 'dart:convert';
++
++import 'package:flutter_test/flutter_test.dart';
++import 'package:http/http.dart' as http;
++import 'package:http/testing.dart';
++import 'package:obd_app/data/api/obd_api.dart';
++
++/// Pruebas del transporte contra un `MockClient`: no hace falta ni servidor ni
++/// base de datos, y cada caso fija una decisión del cliente (mandar el bearer,
++/// guardar la cookie, refrescar una sola vez, traducir los errores).
++
++const _config = ApiConfig(baseUrl: 'http://test.local');
++
++/// Cuerpo de `AuthResponseDTO`.
++String _authBody({String token = 'access-1', String email = 'ada@example.com'}) {
++  return jsonEncode({
++    'accessToken': token,
++    'tokenType': 'Bearer',
++    'expireInSeconds': 900,
++    'userId': '8f14e45f-ceea-467a-9f8e-1f1a1c1a1c1a',
++    'email': email,
++  });
++}
++
++/// Un `Set-Cookie` como el que manda `RefreshCookie`.
++Map<String, String> _cookie(String value) => {
++  'set-cookie':
++      'refreshToken=$value; Path=/api/v1/auth; HttpOnly; SameSite=Strict',
++};
++
++ObdApi _apiWith(MockClient client) =>
++    ObdApi(config: _config, httpClient: client);
++
++void main() {
++  group('autenticación', () {
++    test('login guarda el access token y la cookie de refresh', () async {
++      late http.Request enviada;
++      final api = _apiWith(
++        MockClient((request) async {
++          enviada = request;
++          return http.Response(
++            _authBody(),
++            200,
++            headers: _cookie('refresh-1'),
++          );
++        }),
++      );
++
++      final sesion = await api.auth.login(
++        userEmail: 'ada@example.com',
++        userPassword: 'supersecret123',
++      );
++
++      expect(enviada.url.path, '/api/v1/auth/login');
++      expect(jsonDecode(enviada.body), {
++        'userEmail': 'ada@example.com',
++        'userPassword': 'supersecret123',
++      });
++      // El login no manda Authorization: todavía no hay token.
++      expect(enviada.headers.containsKey('Authorization'), isFalse);
++
++      expect(sesion.accessToken, 'access-1');
++      expect(api.session.isAuthenticated, isTrue);
++      expect(api.session.refreshToken, 'refresh-1');
++    });
++
++    test('register omite el teléfono cuando viene vacío', () async {
++      late http.Request enviada;
++      final api = _apiWith(
++        MockClient((request) async {
++          enviada = request;
++          return http.Response(_authBody(), 200, headers: _cookie('refresh-1'));
++        }),
++      );
++
++      await api.auth.register(
++        userName: 'Ada',
++        userLastName: 'Lovelace',
++        userEmail: 'ada@example.com',
++        userPassword: 'supersecret123',
++        userPhone: '   ',
++      );
++
++      expect(jsonDecode(enviada.body), isNot(contains('userPhone')));
++    });
++
++    test('las llamadas autenticadas mandan el bearer', () async {
++      late http.Request enviada;
++      final api = _apiWith(
++        MockClient((request) async {
++          enviada = request;
++          if (request.url.path.endsWith('/auth/login')) {
++            return http.Response(
++              _authBody(),
++              200,
++              headers: _cookie('refresh-1'),
++            );
++          }
++          return http.Response('[]', 200);
++        }),
++      );
++
++      await api.auth.login(
++        userEmail: 'ada@example.com',
++        userPassword: 'supersecret123',
++      );
++      await api.cars.list();
++
++      expect(enviada.headers['Authorization'], 'Bearer access-1');
++    });
++
++    test('sin sesión, lo protegido falla como 401 sin salir a la red', () async {
++      var llamadas = 0;
++      final api = _apiWith(
++        MockClient((request) async {
++          llamadas++;
++          return http.Response('[]', 200);
++        }),
++      );
++
++      await expectLater(
++        api.cars.list(),
++        throwsA(
++          isA<ApiException>().having(
++            (e) => e.isUnauthorized,
++            'isUnauthorized',
++            isTrue,
++          ),
++        ),
++      );
++      expect(llamadas, 0);
++    });
++
++    test('logout limpia la sesión local', () async {
++      final api = _apiWith(
++        MockClient((request) async {
++          if (request.url.path.endsWith('/auth/login')) {
++            return http.Response(
++              _authBody(),
++              200,
++              headers: _cookie('refresh-1'),
++            );
++          }
++          return http.Response('', 204, headers: _cookie(''));
++        }),
++      );
++
++      await api.auth.login(
++        userEmail: 'ada@example.com',
++        userPassword: 'supersecret123',
++      );
++      await api.auth.logout();
++
++      expect(api.session.isAuthenticated, isFalse);
++      expect(api.session.refreshToken, isNull);
++    });
++  });
++
++  group('refresh silencioso', () {
++    test('un 401 dispara un refresh y reintenta la llamada', () async {
++      var protegidas = 0;
++      var refrescos = 0;
++
++      final api = _apiWith(
++        MockClient((request) async {
++          final path = request.url.path;
++          if (path.endsWith('/auth/login')) {
++            return http.Response(
++              _authBody(),
++              200,
++              headers: _cookie('refresh-1'),
++            );
++          }
++          if (path.endsWith('/auth/refresh')) {
++            refrescos++;
++            // La cookie vieja viaja a mano: no hay cookie jar en el celular.
++            expect(request.headers['Cookie'], 'refreshToken=refresh-1');
++            return http.Response(
++              _authBody(token: 'access-2'),
++              200,
++              headers: _cookie('refresh-2'),
++            );
++          }
++          protegidas++;
++          // La primera vez el token está vencido; después del refresh, no.
++          if (request.headers['Authorization'] == 'Bearer access-1') {
++            return http.Response(
++              jsonEncode({'title': 'Unauthorized', 'status': 401}),
++              401,
++            );
++          }
++          return http.Response('[]', 200);
++        }),
++      );
++
++      await api.auth.login(
++        userEmail: 'ada@example.com',
++        userPassword: 'supersecret123',
++      );
++      final autos = await api.cars.list();
++
++      expect(autos, isEmpty);
++      expect(refrescos, 1);
++      expect(protegidas, 2); // el 401 y el reintento
++      // El refresh rota: se guarda el token nuevo y la cookie nueva.
++      expect(api.session.accessToken, 'access-2');
++      expect(api.session.refreshToken, 'refresh-2');
++    });
++
++    test('dos 401 en paralelo comparten un solo refresh', () async {
++      // Importa de verdad: los refresh tokens son de un solo uso y reusar uno
++      // ya rotado revoca toda la familia y obliga a loguearse de nuevo.
++      var refrescos = 0;
++
++      final api = _apiWith(
++        MockClient((request) async {
++          final path = request.url.path;
++          if (path.endsWith('/auth/login')) {
++            return http.Response(
++              _authBody(),
++              200,
++              headers: _cookie('refresh-1'),
++            );
++          }
++          if (path.endsWith('/auth/refresh')) {
++            refrescos++;
++            await Future<void>.delayed(const Duration(milliseconds: 10));
++            return http.Response(
++              _authBody(token: 'access-2'),
++              200,
++              headers: _cookie('refresh-2'),
++            );
++          }
++          if (request.headers['Authorization'] == 'Bearer access-1') {
++            return http.Response('{"status":401}', 401);
++          }
++          return http.Response('[]', 200);
++        }),
++      );
++
++      await api.auth.login(
++        userEmail: 'ada@example.com',
++        userPassword: 'supersecret123',
++      );
++      await Future.wait([api.cars.list(), api.trips.mine()]);
++
++      expect(refrescos, 1);
++    });
++
++    test('si el refresh es rechazado, la sesión se cierra', () async {
++      final api = _apiWith(
++        MockClient((request) async {
++          final path = request.url.path;
++          if (path.endsWith('/auth/login')) {
++            return http.Response(
++              _authBody(),
++              200,
++              headers: _cookie('refresh-1'),
++            );
++          }
++          if (path.endsWith('/auth/refresh')) {
++            return http.Response('{"status":401}', 401);
++          }
++          return http.Response('{"status":401}', 401);
++        }),
++      );
++
++      await api.auth.login(
++        userEmail: 'ada@example.com',
++        userPassword: 'supersecret123',
++      );
++
++      await expectLater(api.cars.list(), throwsA(isA<ApiException>()));
++      expect(api.session.isAuthenticated, isFalse);
++    });
++  });
++
++  group('errores', () {
++    late ObdApi api;
++
++    Future<ObdApi> conRespuesta(http.Response respuesta) async {
++      final creada = _apiWith(
++        MockClient((request) async {
++          if (request.url.path.endsWith('/auth/login')) {
++            return http.Response(
++              _authBody(),
++              200,
++              headers: _cookie('refresh-1'),
++            );
++          }
++          return respuesta;
++        }),
++      );
++      await creada.auth.login(
++        userEmail: 'ada@example.com',
++        userPassword: 'supersecret123',
++      );
++      return creada;
++    }
++
++    test('un ProblemDetail se traduce a ApiException', () async {
++      api = await conRespuesta(
++        http.Response(
++          jsonEncode({
++            'title': 'Conflict',
++            'status': 409,
++            'detail': 'That car is already on a trip',
++          }),
++          409,
++        ),
++      );
++
++      await expectLater(
++        api.trips.start(carId: 'c1'),
++        throwsA(
++          isA<ApiException>()
++              .having((e) => e.isConflict, 'isConflict', isTrue)
++              .having((e) => e.detail, 'detail', 'That car is already on a trip'),
++        ),
++      );
++    });
++
++    test('un 400 trae el mapa de errores por campo', () async {
++      api = await conRespuesta(
++        http.Response(
++          jsonEncode({
++            'title': 'Validation failed',
++            'status': 400,
++            'errors': {'name': 'must not be blank'},
++          }),
++          400,
++        ),
++      );
++
++      await expectLater(
++        api.cars.create(name: '', modelId: 'm1'),
++        throwsA(
++          isA<ApiException>().having(
++            (e) => e.fieldErrors['name'],
++            'fieldErrors[name]',
++            'must not be blank',
++          ),
++        ),
++      );
++    });
++
++    test('un host inalcanzable es NetworkException, no ApiException', () async {
++      final api = _apiWith(
++        MockClient((request) async {
++          if (request.url.path.endsWith('/auth/login')) {
++            return http.Response(
++              _authBody(),
++              200,
++              headers: _cookie('refresh-1'),
++            );
++          }
++          throw http.ClientException('Connection refused');
++        }),
++      );
++      await api.auth.login(
++        userEmail: 'ada@example.com',
++        userPassword: 'supersecret123',
++      );
++
++      await expectLater(api.cars.list(), throwsA(isA<NetworkException>()));
++    });
++  });
++
++  group('lecturas', () {
++    Future<ObdApi> logueada(MockClient client) async {
++      final api = _apiWith(client);
++      await api.auth.login(
++        userEmail: 'ada@example.com',
++        userPassword: 'supersecret123',
++      );
++      return api;
++    }
++
++    MockClient responder(
++      http.Response Function(http.Request request) handler,
++    ) {
++      return MockClient((request) async {
++        if (request.url.path.endsWith('/auth/login')) {
++          return http.Response(_authBody(), 200, headers: _cookie('refresh-1'));
++        }
++        return handler(request);
++      });
++    }
++
++    test('un auto se parsea con su modelo, snapshot y grupo', () async {
++      final api = await logueada(
++        responder(
++          (_) => http.Response(
++            jsonEncode([
++              {
++                'id': 'car-1',
++                'name': "Ada's Gol",
++                'licensePlate': 'AB123CD',
++                'model': {
++                  'id': 'm-1',
++                  'brand': 'Volkswagen',
++                  'model': 'Gol',
++                  'protocol': 'ISO 15765-4 (CAN)',
++                },
++                'mileage': 120000,
++                'fuelLevel': 70,
++                'batteryLevel': 85,
++                // Entero a propósito: JSON tiene un solo tipo numérico y un
++                // cast directo a double explotaría.
++                'latitude': -34,
++                'longitude': -58.3816,
++                'snapshotAt': '2026-09-16T18:35:22Z',
++                'group': {'id': 'g-1', 'name': 'Familia Lazzari'},
++              },
++            ]),
++            200,
++          ),
++        ),
++      );
++
++      final autos = await api.cars.list();
++
++      expect(autos, hasLength(1));
++      final auto = autos.single;
++      expect(auto.model.label, 'Volkswagen Gol');
++      expect(auto.latitude, -34.0);
++      expect(auto.hasPosition, isTrue);
++      expect(auto.isShared, isTrue);
++      expect(auto.group?.name, 'Familia Lazzari');
++      expect(auto.snapshotAt?.toIso8601String(), '2026-09-16T18:35:22.000Z');
++    });
++
++    test('un auto sin snapshot deja los campos del device en null', () async {
++      final api = await logueada(
++        responder(
++          (_) => http.Response(
++            jsonEncode({
++              'id': 'car-1',
++              'name': 'Nuevo',
++              'licensePlate': null,
++              'model': {
++                'id': 'm-1',
++                'brand': 'Volkswagen',
++                'model': 'Gol',
++                'protocol': 'ISO 15765-4 (CAN)',
++              },
++              'mileage': null,
++              'fuelLevel': null,
++              'batteryLevel': null,
++              'latitude': null,
++              'longitude': null,
++              'snapshotAt': null,
++              'group': null,
++            }),
++            200,
++          ),
++        ),
++      );
++
++      final auto = await api.cars.byId('car-1');
++
++      expect(auto.hasSnapshot, isFalse);
++      expect(auto.hasPosition, isFalse);
++      expect(auto.isShared, isFalse);
++      expect(auto.group, isNull);
++    });
++
++    test('un auto sin viaje abierto devuelve null, no un error', () async {
++      // La API contesta 204 porque "sin viaje" es el estado normal de un auto;
++      // 404 acá significaría "no existe ese auto".
++      final api = await logueada(responder((_) => http.Response('', 204)));
++
++      expect(await api.trips.active('car-1'), isNull);
++    });
++  });
++
++  group('telemetría', () {
++    test('la historia manda carId, since exclusivo y limit', () async {
++      late Uri pedida;
++      final api = _apiWith(
++        MockClient((request) async {
++          if (request.url.path.endsWith('/auth/login')) {
++            return http.Response(
++              _authBody(),
++              200,
++              headers: _cookie('refresh-1'),
++            );
++          }
++          pedida = request.url;
++          return http.Response(
++            jsonEncode({
++              'carId': 'car-1',
++              'readings': [],
++              'nextSince': '2026-09-10T17:37:52Z',
++              'hasMore': false,
++            }),
++            200,
++          );
++        }),
++      );
++      await api.auth.login(
++        userEmail: 'ada@example.com',
++        userPassword: 'supersecret123',
++      );
++
++      final pagina = await api.telemetry.history(
++        carId: 'car-1',
++        since: DateTime.utc(2026, 9, 10, 17, 37, 52),
++        limit: 250,
++      );
++
++      expect(pedida.queryParameters['carId'], 'car-1');
++      expect(pedida.queryParameters['since'], '2026-09-10T17:37:52.000Z');
++      expect(pedida.queryParameters['limit'], '250');
++      expect(pagina.hasMore, isFalse);
++    });
++
++    test('los parámetros opcionales no se mandan vacíos', () async {
++      late Uri pedida;
++      final api = _apiWith(
++        MockClient((request) async {
++          if (request.url.path.endsWith('/auth/login')) {
++            return http.Response(
++              _authBody(),
++              200,
++              headers: _cookie('refresh-1'),
++            );
++          }
++          pedida = request.url;
++          return http.Response(
++            jsonEncode({
++              'carId': 'car-1',
++              'readings': [],
++              'nextSince': null,
++              'hasMore': false,
++            }),
++            200,
++          );
++        }),
++      );
++      await api.auth.login(
++        userEmail: 'ada@example.com',
++        userPassword: 'supersecret123',
++      );
++
++      await api.telemetry.history(carId: 'car-1');
++
++      expect(pedida.queryParameters.keys, ['carId']);
++    });
++
++    test('subir exige exactamente un destino: serial o carId', () async {
++      final api = _apiWith(MockClient((_) async => http.Response('{}', 200)));
++      final lecturas = [TelemetryReading(recordedAt: DateTime.now().toUtc())];
++
++      expect(
++        () => api.telemetry.upload(readings: lecturas),
++        throwsArgumentError,
++      );
++      expect(
++        () => api.telemetry.upload(
++          readings: lecturas,
++          serial: 'A4:CF:12',
++          carId: 'car-1',
++        ),
++        throwsArgumentError,
++      );
++    });
++
++    test('una lectura serializa solo los campos que trae', () {
++      final lectura = TelemetryReading(
++        recordedAt: DateTime.utc(2026, 9, 10, 14, 56, 13),
++        speed: 40,
++        fuelLevel: 69,
++        raw: '01045020',
++      );
++
++      expect(lectura.toJson(), {
++        'recordedAt': '2026-09-10T14:56:13.000Z',
++        'speed': 40,
++        'fuelLevel': 69,
++        'raw': '01045020',
++      });
++      expect(lectura.hasValidPosition, isTrue);
++      expect(lectura.isInTheFuture, isFalse);
++    });
++
++    test('media posición no es posición', () {
++      final lectura = TelemetryReading(
++        recordedAt: DateTime.now().toUtc(),
++        latitude: -34.6037,
++      );
++
++      // El servidor rechaza el lote entero con
++      // readings[0].positionComplete; conviene verlo antes de subir.
++      expect(lectura.hasValidPosition, isFalse);
++    });
++
++    test('los duplicados son éxito, no error', () async {
++      final api = _apiWith(
++        MockClient((request) async {
++          if (request.url.path.endsWith('/auth/login')) {
++            return http.Response(
++              _authBody(),
++              200,
++              headers: _cookie('refresh-1'),
++            );
++          }
++          return http.Response(
++            jsonEncode({
++              'carId': 'car-1',
++              'stored': 1,
++              'duplicates': 2,
++              'tripId': null,
++              'snapshotUpdated': true,
++              'latestRecordedAt': '2026-09-10T14:56:24Z',
++            }),
++            200,
++          );
++        }),
++      );
++      await api.auth.login(
++        userEmail: 'ada@example.com',
++        userPassword: 'supersecret123',
++      );
++
++      final resultado = await api.telemetry.upload(
++        serial: 'a4:cf:12:8b:3c:7e',
++        readings: [TelemetryReading(recordedAt: DateTime.now().toUtc())],
++      );
++
++      expect(resultado.stored, 1);
++      expect(resultado.duplicates, 2);
++      expect(resultado.accepted, 3);
++      // tripId null es la señal para ofrecerle al conductor iniciar un viaje.
++      expect(resultado.hasOpenTrip, isFalse);
++    });
++  });
++}
+diff --git a/app/obd_app/test/widget_test.dart b/app/obd_app/test/widget_test.dart
+index b5989f8..becc931 100644
+--- a/app/obd_app/test/widget_test.dart
++++ b/app/obd_app/test/widget_test.dart
+@@ -1,20 +1,54 @@
+-// This is a basic Flutter widget test.
++// Smoke test del arranque de la app.
+ //
+-// To perform an interaction with a widget in your test, use the WidgetTester
+-// utility in the flutter_test package. For example, you can send tap and scroll
+-// gestures. You can also use WidgetTester to find child widgets in the widget
+-// tree, read text, and verify that the values of widget properties are correct.
++// Antes verificaba el dashboard porque `main.dart` entraba directo a
++// MainScreen con un usuario de prueba. Ahora la app arranca en el login, así
++// que lo que se verifica es eso: que la primera pantalla sea el formulario de
++// ingreso y que no haya datos de ningún auto antes de autenticarse.
+ 
++import 'package:flutter/material.dart';
+ import 'package:flutter_test/flutter_test.dart';
+ 
+ import 'package:obd_app/main.dart';
++import 'package:obd_app/ui/screens/auth/login_screen.dart';
+ 
+ void main() {
+-  testWidgets('Dashboard is shown', (WidgetTester tester) async {
+-    // Build our app and trigger a frame.
++  testWidgets('La app arranca en el login', (WidgetTester tester) async {
+     await tester.pumpWidget(const OBDCApp());
+ 
+-    expect(find.text('Golf GTI'), findsOneWidget);
+-    expect(find.text('Volkswagen · AB 123 CD'), findsOneWidget);
++    expect(find.byType(LoginScreen), findsOneWidget);
++    expect(find.text('Bienvenido a OBD-C'), findsOneWidget);
++    expect(find.widgetWithText(ElevatedButton, 'INGRESAR'), findsOneWidget);
++
++    // Nada del auto se muestra antes de iniciar sesión.
++    expect(find.text('Golf GTI'), findsNothing);
++  });
++
++  testWidgets('Desde el login se puede ir al registro', (
++    WidgetTester tester,
++  ) async {
++    await tester.pumpWidget(const OBDCApp());
++
++    await tester.tap(find.text('¿No tenés cuenta? Registrate acá'));
++    await tester.pumpAndSettle();
++
++    expect(find.text('Crear Cuenta'), findsOneWidget);
++    expect(find.widgetWithText(ElevatedButton, 'REGISTRARSE'), findsOneWidget);
++  });
++
++  testWidgets('El login valida el formato antes de llamar a la API', (
++    WidgetTester tester,
++  ) async {
++    await tester.pumpWidget(const OBDCApp());
++
++    // Con los campos vacíos no se dispara ninguna request: los validators
++    // cortan antes, así que el test no necesita un servidor.
++    await tester.tap(find.widgetWithText(ElevatedButton, 'INGRESAR'));
++    await tester.pump();
++
++    expect(find.text('Por favor, ingresá un correo'), findsOneWidget);
++    expect(
++      find.text('La contraseña debe tener al menos 8 caracteres'),
++      findsOneWidget,
++    );
+   });
+ }

@@ -1,13 +1,15 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:obd_app/core/theme/app_theme.dart';
+import 'package:obd_app/data/api/obd_api.dart';
 import 'package:obd_app/ui/screens/auth/register_screen.dart';
 import 'package:obd_app/ui/screens/home/main_screen.dart';
 
-// Login: valida las credenciales localmente y conserva el nombre de usuario.
-// Actualmente no existe una autenticación contra un servidor.
+/// Login: la primera pantalla de la app.
+///
+/// Valida el formato localmente y después autentica contra la API
+/// (`POST /api/v1/auth/login`). Si el login sale bien, el access token y la
+/// cookie de refresh quedan guardados en `ObdApi.instance.session` y el resto
+/// de las pantallas ya pueden llamar a cualquier endpoint.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -23,6 +25,10 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
 
+  // Mientras hay una request en vuelo el botón se bloquea, así un doble tap
+  // no dispara dos logins.
+  bool _cargando = false;
+
   // Los controllers deben liberarse cuando el State deja de existir.
   @override
   void dispose() {
@@ -31,63 +37,63 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  void _ingresar() async {
-    // Si la validación local de formato pasa, navegamos directo sin llamar al backend
-    if (_formKey.currentState!.validate()) {
-      final userEmail = _emailController.text.trim();
-      final userPassword = _passwordController.text;
+  Future<void> _ingresar() async {
+    if (_cargando || !_formKey.currentState!.validate()) return;
 
-      final navigator = Navigator.of(context);
-      final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final api = ObdApi.instance;
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
 
-      final url = Uri.parse('http://192.168.1.19:8080/api/v1/auth/login');
+    setState(() => _cargando = true);
 
+    try {
+      await api.auth.login(
+        userEmail: _emailController.text.trim(),
+        userPassword: _passwordController.text,
+      );
+
+      // Con la sesión abierta pedimos el perfil real en vez de mostrar el
+      // correo: `userName` es el nombre de pila que el usuario cargó al
+      // registrarse.
+      var nombre = api.session.email ?? _emailController.text.trim();
       try {
-        // Disparamos la petición a la API
-        final response = await http.post(
-          url,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'userEmail': userEmail,
-            'userPassword': userPassword,
-          }),
-        );
-
-        // Si las credenciales coinciden en la base de datos, el 200 es que salio todo bien
-        if (response.statusCode == 200) {
-          // Primero se busca el dispositivo OBD antes de mostrar el panel.
-          navigator.pushReplacement(
-            MaterialPageRoute(
-              builder: (context) => MainScreen(nombreUsuario: userEmail),
-            ),
-          );
-        } else if (response.statusCode == 401) {
-          // 401 Unauthorized: email o contraseña incorrectos
-          scaffoldMessenger.showSnackBar(
-            const SnackBar(
-              content: Text('Correo o contraseña incorrectos'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        } else {
-          // eror del servidor
-          scaffoldMessenger.showSnackBar(
-            SnackBar(
-              content: Text('Error del servidor (${response.statusCode})'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-      } catch (error) {
-        // problema de wifi o servidor apagado
-        scaffoldMessenger.showSnackBar(
-          const SnackBar(
-            content: Text('No se pudo conectar. Revisá tu conexión Wi-Fi.'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        final perfil = await api.users.me();
+        if (perfil.userName.isNotEmpty) nombre = perfil.userName;
+      } on ObdApiException {
+        // El perfil es un lujo, no un requisito: si falla seguimos con el mail.
       }
+
+      if (!mounted) return;
+      navigator.pushReplacement(
+        MaterialPageRoute(builder: (_) => MainScreen(nombreUsuario: nombre)),
+      );
+    } on ApiException catch (error) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(_mensajeDeError(error)),
+          backgroundColor: error.isUnauthorized ? Colors.red : Colors.orange,
+        ),
+      );
+    } on NetworkException {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo conectar. Revisá tu conexión Wi-Fi.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _cargando = false);
     }
+  }
+
+  /// Traduce los códigos que devuelve la API a algo legible.
+  String _mensajeDeError(ApiException error) {
+    if (error.isUnauthorized) return 'Correo o contraseña incorrectos';
+    if (error.isValidation) return 'Revisá los datos ingresados';
+    if (error.isServerError) {
+      return 'El servidor tuvo un problema. Probá de nuevo.';
+    }
+    return 'Error del servidor (${error.statusCode})';
   }
 
   @override
@@ -130,9 +136,11 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 28),
 
-                // Input de Email
+                // Campo: Correo (userEmail)
                 TextFormField(
                   controller: _emailController,
+                  enabled: !_cargando,
+                  keyboardType: TextInputType.emailAddress,
                   decoration: const InputDecoration(
                     labelText: 'Correo electronico',
                     border: OutlineInputBorder(),
@@ -153,7 +161,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 // Campo: Contraseña (userPassword)
                 TextFormField(
                   controller: _passwordController,
+                  enabled: !_cargando,
                   obscureText: true, // Oculta la contraseña con puntitos
+                  onFieldSubmitted: (_) => _ingresar(),
                   decoration: const InputDecoration(
                     labelText: 'Contraseña',
                     border: OutlineInputBorder(),
@@ -168,33 +178,42 @@ class _LoginScreenState extends State<LoginScreen> {
                   },
                 ),
                 const SizedBox(height: 28),
+
                 // Botón de Ingreso
                 SizedBox(
                   width: double.infinity,
                   height: 52,
                   child: ElevatedButton(
-                    onPressed: _ingresar,
-                    child: const Text(
-                      'INGRESAR',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+                    onPressed: _cargando ? null : _ingresar,
+                    child: _cargando
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text(
+                            'INGRESAR',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                   ),
                 ),
 
                 const SizedBox(height: 16),
                 // Botón para ir a Registro
                 TextButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const RegisterScreen(),
-                      ),
-                    );
-                  },
+                  onPressed: _cargando
+                      ? null
+                      : () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const RegisterScreen(),
+                            ),
+                          );
+                        },
                   child: const Text(
                     '¿No tenés cuenta? Registrate acá',
                     style: TextStyle(fontSize: 16),

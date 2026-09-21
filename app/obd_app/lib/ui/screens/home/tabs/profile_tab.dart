@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:obd_app/core/constants/app_icons.dart';
 import 'package:obd_app/core/native_bridge.dart';
 import 'package:obd_app/core/theme/app_theme.dart';
+import 'package:obd_app/data/api/obd_api.dart';
 import 'package:obd_app/models/models.dart';
 import 'package:obd_app/ui/screens/auth/login_screen.dart';
 import 'package:obd_app/ui/widgets/widgets.dart';
@@ -31,6 +32,23 @@ class ProfileTab extends StatelessWidget {
     required this.onMaintenanceAlertsChanged,
     required this.onTripAlertsChanged,
   });
+
+  /// Revoca la sesión en el servidor (`POST /api/v1/auth/logout`, que invalida
+  /// todos los refresh tokens del usuario) y recién después vuelve al login.
+  ///
+  /// Si la llamada falla igual limpiamos la sesión local: los tokens que
+  /// quedaron no le sirven a esta app, y dejar al usuario adentro porque el
+  /// servidor no contestó sería peor.
+  Future<void> _cerrarSesion(BuildContext context) async {
+    final navigator = Navigator.of(context);
+
+    await ObdApi.instance.auth.logout();
+
+    navigator.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (route) => false,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -126,10 +144,7 @@ class ProfileTab extends StatelessWidget {
         ),
         const SizedBox(height: 24),
         OutlinedButton.icon(
-          onPressed: () => Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const LoginScreen()),
-          ),
+          onPressed: () => _cerrarSesion(context),
           icon: const Icon(AppIcons.logout),
           label: const Text('Cerrar sesión'),
           style: OutlinedButton.styleFrom(foregroundColor: context.tokens.danger),

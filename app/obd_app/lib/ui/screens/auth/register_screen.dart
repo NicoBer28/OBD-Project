@@ -1,11 +1,14 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:obd_app/core/theme/app_theme.dart';
+import 'package:obd_app/data/api/obd_api.dart';
+import 'package:obd_app/ui/screens/home/main_screen.dart';
 
-// Pantalla de Registro: permite al usuario crear una cuenta validando
-// que los campos de nombre, correo y contraseña cumplan los requisitos básicos.
+/// Registro: crea la cuenta contra `POST /api/v1/auth/register`.
+///
+/// Ese endpoint además deja la sesión abierta (devuelve los mismos tokens que
+/// el login), así que al terminar entramos directo a la app en vez de volver
+/// al login a pedir la contraseña de nuevo. Si preferís el flujo anterior,
+/// reemplazá el `pushAndRemoveUntil` por `navigator.pop()`.
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
 
@@ -25,6 +28,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _telefonoController =
       TextEditingController(); // Para userPhone (Opcional)
 
+  bool _cargando = false;
+
   // Los controllers deben liberarse cuando el State deja de existir.
   @override
   void dispose() {
@@ -36,82 +41,80 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
-  // le ponemos async a la funcion para que no se congele la app mientras que se complete la comunicacion
-  void _registrarse() async {
-    // Si la validación local es correcta (ningún validator devuelve error).
-    if (_formKey.currentState!.validate()) {
-      // Extraemos los valores exactos que vamos a mandar por HTTP después
-      // el trim le saca los espacios de mas al principio y al final
-      final userName = _nombreController.text.trim();
-      final userLastName = _apellidoController.text.trim();
-      final userEmail = _emailController.text.trim();
-      final userPassword = _passwordController.text;
-      final userPhone = _telefonoController.text.trim();
+  Future<void> _registrarse() async {
+    if (_cargando || !_formKey.currentState!.validate()) return;
 
-      final navigator = Navigator.of(context);
-      final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final api = ObdApi.instance;
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final nombre = _nombreController.text.trim();
 
-      // Armamos la URL
-      final url = Uri.parse('http://192.168.1.19:8080/api/v1/auth/register');
-      
-      try {
-        // 2. Disparamos la petición HTTP POST
-        // el await para todo el codigo hasta que java responda
-        final response = await http.post(
-          url,
-          headers: {
-            'Content-Type': 'application/json',
-          }, // Le avisamos a Java que le mandamos un JSON
-          body: jsonEncode({
-            'userName': userName,
-            'userLastName': userLastName,
-            'userEmail': userEmail,
-            'userPassword': userPassword,
-            // Solo mandamos el teléfono si el usuario escribió algo
-            if (userPhone.isNotEmpty) 'userPhone': userPhone,
-          }),
-        );
+    setState(() => _cargando = true);
 
-        // 3. Analizamos qué nos respondió la API
-        if (response.statusCode == 200) {
-          // El código 200 significa "Todo OK" en la web
-          scaffoldMessenger.showSnackBar(
-            const SnackBar(
-              content: Text('¡Cuenta creada con éxito!'),
-              backgroundColor: Colors.green,
-            ),
-          );
-          // Como venimos desde la pantalla de Login usando Navigator.push,
-          // navigator.pop() cierra esta pantalla y nos devuelve al Login.
-          navigator.pop();
-        } else if (response.statusCode == 409) {
-          // Si devuelve 409 Email ya existe
-          scaffoldMessenger.showSnackBar(
-            const SnackBar(
-              content: Text('Ese correo ya está registrado'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        } else {
-          // error de validacion de api
-          scaffoldMessenger.showSnackBar(
-            const SnackBar(
-              content: Text('Revisá los datos ingresados'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-      } catch (error) {
-        // Esto salta si la Mac está apagada o el celu no está en el mismo Wi-Fi
-        scaffoldMessenger.showSnackBar(
-          const SnackBar(
-            content: Text('No se pudo conectar con el servidor.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+    try {
+      // register crea la cuenta Y la loguea: el cliente guarda los tokens solo.
+      await api.auth.register(
+        userName: nombre,
+        userLastName: _apellidoController.text.trim(),
+        userEmail: _emailController.text.trim(),
+        userPassword: _passwordController.text,
+        userPhone: _telefonoController.text,
+      );
+
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('¡Cuenta creada con éxito!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      if (!mounted) return;
+      // Sacamos el login de la pila: ya hay sesión abierta.
+      navigator.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => MainScreen(nombreUsuario: nombre)),
+        (route) => false,
+      );
+    } on ApiException catch (error) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(_mensajeDeError(error)),
+          backgroundColor: error.isConflict ? Colors.red : Colors.orange,
+        ),
+      );
+    } on NetworkException {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo conectar con el servidor.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _cargando = false);
     }
   }
+
+  /// La API devuelve 409 si el mail ya existe y 400 con un mapa campo →
+  /// mensaje si algo no pasó la validación; mostramos el primero de esos.
+  String _mensajeDeError(ApiException error) {
+    if (error.isConflict) return 'Ese correo ya está registrado';
+    if (error.isValidation) {
+      if (error.fieldErrors.isNotEmpty) {
+        final primero = error.fieldErrors.entries.first;
+        return '${_etiquetaDe(primero.key)}: ${primero.value}';
+      }
+      return 'Revisá los datos ingresados';
+    }
+    return 'Error del servidor (${error.statusCode})';
+  }
+
+  String _etiquetaDe(String campo) => switch (campo) {
+    'userName' => 'Nombre',
+    'userLastName' => 'Apellido',
+    'userEmail' => 'Correo',
+    'userPassword' => 'Contraseña',
+    'userPhone' => 'Teléfono',
+    _ => campo,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -165,13 +168,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 // Campo: Nombre (userName)
                 TextFormField(
                   controller: _nombreController,
+                  enabled: !_cargando,
                   decoration: const InputDecoration(
                     labelText: 'Nombre',
                     border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.person),
                   ),
                   validator: (value) {
-                    if (value == null || value.isEmpty) {
+                    if (value == null || value.trim().isEmpty) {
                       return 'Por favor, ingresá tu nombre';
                     }
                     return null;
@@ -182,13 +186,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 // Campo: Apellido (userLastName)
                 TextFormField(
                   controller: _apellidoController,
+                  enabled: !_cargando,
                   decoration: const InputDecoration(
                     labelText: 'Apellido',
                     border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.badge),
                   ),
                   validator: (value) {
-                    if (value == null || value.isEmpty) {
+                    if (value == null || value.trim().isEmpty) {
                       return 'Por favor, ingresá tu apellido';
                     }
                     return null;
@@ -199,6 +204,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 // Campo: Correo Electrónico (userEmail)
                 TextFormField(
                   controller: _emailController,
+                  enabled: !_cargando,
                   keyboardType: TextInputType
                       .emailAddress, // Muestra el teclado con el "@"
                   decoration: const InputDecoration(
@@ -221,6 +227,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 // Campo: Teléfono (userPhone) - Opcional según API
                 TextFormField(
                   controller: _telefonoController,
+                  enabled: !_cargando,
                   keyboardType: TextInputType.phone,
                   decoration: const InputDecoration(
                     labelText: 'Teléfono (Opcional)',
@@ -233,6 +240,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 // Campo: Contraseña (userPassword)
                 TextFormField(
                   controller: _passwordController,
+                  enabled: !_cargando,
                   obscureText: true, // Oculta la contraseña con puntitos
                   decoration: const InputDecoration(
                     labelText: 'Contraseña',
@@ -244,6 +252,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     if (value == null || value.length < 8) {
                       return 'La contraseña debe tener al menos 8 caracteres';
                     }
+                    if (value.length > 72) {
+                      return 'La contraseña no puede superar los 72 caracteres';
+                    }
                     return null;
                   },
                 ),
@@ -254,14 +265,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   width: double.infinity, // Ocupa todo el ancho disponible
                   height: 52,
                   child: ElevatedButton(
-                    onPressed: _registrarse,
-                    child: const Text(
-                      'REGISTRARSE',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+                    onPressed: _cargando ? null : _registrarse,
+                    child: _cargando
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text(
+                            'REGISTRARSE',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                   ),
                 ),
               ],
