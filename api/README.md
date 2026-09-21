@@ -120,8 +120,9 @@ jar containing every `application-*.properties`. The environment is chosen
 **at run time** by the active Spring profile:
 
 - **`dev`** (`application-dev.properties`): refresh cookie sent over plain
-  HTTP, small Hikari pool sized for the Supabase pooler. Activate with
-  `SPRING_PROFILES_ACTIVE=dev`.
+  HTTP, small Hikari pool sized for the Supabase pooler. Activated by
+  `SPRING_PROFILES_ACTIVE=dev`, which lives in `.env.dev` so the file itself
+  selects the profile.
 - **no profile** (`application.properties` only): production settings —
   `Secure` cookies, no error details in responses. This is what runs in
   production; never activate `dev` there.
@@ -133,7 +134,7 @@ active: "dev"` vs `No active profile set`.
 
 ```bash
 set -a; source .env.dev; set +a
-SPRING_PROFILES_ACTIVE=dev ./mvnw spring-boot:run
+./mvnw spring-boot:run
 ```
 
 Or build once and run the jar with the profile:
@@ -141,13 +142,19 @@ Or build once and run the jar with the profile:
 ```bash
 ./mvnw -DskipTests package
 set -a; source .env.dev; set +a
-java -jar target/api-0.0.1-SNAPSHOT.jar --spring.profiles.active=dev
+java -jar target/api-0.0.1-SNAPSHOT.jar
 ```
 
-In IntelliJ: open the Run/Debug configuration for `ApiApplication`, set
-**Active profiles** to `dev`, and under **Modify options → Environment
-variables** paste the values from `.env.dev` (or use an EnvFile-capable
-plugin).
+Or run the production container image against the dev database:
+
+```bash
+docker build -f Dockerfile.vercel -t obd-api .
+docker run --rm -p 8080:8080 --env-file .env.dev obd-api
+```
+
+In IntelliJ: open the Run/Debug configuration for `ApiApplication` and under
+**Modify options → Environment variables** paste the values from `.env.dev`,
+including `SPRING_PROFILES_ACTIVE=dev` (or use an EnvFile-capable plugin).
 
 ### Production
 
@@ -165,6 +172,11 @@ Project → Settings → Environment Variables, marking `DB_PASSWORD` and
 `JWT_SECRET` as sensitive) and do **not** set `SPRING_PROFILES_ACTIVE`. The
 container is built from `Dockerfile.vercel`; `PORT` must match the port the
 platform routes to.
+
+If you also want a hosted **dev** deployment (e.g. Vercel's Preview
+environment), give that environment the values from `.env.dev` - including
+`SPRING_PROFILES_ACTIVE=dev` - scoped to Preview only, so production keeps
+the default profile and the production database.
 
 ## Endpoints
 
