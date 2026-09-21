@@ -65,6 +65,9 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
   int _rpm = 0;
   String _connectionStatus = 'Desconectado';
 
+  double? _currentLat;
+  double? _currentLng;
+
   @override
   void initState() {
     super.initState();
@@ -123,6 +126,13 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
       _speed = event.speed ?? 0;
       _rpm = event.rpm ?? 0;
       _fuel = (event.fuel ?? 0).toDouble();
+
+      // Capturamos el GPS en vivo que viene desde el hardware
+      if (event.lat != null && event.lng != null) {
+        _currentLat = event.lat;
+        _currentLng = event.lng;
+      }
+
       if (_speed > 0 || _rpm > 0) {
         _connectionStatus = 'Conectado';
       }
@@ -159,6 +169,8 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
         activityData: _activityData,
         showSummary: _showSummary,
         period: _period,
+        currentLat: _currentLat, // INYECTAMOS LA LATITUD
+        currentLng: _currentLng, // INYECTAMOS LA LONGITUD
         onShowSummaryChanged: (value) => setState(() => _showSummary = value),
         onPeriodChanged: (value) => setState(() => _period = value),
       ),
