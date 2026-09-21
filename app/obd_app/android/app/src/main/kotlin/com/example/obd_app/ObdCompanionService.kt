@@ -15,31 +15,59 @@ import android.os.Looper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.SupervisorJob
+import org.json.JSONArray
+import org.json.JSONObject
+import androidx.work.Constraints
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 
 //Foreground Service que se ejecuta en segundo plano cuando el auto está encendido y conectado al ESP32
 class ObdCompanionService : CompanionDeviceService() {
-    private val NOTIFICATION_ID = 1996
+   private val NOTIFICATION_ID = 1996
     private val CHANNEL_ID = "OBD_TRIP_CHANNEL"
     
-    // El motor de GPS de Google
+    // --- GPS ---
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
 
+    // --- VARIABLES DE ESTADO ACTUAL ---
     private var lastLat: Double = 0.0
     private var lastLng: Double = 0.0
     private var lastSpeed: Int = 0
     private var lastRpm: Int = 0
     private var lastFuel: Int = 0
 
+    // --- BLUETOOTH ---
     private val OBD_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
     private val NOTIFY_CHARACTERISTIC_UUID = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
-    // El Descriptor estándar de Bluetooth para habilitar notificaciones (CCCD)
     private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-
     private var bluetoothGatt: BluetoothGatt? = null
+
+    // --- BASE DE DATOS Y BUFFER LOCAL ---
+    private lateinit var db: AppDatabase
+    private lateinit var dao: ObdDao
+    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    
+    private var currentTripId: String? = null
+    private val carIdFalso = "2d14dd55-c2c8-4b5a-aae8-b1c93a632cfc" 
+    
+    private val ramBuffer = mutableListOf<JSONObject>()
+    private var chunkStartTime = 0L
+
+    companion object {
+        private const val FILAS_POR_CHUNK = 50
+    }
+    
+    // TODO: Mejorar lógica de detección de inicio real del auto
+    private var isTripActive = false
 
     override fun onCreate() {
         super.onCreate()
+        db = AppDatabase.getDatabase(this)
+        dao = db.obdDao()
+
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         crearCanalNotificacion()
     }
@@ -67,10 +95,14 @@ class ObdCompanionService : CompanionDeviceService() {
     // se desconectó del ESP32 (auto apagado o fuera de rango)
     override fun onDeviceDisappeared(associationInfo: AssociationInfo) {
         Log.i("OBD-C", "Auto apagado. Finalizando Viaje...")
-
+        
+        if (isTripActive) {
+            finalizarViajeLocal(lastFuel)
+            isTripActive = false
+        }
+        
         fusedLocationClient.removeLocationUpdates(locationCallback)
 
-        // 2. Desconectamos BLE
         desconectarBLE()
 
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -196,45 +228,95 @@ private fun conectarBLE(macAddress: String) {
         // Se ejecuta cada 20ms (o cuando el ESP32 mande un dato) - PARA ANDROID 12 O INFERIOR
         @Deprecated("Usado para compatibilidad con celulares viejos")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            procesarPaquete(characteristic.value)
+            recepcionDatos(characteristic.value)
         }
 
         // Se ejecuta cada 20ms - PARA ANDROID 13 O SUPERIOR
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
-            procesarPaquete(value)
+            recepcionDatos(value)
         }
     }
 
-    //FUNCION QUE SE EJECUTAN AL LEER DATOS DEL ESP32
-    private fun procesarPaquete(bytes: ByteArray) {
+    private fun recepcionDatos(bytes: ByteArray) {
         if (bytes.isEmpty()) return
 
-        // Extraemos el ID (usando and 0xFF para evitar números negativos)
-        val id = bytes[0].toInt() and 0xFF
+        decodificarBytes(bytes)
 
+        if (!isTripActive) {
+            iniciarViajeLocal(lastFuel)
+            isTripActive = true
+        }
+
+        guardarTelemetriaLocal()
+
+        notificarAFlutter()
+    }
+
+    private fun decodificarBytes(bytes: ByteArray) {
+        val id = bytes[0].toInt() and 0xFF
         if (id == 0x01 && bytes.size >= 4) {
-            // SpeedRpmPacket: id (1), speed (1), rpm (2)
-            val speed = bytes[1].toInt() and 0xFF
-            
-            // Reconstruimos el uint16_t (Little Endian, como lo manda el ESP32)
+            lastSpeed = bytes[1].toInt() and 0xFF
             val rpmLow = bytes[2].toInt() and 0xFF
             val rpmHigh = bytes[3].toInt() and 0xFF
-            val rpm = (rpmHigh shl 8) or rpmLow
-            
-            lastSpeed = speed
-            lastRpm = rpm
-
+            lastRpm = (rpmHigh shl 8) or rpmLow
         } else if (id == 0x02 && bytes.size >= 3) {
-            // EngTempFuelPacket: id (1), temp (1), fuel (1)
             val temp = bytes[1].toInt() and 0xFF
-            val fuel = bytes[2].toInt() and 0xFF
-            
-            // Actualizamos la variable global que lee el GPS
-            lastFuel = fuel
-            
-            Log.d("OBD-C", "Nafta recibida en Background: $fuel%")
+            lastFuel = bytes[2].toInt() and 0xFF
         }
-        // Armamos el objeto autogenerado por Pigeon
+    }
+
+    private fun guardarTelemetriaLocal() {
+        val timestamp = System.currentTimeMillis()
+        if (ramBuffer.isEmpty()) {
+            chunkStartTime = timestamp 
+        }
+
+        val muestra = JSONObject().apply {
+            put("t", timestamp - chunkStartTime)
+            put("s", lastSpeed)
+            put("r", lastRpm)
+            put("f", lastFuel)
+        }
+        
+        ramBuffer.add(muestra)
+
+        if (ramBuffer.size >= FILAS_POR_CHUNK) {
+            val muestrasParaGuardar = JSONArray(ramBuffer.toList())
+            val tiempoInicioChunk = chunkStartTime
+            
+            ramBuffer.clear()
+
+            serviceScope.launch {
+                val payloadString = JSONObject().apply {
+                    put("t0", tiempoInicioChunk)
+                    put("samples", muestrasParaGuardar)
+                }.toString()
+
+                val nuevoChunk = TelemetryChunk(
+                    id = UUID.randomUUID().toString(),
+                    carId = carIdFalso,
+                    startTime = tiempoInicioChunk,
+                    payload = payloadString,
+                    syncStatus = "PENDING"
+                )
+                
+                dao.insertChunk(nuevoChunk)
+                //le avisamos al WorkManager que hay datos nuevos.
+                // solo ejecutar si hay conexión a Internet.
+                val constraints = Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+
+                val syncWorkRequest = OneTimeWorkRequestBuilder<SyncWorker>()
+                    .setConstraints(constraints)
+                    .build()
+
+                WorkManager.getInstance(applicationContext).enqueue(syncWorkRequest)
+            }
+        }
+    }
+
+    private fun notificarAFlutter() {
         val evento = TelemetryEvent(
             speed = lastSpeed.toLong(),
             rpm = lastRpm.toLong(),
@@ -243,14 +325,126 @@ private fun conectarBLE(macAddress: String) {
             lng = lastLng
         )
 
-        // Enviamos a Flutter asegurándonos de estar en el Hilo Principal usando Corrutinas
         CoroutineScope(Dispatchers.Main).launch {
             try {
                 ObdEventBridge.flutterApi?.onTelemetryUpdated(evento)
             } catch (e: Exception) {
-                Log.e("OBD-C", "Error enviando a Flutter: \$e")
+                // Silenciado intencionalmente si Flutter está cerrado
             }
         }
-
     }
+
+    private fun iniciarViajeLocal(nivelNaftaInicial: Int) {
+        serviceScope.launch {
+            val (tokenFlutter, carIdFlutter) = obtenerCredencialesFlutter(applicationContext)
+            val idDelAuto = carIdFlutter ?: "AUTO_DESCONOCIDO"
+
+            var activeTrip = dao.getActiveTrip()
+            
+            if (activeTrip == null) {
+                currentTripId = UUID.randomUUID().toString()
+                activeTrip = Trip(
+                    localId = currentTripId!!,
+                    backendId = null,
+                    carId = carIdFalso,
+                    initialFuel = nivelNaftaInicial,
+                    startedAt = System.currentTimeMillis(),
+                    status = "ACTIVE",
+                    syncStatus = "PENDING_START"
+                )
+                dao.insertTrip(activeTrip)
+                Log.i("OBD-DB", "¡Nuevo viaje creado en SQLite! ID local: $currentTripId")
+                if (tokenFlutter != null && carIdFlutter != null) {
+                    try {
+                        val tokenFalso = "Bearer TU_TOKEN_DE_PRUEBA" // TODO: Traer desde Flutter
+                        val request = StartTripRequest(carId = carIdFalso, initialFuel = nivelNaftaInicial)
+                        val response = ApiClient.retrofitService.startTrip(tokenFalso, request)
+                        
+                        if (response.isSuccessful) {
+                            val backendId = response.body()?.id
+                            if (backendId != null) {
+                                val viajeSincronizado = activeTrip.copy(
+                                    backendId = backendId,
+                                    syncStatus = "SYNCED_START"
+                                )
+                                dao.updateTrip(viajeSincronizado)
+                                Log.i("OBD-RED", "Viaje iniciado en Backend. ID real: $backendId")
+                            }
+                        } else {
+                            Log.e("OBD-RED", "Error del server al iniciar: ${response.code()}. Queda PENDING_START.")
+                        }
+                    } catch (e: Exception) {
+                        Log.w("OBD-RED", "Sin internet al iniciar. Queda en cola local: ${e.message}")
+                    }
+                }
+            } else {
+                currentTripId = activeTrip.localId
+            }
+        }
+    }
+
+    private fun finalizarViajeLocal(nivelNaftaFinal: Int) {
+        serviceScope.launch {
+            val (tokenFlutter, carIdFlutter) = obtenerCredencialesFlutter(applicationContext)
+
+            val activeTrip = dao.getActiveTrip()
+            if (activeTrip != null) {
+                val viajeCerrado = activeTrip.copy(
+                    endedAt = System.currentTimeMillis(),
+                    finalFuel = nivelNaftaFinal,
+                    status = "FINISHED",
+                    syncStatus = "PENDING_FINISH"
+                )
+                dao.updateTrip(viajeCerrado)
+                Log.i("OBD-DB", "Viaje cerrado en SQLite local.")
+                val backendId = viajeCerrado.backendId
+                if (backendId == null) {
+                    Log.w("OBD-RED", "Falta backendId. No se puede finalizar en la nube aún.")
+                    return@launch 
+                }
+
+                val backendId = viajeCerrado.backendId
+                if (backendId == null) {
+                    Log.w("OBD-RED", "Falta backendId. No se puede finalizar en la nube aún.")
+                    return@launch 
+                }
+                
+                if (tokenFlutter == null) {
+                    Log.w("OBD-RED", "No hay token de sesión. Se subirá luego.")
+                    return@launch 
+                }
+
+                try {
+                    val distanciaSimulada = 1.0 // TODO: Calcular distancia real. La API exige > 0
+                    val request = FinishTripRequest(
+                        tripFinalFuel = nivelNaftaFinal, 
+                        tripDistance = distanciaSimulada
+                    )
+                    
+                    val response = ApiClient.retrofitService.finishTrip(tokenFlutter, backendId, request)
+                    
+                    if (response.isSuccessful) {
+                        val viajeCompletado = viajeCerrado.copy(syncStatus = "COMPLETED")
+                        dao.updateTrip(viajeCompletado)
+                        Log.i("OBD-RED", "Viaje finalizado exitosamente en el servidor.")
+                    } else {
+                        Log.e("OBD-RED", "Error del server al finalizar: ${response.code()}. Queda PENDING_FINISH.")
+                    }
+                } catch (e: Exception) {
+                    Log.w("OBD-RED", "Sin internet al finalizar. Queda en cola local: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun obtenerCredencialesFlutter(context: Context): Pair<String?, String?> {
+        val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+        
+        // Flutter le agrega automáticamente el prefijo "flutter_"
+        val token = prefs.getString("flutter_token", null)
+        val carId = prefs.getString("flutter_carId", null)
+        
+        return Pair(token, carId)
+    }
+
 }
