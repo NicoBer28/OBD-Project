@@ -20,6 +20,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
   // Permite ejecutar todos los validators del Form en una sola operación.
   final _formKey = GlobalKey<FormState>();
 
+  // El mismo patrón que valida el servidor (`UserDTO.PHONE`). Sin esto el
+  // registro fallaba con un 400 "Invalid Phone Number" para formatos como
+  // "+54 9 11 1234 5678", que tienen más grupos de los que el patrón admite.
+  static final _phonePattern = RegExp(
+    r'^\+?(\d{1,3})?[-.\s]?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}$',
+  );
+
   // Los controllers permiten leer el contenido de los campos de texto.
   final _nombreController = TextEditingController(); // Para userName
   final _apellidoController = TextEditingController(); // Para userLastName
@@ -231,9 +238,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   keyboardType: TextInputType.phone,
                   decoration: const InputDecoration(
                     labelText: 'Teléfono (Opcional)',
+                    hintText: '+54 11 1234 5678',
                     border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.phone),
                   ),
+                  validator: (value) {
+                    final phone = value?.trim() ?? '';
+                    if (phone.isEmpty) return null;
+                    if (!_phonePattern.hasMatch(phone)) {
+                      return 'Usá el formato +54 11 1234 5678 (sin el 9 ni el 15)';
+                    }
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 16),
 

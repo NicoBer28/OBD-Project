@@ -528,25 +528,50 @@ await api.invitations.accept(invitaciones.first.id);
 // Ahora el auto le aparece en api.cars.list() y puede iniciar viajes.
 ```
 
-### Reemplazar los datos de demo
+### Cómo lo usa la app
 
-Las pantallas todavía se dibujan con `DemoData`. El reemplazo es por partes,
-sin tocar los widgets: `CarTab` ya recibe un `CarData`, así que alcanza con
-mapear `Car` (API) → `CarData` (UI) y pasárselo a `MainScreen`. Lo mismo para
-`members` desde `api.groups.members()` y `trips` desde
-`api.trips.forCar(carId)`.
+Las pantallas no llaman al cliente directo: pasan por `HomeController`
+(`lib/controllers/home_controller.dart`), un `ChangeNotifier` que carga lo que
+el dashboard necesita y expone las acciones. Cada pestaña lo escucha con
+`ListenableBuilder`.
 
-`ReservationRepository` es el caso más limpio: ya está definido como interfaz
-justamente para esto. Una `ApiReservationRepository` que la implemente cambia
-una línea en `MainScreen` — aunque las reservas todavía no tienen endpoints en
-el backend.
+| Pantalla | Lee | Acciones |
+|---|---|---|
+| Auto (`CarTab`) | `cars.list`, `trips.active`, `devices.forCar` | `trips.start`, `trips.finish`, `trips.cancel` |
+| Compartido (`SharedTab`) | `groups.list`, `groups.members`, `invitations.pending` | `groups.create`, `invitations.invite`, `invitations.accept`, `cars.share` |
+| Actividad (`ActivityTab`) | `cars.{id}/trips` | — |
+| Perfil (`ProfileTab`) | `users.me` | `auth.logout` |
+| Mis autos (`MyCarsScreen`) | `models.list` | `cars.create`, `cars.share/unshare`, `devices.pair/unpair` |
+
+Los modelos de la API se traducen a los que dibujan los widgets en
+`lib/core/utils/api_mappers.dart`: nafta por miembro, km por conductor y la
+variación contra el período anterior salen todos de `GET /cars/{id}/trips`.
+
+**El QR.** No hay "unirse con un código" en el backend — entrar a un grupo es
+una invitación por correo que la persona acepta. Por eso el QR va en la
+dirección que funciona: quien quiere entrar muestra **Mi código QR**
+(`obdc://invite?email=…`, ver `lib/core/utils/qr_payload.dart`), el admin lo
+escanea desde *Invitar* y la app completa el correo. El invitado acepta desde
+la tarjeta de invitaciones pendientes.
+
+**Telemetría.** `TelemetryUploader` (`lib/data/telemetry_uploader.dart`)
+junta lo que llega del servicio nativo por `ObdFlutterApi.onTelemetryUpdated`
+y lo sube cada 30 s a `telemetry.upload(carId: …)`. Sube por `carId` y no por
+serial porque el firmware todavía no expone el serial del dongle.
+
+`ReservationRepository` sigue en memoria: las reservas no tienen endpoint.
 
 ---
 
 ## 6. Qué falta
 
 - **Persistir la sesión.** Hoy cerrar la app desloguea (ver arriba).
-- **Reservas.** La app las tiene en memoria; la API no las expone todavía.
+- **Reservas.** La app las tiene en memoria (por teléfono); la API no las
+  expone todavía.
+- **Unirse a un grupo por QR.** El QR de hoy lleva el correo del invitado
+  porque el backend solo sabe invitar por correo. Un `POST /groups/{id}/join`
+  con un código firmado permitiría el flujo inverso (el admin muestra, el
+  resto escanea).
 - **Paginar viajes.** `GET /trips` y `GET /cars/{id}/trips` vienen sin paginar
   del servidor, así que `mine()` y `forCar()` tampoco paginan.
 - **Nafta: ¿porcentaje o litros?** El servidor todavía no lo define (acepta

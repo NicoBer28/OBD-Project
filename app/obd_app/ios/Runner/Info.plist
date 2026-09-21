@@ -26,6 +26,8 @@
     <string>$(FLUTTER_BUILD_NUMBER)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>La cámara se usa para escanear el código QR de otra persona e invitarla a tu grupo.</string>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>La aplicación necesita Bluetooth para conectarse al dispositivo OBD.</string>
     <key>NSLocationWhenInUseUsageDescription</key>

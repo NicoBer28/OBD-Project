@@ -6,12 +6,16 @@ import 'package:obd_app/ui/widgets/widgets.dart';
 
 class MemberHeader extends StatelessWidget {
   final List<MemberData> members;
-  final VoidCallback onInvite;
+
+  /// Solo los admins invitan; para el resto el botón no se muestra.
+  final VoidCallback? onInvite;
+  final VoidCallback? onShowQr;
 
   const MemberHeader({
     super.key,
     required this.members,
-    required this.onInvite,
+    this.onInvite,
+    this.onShowQr,
   });
 
   @override
@@ -19,11 +23,18 @@ class MemberHeader extends StatelessWidget {
     return Row(
       children: [
         Expanded(child: AvatarStack(members: members)),
-        OutlinedButton.icon(
-          onPressed: onInvite,
-          icon: const Icon(AppIcons.invite, size: 16),
-          label: const Text('Invitar'),
-        ),
+        if (onShowQr != null)
+          IconButton(
+            tooltip: 'Mi código QR',
+            onPressed: onShowQr,
+            icon: const Icon(AppIcons.qr),
+          ),
+        if (onInvite != null)
+          OutlinedButton.icon(
+            onPressed: onInvite,
+            icon: const Icon(AppIcons.invite, size: 16),
+            label: const Text('Invitar'),
+          ),
       ],
     );
   }
@@ -127,7 +138,7 @@ class FuelSummaryCard extends StatelessWidget {
                 ),
               ),
               Text(
-                '${data.liters.toStringAsFixed(0)} L',
+                '${data.tripCount} ${data.tripCount == 1 ? 'viaje' : 'viajes'}',
                 style: TextStyle(fontSize: 11, color: t.muted),
               ),
             ],
@@ -138,7 +149,7 @@ class FuelSummaryCard extends StatelessWidget {
             textBaseline: TextBaseline.alphabetic,
             children: [
               Text(
-                data.total,
+                '${data.totalFuel} %',
                 style: TextStyle(
                   fontSize: 32,
                   fontWeight: FontWeight.w800,
@@ -148,103 +159,75 @@ class FuelSummaryCard extends StatelessWidget {
               ),
               const SizedBox(width: 7),
               Text(
-                'total del grupo',
+                'del tanque entre todos',
                 style: TextStyle(fontSize: 11, color: t.muted),
               ),
             ],
           ),
-          const SizedBox(height: 11),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(99),
-            child: SizedBox(
-              height: 9,
-              child: Row(
-                children: [
-                  for (final member in data.members)
-                    if (member.fuelShare > 0) // Guard against flex: 0
-                      Expanded(
-                        flex: (member.fuelShare * 100).round(),
-                        child: ColoredBox(color: member.color),
-                      ),
-                ],
+          if (data.members.isEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Cargá la nafta al iniciar y terminar cada viaje para ver '
+              'cuánto usa cada uno.',
+              style: TextStyle(fontSize: 12, color: t.muted),
+            ),
+          ] else ...[
+            const SizedBox(height: 11),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: SizedBox(
+                height: 9,
+                child: Row(
+                  children: [
+                    for (final member in data.members)
+                      if (member.fuelShare > 0) // Guard against flex: 0
+                        Expanded(
+                          flex: (member.fuelShare * 100).round(),
+                          child: ColoredBox(color: member.color),
+                        ),
+                  ],
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 13),
-          for (final member in data.members)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
-                children: [
-                  _Avatar(
-                    initials: member.initials,
-                    color: member.color,
-                    size: 27,
-                  ),
-                  const SizedBox(width: 7),
-                  Expanded(
-                    child: Text(
-                      member.name,
+            const SizedBox(height: 13),
+            for (final member in data.members)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    _Avatar(
+                      initials: member.initials,
+                      color: member.color,
+                      size: 27,
+                    ),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        member.name,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: t.text,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '${(member.fuelShare * 100).round()}%',
+                      style: TextStyle(fontSize: 11, color: t.muted),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      member.fuelAmount,
                       style: TextStyle(
                         fontSize: 12,
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.w800,
                         color: t.text,
                       ),
                     ),
-                  ),
-                  Text(
-                    '${(member.fuelShare * 100).round()}%',
-                    style: TextStyle(fontSize: 11, color: t.muted),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    member.fuelAmount,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: t.text,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class BalanceCard extends StatelessWidget {
-  final VoidCallback onSettle;
-
-  const BalanceCard({super.key, required this.onSettle});
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-
-    return SectionCard(
-      padding: const EdgeInsets.all(15),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextStack(
-              title: 'Tu saldo pendiente',
-              subtitle: 'Debés \$12.400',
-              titleStyle: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                color: t.muted,
-              ),
-              subtitleStyle: TextStyle(
-                fontSize: 21,
-                fontWeight: FontWeight.w800,
-                color: t.accent2,
-              ),
-              spacing: 4,
-            ),
-          ),
-          FilledButton(onPressed: onSettle, child: const Text('Saldar')),
+          ],
         ],
       ),
     );
@@ -296,32 +279,6 @@ class ScheduleSlotView extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class LocationField extends StatelessWidget {
-  final String label;
-  final String hint;
-  final IconData icon;
-
-  const LocationField({
-    super.key,
-    required this.label,
-    required this.hint,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-
-    return TextField(
-      decoration: InputDecoration(
-        labelText: label,
-        hintText: hint,
-        prefixIcon: Icon(icon, color: t.accent),
-      ),
     );
   }
 }
