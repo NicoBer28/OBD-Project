@@ -265,7 +265,7 @@ class ScheduleSlotView extends StatelessWidget {
     return Row(
       children: [
         SizedBox(
-          width: 52,
+          width: 64,
           child: Text(
             '${slot.day}\n${slot.time}',
             style: TextStyle(

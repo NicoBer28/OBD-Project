@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:obd_app/controllers/reservations_controller.dart';
 import 'package:obd_app/core/constants/app_icons.dart';
 import 'package:obd_app/core/theme/app_theme.dart';
 import 'package:obd_app/models/models.dart';
@@ -12,6 +13,7 @@ import 'package:obd_app/ui/widgets/widgets.dart';
 
 class CarTab extends StatelessWidget {
   final CarData carData;
+  final ReservationsController reservations;
   final String initials;
   final double fuel;
   final int speed;
@@ -24,6 +26,7 @@ class CarTab extends StatelessWidget {
   const CarTab({
     super.key,
     required this.carData,
+    required this.reservations,
     required this.initials,
     required this.fuel,
     required this.speed,
@@ -150,10 +153,21 @@ class CarTab extends StatelessWidget {
         ),
         const SizedBox(height: 10),
         ParkingCard(car: carData),
-        if (carData.nextTurn != null) ...[
-          const SizedBox(height: 10),
-          NextTurnCard(slot: carData.nextTurn!, onTap: onNavigateToShared),
-        ],
+        ListenableBuilder(
+          listenable: reservations,
+          builder: (context, _) {
+            final next = reservations.nextTurn();
+            if (next == null) return const SizedBox.shrink();
+
+            return Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: NextTurnCard(
+                slot: reservations.slotFor(next),
+                onTap: onNavigateToShared,
+              ),
+            );
+          },
+        ),
         const SizedBox(height: 16),
         FilledButton.icon(
           onPressed: () => _showStartJourneySheet(context),

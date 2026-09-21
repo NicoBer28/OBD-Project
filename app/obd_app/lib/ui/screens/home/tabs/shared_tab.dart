@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:obd_app/controllers/reservations_controller.dart';
 import 'package:obd_app/core/constants/app_icons.dart';
 import 'package:obd_app/core/theme/app_theme.dart';
 import 'package:obd_app/models/models.dart';
+import 'package:obd_app/ui/screens/home/widgets/booking_sheet.dart';
 import 'package:obd_app/ui/screens/home/widgets/shared_widgets.dart';
 import 'package:obd_app/ui/widgets/widgets.dart';
 
@@ -12,13 +14,13 @@ import 'package:obd_app/ui/widgets/widgets.dart';
 class SharedTab extends StatelessWidget {
   final List<MemberData> members;
   final FuelSummaryData fuelData;
-  final List<ScheduleSlot> schedule;
+  final ReservationsController reservations;
 
   const SharedTab({
     super.key,
     required this.members,
     required this.fuelData,
-    required this.schedule,
+    required this.reservations,
   });
 
   void _showMessage(BuildContext context, String message) {
@@ -88,6 +90,49 @@ class SharedTab extends StatelessWidget {
     );
   }
 
+  Future<void> _reserve(BuildContext context) async {
+    final created = await BookingSheet.show(context, controller: reservations);
+
+    if (created != null && context.mounted) {
+      _showMessage(context, 'Reserva confirmada');
+    }
+  }
+
+  Future<void> _confirmCancel(
+    BuildContext context,
+    Reservation reservation,
+  ) async {
+    final slot = reservations.slotFor(reservation);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Cancelar reserva'),
+        content: Text('${slot.day} · ${slot.time}'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Mantener'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Cancelar reserva'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await reservations.cancel(reservation);
+      if (context.mounted) _showMessage(context, 'Reserva cancelada');
+    } on ReservationRejected {
+      if (context.mounted) {
+        _showMessage(context, 'No se pudo cancelar esa reserva');
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListView(
@@ -110,25 +155,63 @@ class SharedTab extends StatelessWidget {
         const SizedBox(height: 10),
         BalanceCard(onSettle: () => _settleUp(context)),
         const SizedBox(height: 10),
-        SectionCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SectionHeader(
-                title: 'Esta semana',
-                actionLabel: 'Reservar',
-                actionIcon: AppIcons.calendar,
-                onAction: () {},
+        ListenableBuilder(
+          listenable: reservations,
+          builder: (context, _) {
+            final upcoming = reservations.upcoming();
+
+            return SectionCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SectionHeader(
+                    title: 'Esta semana',
+                    actionLabel: 'Reservar',
+                    actionIcon: AppIcons.calendar,
+                    onAction: () => _reserve(context),
+                  ),
+                  const SizedBox(height: 4),
+                  if (upcoming.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        'Nadie reservó el auto esta semana.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: context.tokens.muted,
+                        ),
+                      ),
+                    )
+                  else
+                    ...upcoming.map(
+                      (r) => Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: reservations.isMine(r)
+                              ? () => _confirmCancel(context, r)
+                              : null,
+                          child: ScheduleSlotView(
+                            slot: reservations.slotFor(r),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (upcoming.any(reservations.isMine))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Text(
+                        'Tocá una reserva tuya para cancelarla.',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: context.tokens.muted,
+                        ),
+                      ),
+                    ),
+                ],
               ),
-              const SizedBox(height: 4),
-              ...schedule.map(
-                (slot) => Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: ScheduleSlotView(slot: slot),
-                ),
-              ),
-            ],
-          ),
+            );
+          },
         ),
       ],
     );

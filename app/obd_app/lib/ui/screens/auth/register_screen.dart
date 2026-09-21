@@ -20,7 +20,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   // Los controllers permiten leer el contenido de los campos de texto.
   final _nombreController = TextEditingController(); // Para userName
   final _apellidoController = TextEditingController(); // Para userLastName
-  final _emailController = TextEditingController(); // Para userEMail
+  final _emailController = TextEditingController(); // Para userEmail
   final _passwordController = TextEditingController(); // Para userPassword
   final _telefonoController =
       TextEditingController(); // Para userPhone (Opcional)
@@ -44,7 +44,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       // el trim le saca los espacios de mas al principio y al final
       final userName = _nombreController.text.trim();
       final userLastName = _apellidoController.text.trim();
-      final userEMail = _emailController.text.trim();
+      final userEmail = _emailController.text.trim();
       final userPassword = _passwordController.text;
       final userPhone = _telefonoController.text.trim();
 
@@ -53,7 +53,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
       // Armamos la URL
       final url = Uri.parse('http://192.168.1.19:8080/api/v1/auth/register');
-
+      
       try {
         // 2. Disparamos la petición HTTP POST
         // el await para todo el codigo hasta que java responda
@@ -65,7 +65,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           body: jsonEncode({
             'userName': userName,
             'userLastName': userLastName,
-            'userEMail': userEMail,
+            'userEmail': userEmail,
             'userPassword': userPassword,
             // Solo mandamos el teléfono si el usuario escribió algo
             if (userPhone.isNotEmpty) 'userPhone': userPhone,
@@ -196,7 +196,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
                 const SizedBox(height: 16),
 
-                // Campo: Correo Electrónico (userEMail)
+                // Campo: Correo Electrónico (userEmail)
                 TextFormField(
                   controller: _emailController,
                   keyboardType: TextInputType
