@@ -57,4 +57,11 @@ dependencies {
     implementation("androidx.room:room-runtime:$room_version")
     implementation("androidx.room:room-ktx:$room_version")
     ksp("androidx.room:room-compiler:$room_version")
+
+    // Retrofit para HTTP
+    implementation("com.squareup.retrofit2:retrofit:2.11.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.11.0")
+    
+    // WorkManager para tareas en segundo plano
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
 }
