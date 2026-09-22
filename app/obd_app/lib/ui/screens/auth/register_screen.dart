@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:obd_app/core/theme/app_theme.dart';
 import 'package:obd_app/data/api/obd_api.dart';
@@ -37,9 +39,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   bool _cargando = false;
 
+  // Pasados unos segundos sin respuesta avisamos que el servidor puede estar
+  // despertando (Vercel duerme el contenedor y el primer pedido tarda ~20 s).
+  bool _lento = false;
+  Timer? _avisoLento;
+
   // Los controllers deben liberarse cuando el State deja de existir.
   @override
   void dispose() {
+    _avisoLento?.cancel();
     _nombreController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
@@ -56,7 +64,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final navigator = Navigator.of(context);
     final nombre = _nombreController.text.trim();
 
-    setState(() => _cargando = true);
+    setState(() {
+      _cargando = true;
+      _lento = false;
+    });
+    _avisoLento = Timer(const Duration(seconds: 5), () {
+      if (mounted && _cargando) setState(() => _lento = true);
+    });
 
     try {
       // register crea la cuenta Y la loguea: el cliente guarda los tokens solo.
@@ -89,15 +103,51 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ),
       );
     } on NetworkException {
+      // El pedido venció o se cortó, pero el servidor puede haber creado la
+      // cuenta igual (pasaba con el cold start de Vercel: 23 s de respuesta
+      // contra 15 s de timeout). Si ahora el login entra, la cuenta existe y
+      // seguimos como si el registro hubiera contestado.
+      if (await _intentarLoginDeRescate()) return;
       messenger.showSnackBar(
         const SnackBar(
-          content: Text('No se pudo conectar con el servidor.'),
+          content: Text(
+            'No se pudo conectar con el servidor. Si ya tenés cuenta, probá ingresar.',
+          ),
           backgroundColor: Colors.red,
         ),
       );
     } finally {
-      if (mounted) setState(() => _cargando = false);
+      _avisoLento?.cancel();
+      if (mounted) {
+        setState(() {
+          _cargando = false;
+          _lento = false;
+        });
+      }
     }
+  }
+
+  /// Después de un timeout en `register`: ¿quedó creada la cuenta? Un login
+  /// exitoso lo confirma y deja la sesión abierta; un 401 dice que no, y
+  /// cualquier otra cosa se trata como el error de red original.
+  Future<bool> _intentarLoginDeRescate() async {
+    final api = ObdApi.instance;
+    final navigator = Navigator.of(context);
+    final nombre = _nombreController.text.trim();
+    try {
+      await api.auth.login(
+        userEmail: _emailController.text.trim(),
+        userPassword: _passwordController.text,
+      );
+    } on ObdApiException {
+      return false;
+    }
+    if (!mounted) return true;
+    navigator.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => MainScreen(nombreUsuario: nombre)),
+      (route) => false,
+    );
+    return true;
   }
 
   /// La API devuelve 409 si el mail ya existe y 400 con un mapa campo →
@@ -297,6 +347,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           ),
                   ),
                 ),
+                if (_lento) ...[
+                  const SizedBox(height: 10),
+                  const Text(
+                    'El servidor está despertando, puede tardar unos segundos…',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: AppColors.muted),
+                  ),
+                ],
               ],
             ),
           ),

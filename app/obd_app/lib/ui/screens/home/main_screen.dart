@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:obd_app/controllers/home_controller.dart';
 import 'package:obd_app/controllers/reservations_controller.dart';
@@ -52,6 +54,13 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
   late final TelemetryUploader _uploader;
   final ObdSession _session = ObdApi.instance.session;
 
+  // Mientras la app está al frente, un ping liviano cada dos minutos evita
+  // que Vercel duerma el contenedor entre un toque y el siguiente (se duerme
+  // en ~3 min y tarda 20 s en despertar). Al volver del fondo, uno de una.
+  static const _keepWarmEvery = Duration(minutes: 2);
+  Timer? _keepWarm;
+  late final AppLifecycleListener _lifecycle;
+
   // Las reservas no tienen endpoint todavía: viven en memoria, por auto.
   ReservationsController? _reservations;
   String? _reservationsCarId;
@@ -87,9 +96,26 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
     // no pudo renovar) volvemos al login desde un solo lugar.
     _session.addListener(_onSessionChanged);
 
+    _lifecycle = AppLifecycleListener(
+      onResume: _startKeepWarm,
+      onPause: _stopKeepWarm,
+    );
+    _startKeepWarm();
+
     ObdFlutterApi.setUp(this);
     _solicitarPermisos();
     _home.load();
+  }
+
+  void _startKeepWarm() {
+    ObdApi.instance.warmUp();
+    _keepWarm?.cancel();
+    _keepWarm = Timer.periodic(_keepWarmEvery, (_) => ObdApi.instance.warmUp());
+  }
+
+  void _stopKeepWarm() {
+    _keepWarm?.cancel();
+    _keepWarm = null;
   }
 
   /// -------------------------------------------------------------------------
@@ -109,6 +135,8 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
   void dispose() {
     // Nos desuscribimos al cerrar la pantalla
     ObdFlutterApi.setUp(null);
+    _stopKeepWarm();
+    _lifecycle.dispose();
     _session.removeListener(_onSessionChanged);
     _home.removeListener(_onHomeChanged);
     _uploader.flush();
