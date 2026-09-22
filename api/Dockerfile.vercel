@@ -14,4 +14,4 @@ COPY --from=build /app/target/*.jar app.jar
 ENV PORT=8080
 EXPOSE 8080
 # Flags tuned for fast startup on a 1 vCPU / 2 GB function.
-ENTRYPOINT ["java","-XX:+UseSerialGC","-XX:TieredStopAtLevel=1","-XX:MaxRAMPercentage=75","-jar","app.jar"]
+ENTRYPOINT ["java","-XX:+UseSerialGC","-XX:TieredStopAtLevel=1","-XX:MaxRAMPercentage=75","-Dserver.port=${PORT:-8080}","-jar","app.jar"]

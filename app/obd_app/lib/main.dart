@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:obd_app/core/theme/app_theme.dart';
-import 'package:obd_app/ui/screens/home/main_screen.dart';
+import 'package:obd_app/ui/screens/auth/login_screen.dart';
 
 void main() {
   // Punto de entrada de Dart. Flutter comienza construyendo OBDCApp.
@@ -22,7 +22,10 @@ class OBDCApp extends StatelessWidget {
         theme: buildAppTheme(),
         darkTheme: buildAppTheme(Brightness.dark),
         themeMode: mode,
-        home: const MainScreen(nombreUsuario: 'sixseven'),
+        // La app arranca en el login. Antes entraba directo a MainScreen con
+        // un usuario de prueba; ahora MainScreen se construye recién cuando
+        // `POST /api/v1/auth/login` (o `/register`) devolvió una sesión.
+        home: const LoginScreen(),
       ),
     );
   }

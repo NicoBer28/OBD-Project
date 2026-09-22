@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:obd_app/core/constants/app_icons.dart';
 import 'package:obd_app/core/native_bridge.dart';
 import 'package:obd_app/core/theme/app_theme.dart';
+import 'package:obd_app/core/utils/trip_format.dart';
+import 'package:obd_app/data/api/obd_api.dart';
 import 'package:obd_app/models/models.dart';
 import 'package:obd_app/ui/widgets/widgets.dart';
 
@@ -19,23 +21,28 @@ class VitalData {
   });
 }
 
+/// El número grande del inicio: la nafta que reportó el dongle.
+///
+/// Antes mostraba autonomía en km, pero eso pedía la capacidad del tanque y
+/// el consumo, que ni la API ni el OBD conocen. El nivel de nafta (porcentaje
+/// del tanque) y el odómetro sí son datos reales del auto.
 class CarHero extends StatelessWidget {
-  final double fuelPercent;
-  final double fuelCapacityLiters;
-  final int autonomyKm;
-  final double fuelLiters;
+  /// Porcentaje del tanque, o null si el auto nunca reportó.
+  final int? fuelPercent;
+  final int? mileage;
+  final DateTime? lastSeen;
 
   const CarHero({
     super.key,
     required this.fuelPercent,
-    required this.fuelCapacityLiters,
-    required this.autonomyKm,
-    required this.fuelLiters,
+    required this.mileage,
+    required this.lastSeen,
   });
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final fuel = fuelPercent;
 
     return SectionCard(
       radius: 20,
@@ -51,14 +58,14 @@ class CarHero extends StatelessWidget {
             children: [
               Expanded(
                 child: TextStack(
-                  title: '$autonomyKm km',
+                  title: fuel == null ? '—' : '$fuel%',
                   titleStyle: TextStyle(
                     fontSize: 30,
                     fontWeight: FontWeight.w800,
                     letterSpacing: -1,
                     color: t.text,
                   ),
-                  subtitle: 'AUTONOMÍA',
+                  subtitle: 'NAFTA',
                   subtitleStyle: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
@@ -70,15 +77,17 @@ class CarHero extends StatelessWidget {
               ),
               TextStack(
                 crossAxisAlignment: CrossAxisAlignment.end,
-                title: '${fuelPercent.round()}%',
+                title: mileage == null
+                    ? 'Sin odómetro'
+                    : TripFormat.km(mileage!),
                 titleStyle: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w800,
                   color: t.text,
                 ),
-                subtitle:
-                    '${fuelLiters.toStringAsFixed(0)} L de '
-                    '${fuelCapacityLiters.toStringAsFixed(0)}',
+                subtitle: lastSeen == null
+                    ? 'sin lecturas todavía'
+                    : 'leído ${TripFormat.ago(lastSeen!)}',
                 subtitleStyle: TextStyle(fontSize: 11, color: t.muted),
                 spacing: 3,
               ),
@@ -88,7 +97,7 @@ class CarHero extends StatelessWidget {
           ClipRRect(
             borderRadius: BorderRadius.circular(99),
             child: LinearProgressIndicator(
-              value: (fuelPercent / 100).clamp(0, 1),
+              value: ((fuel ?? 0) / 100).clamp(0, 1),
               minHeight: 8,
               backgroundColor: t.surface2,
               color: t.accent,
@@ -160,25 +169,35 @@ class VitalCard extends StatelessWidget {
   }
 }
 
+/// La última posición que reportó el dongle (snapshot de `GET /cars`).
 class ParkingCard extends StatelessWidget {
-  final CarData car;
+  final Car car;
+  final VoidCallback? onTap;
 
-  const ParkingCard({super.key, required this.car});
+  const ParkingCard({super.key, required this.car, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final hasPosition = car.hasPosition;
 
     return SectionCard(
       padding: const EdgeInsets.all(13),
       child: Row(
         children: [
-          IconBadge(icon: AppIcons.location, color: t.accent3),
+          IconBadge(
+            icon: AppIcons.location,
+            color: hasPosition ? t.accent3 : t.muted,
+          ),
           const SizedBox(width: 11),
           Expanded(
             child: TextStack(
-              title: car.parkingAddress,
-              subtitle: '${car.parkingMeta} · lo dejó ${car.parkedBy}',
+              title: hasPosition
+                  ? TripFormat.coordinates(car.latitude!, car.longitude!)
+                  : 'Sin ubicación todavía',
+              subtitle: hasPosition
+                  ? 'última posición · ${car.snapshotAt == null ? 'reportada' : TripFormat.ago(car.snapshotAt!)}'
+                  : 'Aparece cuando el dongle reporte GPS.',
               titleStyle: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
@@ -187,7 +206,8 @@ class ParkingCard extends StatelessWidget {
               subtitleStyle: TextStyle(fontSize: 11, color: t.muted),
             ),
           ),
-          TextButton(onPressed: () {}, child: const Text('Ir')),
+          if (hasPosition && onTap != null)
+            TextButton(onPressed: onTap, child: const Text('Ver')),
         ],
       ),
     );

@@ -127,14 +127,20 @@ class TripsContent extends StatelessWidget {
         ),
         const SizedBox(height: 9),
         SectionCard(
-          child: Column(
-            children: [
-              for (var i = 0; i < trips.length; i++) ...[
-                TripRow(trip: trips[i]),
-                if (i < trips.length - 1) const Divider(height: 18),
-              ],
-            ],
-          ),
+          child: trips.isEmpty
+              ? Text(
+                  'Todavía no hay viajes en este auto. Arrancá uno desde la '
+                  'pestaña Auto.',
+                  style: TextStyle(fontSize: 12, color: t.muted),
+                )
+              : Column(
+                  children: [
+                    for (var i = 0; i < trips.length; i++) ...[
+                      TripRow(trip: trips[i]),
+                      if (i < trips.length - 1) const Divider(height: 18),
+                    ],
+                  ],
+                ),
         ),
       ],
     );
@@ -165,7 +171,7 @@ class TripRow extends StatelessWidget {
             titleStyle: TextStyle(
               fontSize: 13,
               fontWeight: FontWeight.w700,
-              color: t.text,
+              color: trip.active ? t.accent : t.text,
             ),
             subtitleStyle: TextStyle(fontSize: 11, color: t.muted),
           ),
@@ -188,6 +194,12 @@ class SummaryContent extends StatelessWidget {
 
   const SummaryContent({super.key, required this.data});
 
+  Color _deltaColor(AppTokens t, ActivityStat stat) => switch (stat.improved) {
+    true => t.success,
+    false => t.warning,
+    null => t.muted,
+  };
+
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
@@ -200,10 +212,10 @@ class SummaryContent extends StatelessWidget {
               child: StatCard(
                 icon: AppIcons.trip,
                 label: 'Distancia',
-                value: data.distance,
-                unit: 'km',
-                delta: '↑ 12% vs. agosto',
-                deltaColor: t.success,
+                value: data.distance.value,
+                unit: data.distance.unit,
+                delta: data.distance.delta,
+                deltaColor: _deltaColor(t, data.distance),
               ),
             ),
             const SizedBox(width: 8),
@@ -211,10 +223,10 @@ class SummaryContent extends StatelessWidget {
               child: StatCard(
                 icon: AppIcons.clock,
                 label: 'Al volante',
-                value: data.drivingTime,
-                unit: '',
-                delta: '↑ 8%',
-                deltaColor: t.success,
+                value: data.drivingTime.value,
+                unit: data.drivingTime.unit,
+                delta: data.drivingTime.delta,
+                deltaColor: _deltaColor(t, data.drivingTime),
               ),
             ),
           ],
@@ -226,29 +238,35 @@ class SummaryContent extends StatelessWidget {
               child: StatCard(
                 icon: AppIcons.fuel,
                 label: 'Nafta',
-                value: data.fuel,
-                unit: 'L · 11,1 L/100',
-                delta: '↓ 6% de consumo',
-                deltaColor: t.success,
+                value: data.fuel.value,
+                unit: data.fuel.unit,
+                delta: data.fuel.delta,
+                deltaColor: _deltaColor(t, data.fuel),
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
               child: StatCard(
-                icon: AppIcons.location,
-                label: 'Más visitado',
-                value: data.mostVisited,
-                unit: '',
-                delta: '8 viajes · 96 km',
-                deltaColor: t.muted,
+                icon: AppIcons.car,
+                label: 'Viajes',
+                value: data.trips.value,
+                unit: data.trips.unit,
+                delta: data.trips.delta,
+                deltaColor: _deltaColor(t, data.trips),
               ),
             ),
           ],
         ),
         const SizedBox(height: 12),
-        ConsumptionChart(values: data.consumption),
-        const SizedBox(height: 12),
-        DriverBreakdown(data: data.driverDistances),
+        ConsumptionChart(
+          values: data.consumption,
+          labels: data.consumptionLabels,
+          peak: data.consumptionPeak,
+        ),
+        if (data.driverDistances.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          DriverBreakdown(data: data.driverDistances),
+        ],
       ],
     );
   }
@@ -342,7 +360,16 @@ class StatCard extends StatelessWidget {
 class ConsumptionChart extends StatelessWidget {
   final List<double> values;
 
-  const ConsumptionChart({super.key, required this.values});
+  /// Inicio, medio y fin del eje.
+  final List<String> labels;
+  final String peak;
+
+  const ConsumptionChart({
+    super.key,
+    required this.values,
+    required this.labels,
+    required this.peak,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -359,9 +386,9 @@ class ConsumptionChart extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SectionHeader(
-            title: 'Consumo por día',
-            trailingText: 'pico: sáb 14',
+          SectionHeader(
+            title: 'Nafta usada por ${values.length > 31 ? 'semana' : 'día'}',
+            trailingText: peak.isEmpty ? 'sin consumo registrado' : peak,
           ),
           const SizedBox(height: 13),
           SizedBox(
@@ -372,7 +399,9 @@ class ConsumptionChart extends StatelessWidget {
                 for (final value in values)
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 2),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: values.length > 14 ? 1 : 2,
+                      ),
                       child: FractionallySizedBox(
                         heightFactor:
                             value / safeDivisor, // Use the safe divisor here
@@ -400,9 +429,8 @@ class ConsumptionChart extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('1 sep', style: TextStyle(fontSize: 10, color: t.muted)),
-              Text('15 sep', style: TextStyle(fontSize: 10, color: t.muted)),
-              Text('30 sep', style: TextStyle(fontSize: 10, color: t.muted)),
+              for (final label in labels)
+                Text(label, style: TextStyle(fontSize: 10, color: t.muted)),
             ],
           ),
         ],
@@ -485,7 +513,6 @@ class DriverBreakdown extends StatelessWidget {
       ),
     );
   }
-
 
   double _parseKm(String value) {
     final normalized = value
