@@ -101,5 +101,8 @@ class ObdApi {
   /// Where this instance is pointed.
   ApiConfig get config => client.config;
 
+  /// Wakes a sleeping deployment (see `ApiClient.warmUp`). Safe to call often.
+  Future<void> warmUp() => client.warmUp();
+
   void dispose() => client.close();
 }

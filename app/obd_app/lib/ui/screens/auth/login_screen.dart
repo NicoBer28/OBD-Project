@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:obd_app/core/theme/app_theme.dart';
 import 'package:obd_app/data/api/obd_api.dart';
@@ -29,9 +31,23 @@ class _LoginScreenState extends State<LoginScreen> {
   // no dispara dos logins.
   bool _cargando = false;
 
+  // Pasados unos segundos sin respuesta avisamos que el servidor puede estar
+  // despertando (Vercel duerme el contenedor y el primer pedido tarda ~20 s).
+  bool _lento = false;
+  Timer? _avisoLento;
+
+  @override
+  void initState() {
+    super.initState();
+    // Despertamos el servidor mientras la persona escribe: en Vercel el
+    // contenedor duerme a los pocos minutos y tarda ~20 s en volver.
+    ObdApi.instance.warmUp();
+  }
+
   // Los controllers deben liberarse cuando el State deja de existir.
   @override
   void dispose() {
+    _avisoLento?.cancel();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -44,7 +60,13 @@ class _LoginScreenState extends State<LoginScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
 
-    setState(() => _cargando = true);
+    setState(() {
+      _cargando = true;
+      _lento = false;
+    });
+    _avisoLento = Timer(const Duration(seconds: 5), () {
+      if (mounted && _cargando) setState(() => _lento = true);
+    });
 
     try {
       await api.auth.login(
@@ -82,7 +104,13 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       );
     } finally {
-      if (mounted) setState(() => _cargando = false);
+      _avisoLento?.cancel();
+      if (mounted) {
+        setState(() {
+          _cargando = false;
+          _lento = false;
+        });
+      }
     }
   }
 
@@ -201,6 +229,14 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ),
 
+                if (_lento) ...[
+                  const SizedBox(height: 10),
+                  const Text(
+                    'El servidor está despertando, puede tardar unos segundos…',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: AppColors.muted),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 // Botón para ir a Registro
                 TextButton(

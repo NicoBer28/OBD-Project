@@ -60,6 +60,7 @@ class ApiClient {
   final bool _ownsHttpClient;
 
   Future<bool>? _refreshInFlight;
+  Future<void>? _warmUpInFlight;
 
   static final RegExp _refreshCookiePattern = RegExp(
     '(?:^|[,;]\\s*)$refreshCookieName=([^;,]*)',
@@ -148,7 +149,11 @@ class ApiClient {
     }
 
     if (response.statusCode >= 400) {
-      throw ApiException.fromBody(response.statusCode, _text(response), uri: uri);
+      throw ApiException.fromBody(
+        response.statusCode,
+        _text(response),
+        uri: uri,
+      );
     }
 
     return ApiResponse(
@@ -170,6 +175,42 @@ class ApiClient {
     final future = _refresh();
     _refreshInFlight = future;
     return future.whenComplete(() => _refreshInFlight = null);
+  }
+
+  /// Wakes the server up without needing a session.
+  ///
+  /// The dev API runs on Vercel, which scales the container to zero after a
+  /// couple of idle minutes and takes 20-25 s to answer the next request.
+  /// Hitting the public `/actuator/health` as soon as the app opens (or comes
+  /// back to the foreground) pays that cost while the user is still looking
+  /// at the screen, instead of on their first tap. Fire and forget: every
+  /// failure is swallowed, and concurrent callers share one request.
+  Future<void> warmUp() {
+    final running = _warmUpInFlight;
+    if (running != null) return running;
+
+    final future = _warmUp();
+    _warmUpInFlight = future;
+    return future.whenComplete(() => _warmUpInFlight = null);
+  }
+
+  Future<void> _warmUp() async {
+    final host = config.baseUrl.endsWith('/')
+        ? config.baseUrl.substring(0, config.baseUrl.length - 1)
+        : config.baseUrl;
+    try {
+      final request = http.Request('GET', Uri.parse('$host/actuator/health'));
+      request.headers['Accept'] = 'application/json';
+      // Longer than the normal timeout: a cold start is exactly what this is
+      // waiting for.
+      final streamed = await _http
+          .send(request)
+          .timeout(const Duration(seconds: 60));
+      await streamed.stream.drain<void>();
+    } catch (_) {
+      // Offline, or the server is simply not there: nothing to do about it
+      // here — the next real call reports its own error.
+    }
   }
 
   /// Closes the underlying HTTP client, unless one was supplied by the caller

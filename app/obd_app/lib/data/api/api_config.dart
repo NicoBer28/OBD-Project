@@ -18,7 +18,7 @@
 class ApiConfig {
   const ApiConfig({
     required this.baseUrl,
-    this.timeout = const Duration(seconds: 15),
+    this.timeout = const Duration(seconds: 45),
   });
 
   /// Scheme + host + port, no trailing slash, no `/api/v1`.
@@ -26,6 +26,11 @@ class ApiConfig {
 
   /// Applied per request. The phone is often on a flaky network, so a request
   /// that hangs must fail rather than block the UI for ever.
+  ///
+  /// 45 s and not 15: the dev API runs on Vercel, and a Spring Boot container
+  /// waking from a cold start answers the first request in 20-25 s (measured
+  /// 22.9 s for `register`). With a shorter timeout that request was reported
+  /// as a network failure *after* the server had created the account.
   final Duration timeout;
 
   /// Everything the API exposes lives under this prefix.
@@ -33,7 +38,8 @@ class ApiConfig {
 
   static const String _defaultBaseUrl = String.fromEnvironment(
     'OBD_API_BASE_URL',
-    defaultValue: 'https://obd-project-git-development-nicober2005-6633s-projects.vercel.app/',
+    defaultValue:
+        'https://obd-project-git-development-nicober2005-6633s-projects.vercel.app/',
   );
 
   /// What the app uses unless a test passes something else.
