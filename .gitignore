@@ -3,6 +3,8 @@ sdkconfig
 sdkconfig.old
 dependencies.lock
 
+.vscode/
+
 .DS_Store
 
 hardware/.vscode
