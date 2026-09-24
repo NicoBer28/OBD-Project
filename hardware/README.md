@@ -9,7 +9,7 @@ Entorno de desarrollo de firmware en ESP-IDF utilizando Docker y VS Code Dev Con
 
 ### 2. Descargar la imagen oficial de espressif
 ```bash
-docker pull espressif/idf:latest
+docker pull espressif/idf:v6.1
 ```
 ### 3. Instalar la extensión Dev Containers en VS Code 
 - Tambien llamada por ID `ms-vscode-remote.remote-containers`
@@ -60,7 +60,16 @@ code .
 ```bash
 idf.py build
 ```
-### 3. Flashear la ESP32 y abrir el monitor serial simultáneamente:
+- Se van a descargar todas las dependencias del proyecto
+### 3. La libreria del mcp2515 utilizada tiene un error de dependencias en su `CMakeLists.txt`. Para corregirlo ejecutar, desde el directorio actual:
+
+```bash
+echo "idf_component_register(SRCS "mcp2515.cpp"
+                    INCLUDE_DIRS "include"
+                    REQUIRES esp_driver_spi)" > ./managed_components/mcp2515/CMakeLists.txt
+```
+- Tambien se puede editar directamente el archivo
+### 4. Flashear la ESP32 y abrir el monitor serial simultáneamente:
 
 ```bash
 idf.py flash monitor
