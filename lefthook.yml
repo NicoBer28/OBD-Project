@@ -16,7 +16,7 @@ commit-msg:
     conventional:
       run: .githooks/commit-msg {1}
 
-#pre-push:
-#commands:
-#check:
-#run: make check
+pre-push:
+  commands:
+    check:
+      run: make check

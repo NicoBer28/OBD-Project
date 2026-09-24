@@ -15,27 +15,6 @@ file that each developer creates locally with their own team ID.
 `project.pbxproj` no longer sets it directly, so nobody's build
 overwrites anybody else's config.
 
-## One-time: apply the fix to your local clone
-
-From the repo root, on the `hotfix/runners` branch (or wherever you're
-merging this):
-
-```bash
-git am 0001-fix-ios-stop-committing-per-developer-signing-team-t.patch
-git am 0002-docs-add-iOS-build-signing-setup-guide.patch
-```
-
-If `git am` complains that the patch doesn't apply (e.g. you've moved
-on and the base files changed), fall back to:
-
-```bash
-git apply --3way 0001-fix-ios-stop-committing-per-developer-signing-team-t.patch
-git add -A
-git commit -m "fix(ios): stop committing per-developer signing team"
-```
-
-This only needs to happen once per clone/branch, same as any other merge.
-
 ## One-time per developer: local signing config
 
 Everyone who wants to build for iOS needs their own
@@ -48,13 +27,13 @@ Everyone who wants to build for iOS needs their own
    **Team** dropdown. (Also visible at
    https://developer.apple.com/account/#/membership.)
 3. From `app/obd_app`, copy the template:
-   ```bash
-   cp ios/Flutter/Local.xcconfig.example ios/Flutter/Local.xcconfig
-   ```
+    ```bash
+    cp ios/Flutter/Local.xcconfig.example ios/Flutter/Local.xcconfig
+    ```
 4. Edit `ios/Flutter/Local.xcconfig` and set:
-   ```
-   DEVELOPMENT_TEAM = <your team id>
-   ```
+    ```
+    DEVELOPMENT_TEAM = <your team id>
+    ```
 5. Never `git add` this file — it's in `ios/.gitignore` on purpose.
 
 Everyone can keep sharing the same bundle identifier
