@@ -36,9 +36,8 @@ static const char *TAG_SYS = "MAIN";
 #define PID_FUEL_LEVEL      0x2F
 
 // ============================================================================
-// ESTRUCTURAS DE DATOS UNIFICADAS (MAIN.CPP)
+// ESTRUCTURAS DE DATOS
 // ============================================================================
-
 enum PacketType {
     ID_SPEED_RPM = 0x01,
     ID_ENGINE_STATUS = 0x02
@@ -63,26 +62,24 @@ struct QueueMessage {
 };
 
 // ============================================================================
-// VARIABLES GLOBALES (Recursos compartidos)
+// RECURSOS COMPARTIDOS
 // ============================================================================
 bool deviceConnected = false;
 NimBLECharacteristic* pTxCharacteristic = nullptr;
 
-// RTOS Primitives
 SemaphoreHandle_t can_rx_semaphore = NULL;  
 QueueHandle_t ble_tx_queue = NULL;          
 SemaphoreHandle_t obd_data_mutex = NULL;        
 
-spi_device_handle_t spi_handle; // Global
+spi_device_handle_t spi_handle;
 MCP2515* mcp2515_ptr = nullptr;             
 
-// Estado actual global (protegido)
 SpeedRpmPacket currentSpeedRpm;
 EngTempFuelPacket currentEngTempFuel;
 uint32_t supported_pids_01_20 = 0; 
 
 // ============================================================================
-// FUNCIONES AUXILIARES & CALLBACKS
+// AUXILIARES Y CALLBACKS
 // ============================================================================
 
 static void IRAM_ATTR gpioInterruptCan(void *args) {
@@ -124,7 +121,7 @@ class MyRxCallbacks: public NimBLECharacteristicCallbacks {
 };
 
 // ============================================================================
-// MÓDULOS DE INICIALIZACIÓN
+// INITS
 // ============================================================================
 
 void init_spi_and_mcp() {
@@ -194,7 +191,7 @@ void init_ble() {
 }
 
 // ============================================================================
-// FUNCIONES OBD2
+// OBD
 // ============================================================================
 
 void request_obd_pid(uint8_t pid) {
@@ -206,7 +203,7 @@ void request_obd_pid(uint8_t pid) {
     tx_frame.data[1] = 0x01;
     tx_frame.data[2] = pid;
     for(int i = 3; i < 8; i++) {
-        tx_frame.data[i] = 0xCC; // PAD
+        tx_frame.data[i] = 0xCC;
     }
     mcp2515_ptr->sendMessage(&tx_frame);
 }
@@ -273,7 +270,7 @@ void process_obd_response(const can_frame& frame) {
 }
 
 // ============================================================================
-// TAREAS FREERTOS
+// TASK OBD
 // ============================================================================
 
 void vOBDTask(void *pvParameters) {
@@ -329,6 +326,10 @@ void vOBDTask(void *pvParameters) {
     }
 }
 
+
+// ============================================================================
+// TASK BT
+// ============================================================================
 void vBLETask(void *pvParameters) {
     ESP_LOGI(TAG_BLE, "Tarea BLE Iniciada en core %d", xPortGetCoreID());
     QueueMessage rx_packet;
@@ -345,12 +346,12 @@ void vBLETask(void *pvParameters) {
             }
         }
         
-        vTaskDelay(pdMS_TO_TICKS(20)); // Limitar tasa de envío
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 
 // ============================================================================
-// APP MAIN
+// START
 // ============================================================================
 extern "C" void app_main(void) {
     ESP_LOGI(TAG_SYS, "Arrancando sistema OBD2...");

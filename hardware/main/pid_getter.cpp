@@ -9,7 +9,7 @@
 
 static const char *TAG = "OBD_SCAN";
 
-// Pines de SPI y MCP
+// pines SPI y MCP
 #define MCP2515_MISO_PIN GPIO_NUM_19
 #define MCP2515_MOSI_PIN GPIO_NUM_23
 #define MCP2515_CLK_PIN GPIO_NUM_18
@@ -21,7 +21,7 @@ bool requestVIN(MCP2515 &mcp2515) {
     request.can_dlc = 8;
     request.data[0] = 0x02; // length
     request.data[1] = 0x09; // Mode 09
-    request.data[2] = 0x02; // PID 02 - VIN
+    request.data[2] = 0x02; // VIN
     for(int i = 3; i < 8; i++) request.data[i] = 0xCC; // padding
 
     if (mcp2515.sendMessage(&request) != MCP2515::ERROR_OK) {
@@ -35,7 +35,7 @@ bool requestVIN(MCP2515 &mcp2515) {
     uint8_t payload[64]; 
     uint32_t ecu_rx_id = 0;
 
-    while ((esp_timer_get_time() - start) < 2000000) { // 2s timeout max para todo el proceso
+    while ((esp_timer_get_time() - start) < 2000000) { // 2s timeout max
         can_frame response;
         if (mcp2515.readMessage(&response) == MCP2515::ERROR_OK) {
             if (response.can_id >= 0x7E8 && response.can_id <= 0x7EF) {
@@ -50,39 +50,39 @@ bool requestVIN(MCP2515 &mcp2515) {
                         break;
                     }
                 } 
-                else if (pci == 1) { // First Frame (lo normal para el VIN)
+                else if (pci == 1) { // First Frame (VIN)
                     total_payload_len = ((response.data[0] & 0x0F) << 8) | response.data[1];
                     if (response.data[2] == 0x49 && response.data[3] == 0x02) {
-                        ecu_rx_id = response.can_id - 8; // Ej: 7E8 -> 7E0 para Flow Control
+                        ecu_rx_id = response.can_id - 8;
                         for(int i = 0; i < 6; i++) {
                             payload[received_len++] = response.data[2+i];
                         }
                         
-                        // Enviar Flow Control Frame para pedir el resto de la data
+                        // FCF para pedir el resto de la data
                         can_frame fc = {};
                         fc.can_id = ecu_rx_id;
                         fc.can_dlc = 8;
-                        fc.data[0] = 0x30; // Flow Control, continue to send
-                        fc.data[1] = 0x00; // Block Size = 0 (send all)
-                        fc.data[2] = 0x00; // STMin = 0 (no delay)
+                        fc.data[0] = 0x30; // continue to send
+                        fc.data[1] = 0x00; // send all
+                        fc.data[2] = 0x00; // no delay
                         for(int i = 3; i < 8; i++) fc.data[i] = 0xCC;
                         mcp2515.sendMessage(&fc);
-                        start = esp_timer_get_time(); // Reset timeout
+                        start = esp_timer_get_time(); // reset timeout
                     }
                 } 
-                else if (pci == 2) { // Consecutive Frame
+                else if (pci == 2) { // frame siguiente
                     for (int i = 1; i < 8 && received_len < total_payload_len; i++) {
                         payload[received_len++] = response.data[i];
                     }
                     if (received_len >= total_payload_len) break;
-                    start = esp_timer_get_time(); // Reset timeout esperando al proximo
+                    start = esp_timer_get_time(); // Reset timeouts
                 }
             }
         }
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     
-    // Parsear el payload (ej. 49 02 01 XX YY ZZ ...)
+    // parseo payload
     if (received_len > 3 && payload[0] == 0x49 && payload[1] == 0x02) {
         char vin_str[18];
         memset(vin_str, 0, sizeof(vin_str));
@@ -145,7 +145,6 @@ void querySupportedPIDs(MCP2515 &mcp2515) {
                         
                         found = true;
                         
-                        // Si el bit 0 de la mascara es 0, no soporta la proxima pagina de PIDs
                         if ((mask & 1) == 0) {
                             return; 
                         }
@@ -160,7 +159,7 @@ void querySupportedPIDs(MCP2515 &mcp2515) {
             ESP_LOGW(TAG, "Timeout esperando respuesta para mascara de PID %02X", base_pid);
             break; 
         }
-        vTaskDelay(pdMS_TO_TICKS(100)); // Pequena pausa entre requests
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -191,7 +190,7 @@ extern "C" void app_main(void)
     mcp2515.setBitrate(CAN_500KBPS, MCP_8MHZ);
     mcp2515.setNormalMode();
 
-    vTaskDelay(pdMS_TO_TICKS(2000)); // Esperamos a que la red se estabilice
+    vTaskDelay(pdMS_TO_TICKS(2000));
 
     ESP_LOGI(TAG, "==== INICIANDO SCAN OBD2 ====");
 
