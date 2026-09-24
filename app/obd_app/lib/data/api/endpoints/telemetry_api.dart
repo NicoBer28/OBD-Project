@@ -57,8 +57,8 @@ class TelemetryApi {
     final response = await _client.post(
       '/telemetry',
       body: {
-        if (serial != null) 'serial': serial,
-        if (carId != null) 'carId': carId,
+        'serial': ?serial,
+        'carId': ?carId,
         'readings': readings.map((r) => r.toJson()).toList(),
       },
     );

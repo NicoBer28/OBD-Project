@@ -6,8 +6,7 @@ import 'package:obd_app/models/models.dart';
 /// Demo / offline implementation. Same job DemoData does for read-only data,
 /// but mutable: bookings made here show up in the UI until the app restarts.
 class InMemoryReservationRepository implements ReservationRepository {
-  InMemoryReservationRepository([Iterable<Reservation> seed = const []])
-      : _items = [...seed] {
+  InMemoryReservationRepository([Iterable<Reservation> seed = const []]) : _items = [...seed] {
     _sort();
   }
 
@@ -114,8 +113,7 @@ class InMemoryReservationRepository implements ReservationRepository {
 
   void dispose() => _changes.close();
 
-  List<Reservation> _snapshot(String carId) =>
-      List.unmodifiable(_items.where((r) => r.carId == carId));
+  List<Reservation> _snapshot(String carId) => List.unmodifiable(_items.where((r) => r.carId == carId));
 
   void _sort() => _items.sort((a, b) => a.start.compareTo(b.start));
 }

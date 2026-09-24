@@ -123,14 +123,10 @@ class CarTab extends StatelessWidget {
                     ),
                   ),
                   subtitle: Text(
-                    c.isShared
-                        ? '${c.model.label} · ${c.group!.name}'
-                        : c.model.label,
+                    c.isShared ? '${c.model.label} · ${c.group!.name}' : c.model.label,
                     style: TextStyle(fontSize: 11, color: t.muted),
                   ),
-                  trailing: c.id == controller.car?.id
-                      ? Icon(AppIcons.check, color: t.accent)
-                      : null,
+                  trailing: c.id == controller.car?.id ? Icon(AppIcons.check, color: t.accent) : null,
                   onTap: () => Navigator.pop(sheetContext, c),
                 ),
               const Divider(),
@@ -220,16 +216,11 @@ class CarTab extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
-                      tooltip: controller.cars.length > 1
-                          ? 'Cambiar de auto'
-                          : 'Mis autos',
-                      onPressed: () => controller.cars.length > 1
-                          ? _switchCar(context)
-                          : MyCarsScreen.show(context, controller),
+                      tooltip: controller.cars.length > 1 ? 'Cambiar de auto' : 'Mis autos',
+                      onPressed: () =>
+                          controller.cars.length > 1 ? _switchCar(context) : MyCarsScreen.show(context, controller),
                       icon: Icon(
-                        controller.cars.length > 1
-                            ? AppIcons.swap
-                            : AppIcons.settings,
+                        controller.cars.length > 1 ? AppIcons.swap : AppIcons.settings,
                       ),
                     ),
                     ProfileAvatar(
@@ -250,9 +241,7 @@ class CarTab extends StatelessWidget {
                 items: [
                   VitalData(
                     label: 'Batería',
-                    value: car.batteryLevel == null
-                        ? '—'
-                        : '${car.batteryLevel}%',
+                    value: car.batteryLevel == null ? '—' : '${car.batteryLevel}%',
                     icon: AppIcons.battery,
                   ),
                   VitalData(
@@ -262,12 +251,8 @@ class CarTab extends StatelessWidget {
                         : controller.activeTripIsMine
                         ? 'Con vos'
                         : 'En viaje',
-                    icon: active == null
-                        ? Icons.check_circle_outline_rounded
-                        : AppIcons.trip,
-                    valueColor: active == null
-                        ? AppColors.success
-                        : AppColors.warning,
+                    icon: active == null ? Icons.check_circle_outline_rounded : AppIcons.trip,
+                    valueColor: active == null ? AppColors.success : AppColors.warning,
                   ),
                   VitalData(
                     label: 'Dongle',

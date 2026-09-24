@@ -34,8 +34,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _apellidoController = TextEditingController(); // Para userLastName
   final _emailController = TextEditingController(); // Para userEmail
   final _passwordController = TextEditingController(); // Para userPassword
-  final _telefonoController =
-      TextEditingController(); // Para userPhone (Opcional)
+  final _telefonoController = TextEditingController(); // Para userPhone (Opcional)
 
   bool _cargando = false;
 
@@ -262,8 +261,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 TextFormField(
                   controller: _emailController,
                   enabled: !_cargando,
-                  keyboardType: TextInputType
-                      .emailAddress, // Muestra el teclado con el "@"
+                  keyboardType: TextInputType.emailAddress, // Muestra el teclado con el "@"
                   decoration: const InputDecoration(
                     labelText: 'Correo electrónico',
                     border: OutlineInputBorder(),

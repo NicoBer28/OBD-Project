@@ -29,12 +29,12 @@ DateTime _tomorrowAt(int hour) {
 }
 
 Reservation _booking(String id, String userId, int from, int to) => Reservation(
-      id: id,
-      carId: 'car',
-      userId: userId,
-      start: _tomorrowAt(from),
-      end: _tomorrowAt(to),
-    );
+  id: id,
+  carId: 'car',
+  userId: userId,
+  start: _tomorrowAt(from),
+  end: _tomorrowAt(to),
+);
 
 Future<(InMemoryReservationRepository, ReservationsController)> _build([
   List<Reservation> seed = const [],

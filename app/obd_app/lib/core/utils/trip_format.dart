@@ -61,8 +61,7 @@ abstract final class TripFormat {
   }
 
   /// 'septiembre'
-  static String monthName(DateTime when) =>
-      _monthsLong[when.toLocal().month - 1];
+  static String monthName(DateTime when) => _monthsLong[when.toLocal().month - 1];
 
   /// '18:30'
   static String clock(DateTime t) {

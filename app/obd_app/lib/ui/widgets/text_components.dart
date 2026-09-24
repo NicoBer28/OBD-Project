@@ -164,8 +164,7 @@ class SectionHeader extends StatelessWidget {
             ),
           ),
         ),
-        if (trailingText != null)
-          Text(trailingText!, style: TextStyle(fontSize: 10, color: t.muted)),
+        if (trailingText != null) Text(trailingText!, style: TextStyle(fontSize: 10, color: t.muted)),
         if (actionLabel != null)
           TextButton.icon(
             onPressed: onAction,

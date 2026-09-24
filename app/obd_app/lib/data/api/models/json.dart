@@ -56,8 +56,5 @@ List<T> parseList<T>(
   T Function(Map<String, dynamic> json) parse,
 ) {
   if (body is! List) return const [];
-  return body
-      .whereType<Map<String, dynamic>>()
-      .map(parse)
-      .toList(growable: false);
+  return body.whereType<Map<String, dynamic>>().map(parse).toList(growable: false);
 }

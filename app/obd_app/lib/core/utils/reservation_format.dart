@@ -5,15 +5,23 @@ abstract final class ReservationFormat {
   static const _weekdays = ['LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB', 'DOM'];
   static const _weekdaysLower = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];
   static const _months = [
-    'ene', 'feb', 'mar', 'abr', 'may', 'jun',
-    'jul', 'ago', 'sep', 'oct', 'nov', 'dic',
+    'ene',
+    'feb',
+    'mar',
+    'abr',
+    'may',
+    'jun',
+    'jul',
+    'ago',
+    'sep',
+    'oct',
+    'nov',
+    'dic',
   ];
 
   /// Calendar days from [a] to [b] (ignores the time of day).
   static int daysBetween(DateTime a, DateTime b) {
-    return DateTime.utc(b.year, b.month, b.day)
-        .difference(DateTime.utc(a.year, a.month, a.day))
-        .inDays;
+    return DateTime.utc(b.year, b.month, b.day).difference(DateTime.utc(a.year, a.month, a.day)).inDays;
   }
 
   /// 'HOY', 'MAÑ' or 'SÁB 20' — matches the compact style of the schedule list.
@@ -53,8 +61,7 @@ abstract final class ReservationFormat {
     if (startsAtMidnight && endsAtMidnight && days == 1) return 'todo';
 
     final withMinutes = s.minute != 0 || e.minute != 0;
-    String hm(int hour, int minute) =>
-        withMinutes ? '${_two(hour)}:${_two(minute)}' : _two(hour);
+    String hm(int hour, int minute) => withMinutes ? '${_two(hour)}:${_two(minute)}' : _two(hour);
 
     // An end at exactly 00:00 reads better as 24:00 of the previous day.
     var endHour = e.hour;

@@ -91,8 +91,7 @@ class _ActivityTabState extends State<ActivityTab> {
               EmptyStateCard(
                 icon: AppIcons.activity,
                 title: 'Nada que mostrar todavía',
-                message:
-                    'Cuando tengas un auto vas a ver acá sus viajes y su posición.',
+                message: 'Cuando tengas un auto vas a ver acá sus viajes y su posición.',
                 actionLabel: 'Ir a Auto',
                 actionIcon: AppIcons.car,
                 onAction: widget.onNavigateToCar,
@@ -173,8 +172,7 @@ class _ActivityTabState extends State<ActivityTab> {
                           ),
                           children: [
                             TileLayer(
-                              urlTemplate:
-                                  'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                               userAgentPackageName: 'com.example.obd_app',
                             ),
                             MarkerLayer(

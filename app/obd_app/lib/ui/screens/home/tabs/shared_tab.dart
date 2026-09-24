@@ -148,9 +148,7 @@ class _SharedTabState extends State<SharedTab> {
                     '${g.memberCount} miembros · ${g.callerIsAdmin ? 'administrás' : 'miembro'}',
                     style: TextStyle(fontSize: 11, color: t.muted),
                   ),
-                  trailing: g.id == c.group?.id
-                      ? Icon(AppIcons.check, color: t.accent)
-                      : null,
+                  trailing: g.id == c.group?.id ? Icon(AppIcons.check, color: t.accent) : null,
                   onTap: () => Navigator.pop(sheetContext, g),
                 ),
               const Divider(),
@@ -322,8 +320,7 @@ class _SharedTabState extends State<SharedTab> {
                 group: group,
                 cars: groupCars,
                 selectedCar: car,
-                canShareSelected:
-                    car != null && !c.carIsInGroup && c.carIsSurelyMine,
+                canShareSelected: car != null && !c.carIsInGroup && c.carIsSurelyMine,
                 sharing: _sharing,
                 onShare: _shareCurrentCar,
                 onSelectCar: (chosen) => c.selectCar(chosen.id),
@@ -367,9 +364,7 @@ class _SharedTabState extends State<SharedTab> {
                                 padding: const EdgeInsets.only(top: 6),
                                 child: GestureDetector(
                                   behavior: HitTestBehavior.opaque,
-                                  onTap: reservations.isMine(r)
-                                      ? () => _confirmCancel(reservations, r)
-                                      : null,
+                                  onTap: reservations.isMine(r) ? () => _confirmCancel(reservations, r) : null,
                                   child: ScheduleSlotView(
                                     slot: reservations.slotFor(r),
                                   ),
@@ -450,9 +445,7 @@ class _MembersCard extends StatelessWidget {
                   const SizedBox(width: 9),
                   Expanded(
                     child: TextStack(
-                      title: controller.isMe(members[i].userId)
-                          ? '${members[i].name} (vos)'
-                          : members[i].name,
+                      title: controller.isMe(members[i].userId) ? '${members[i].name} (vos)' : members[i].name,
                       subtitle: members[i].email,
                       titleStyle: TextStyle(
                         fontSize: 12,
@@ -519,9 +512,7 @@ class _GroupCarsCard extends StatelessWidget {
               if (i > 0) const SizedBox(height: 8),
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTap: cars[i].id == selectedCar?.id
-                    ? null
-                    : () => onSelectCar(cars[i]),
+                onTap: cars[i].id == selectedCar?.id ? null : () => onSelectCar(cars[i]),
                 child: Row(
                   children: [
                     IconBadge(
@@ -534,8 +525,7 @@ class _GroupCarsCard extends StatelessWidget {
                         title: cars[i].name,
                         subtitle: [
                           cars[i].model.label,
-                          if (cars[i].licensePlate != null)
-                            cars[i].licensePlate!,
+                          if (cars[i].licensePlate != null) cars[i].licensePlate!,
                         ].join(' · '),
                         titleStyle: TextStyle(
                           fontSize: 13,

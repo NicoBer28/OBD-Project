@@ -94,8 +94,7 @@ void main() {
     uploader.add(TelemetryEvent(speed: 10, lat: -34.6));
     await uploader.flush();
 
-    final reading =
-        ((jsonDecode(enviada.body) as Map)['readings'] as List).single as Map;
+    final reading = ((jsonDecode(enviada.body) as Map)['readings'] as List).single as Map;
     expect(reading.containsKey('latitude'), isFalse);
     expect(reading.containsKey('longitude'), isFalse);
     uploader.dispose();

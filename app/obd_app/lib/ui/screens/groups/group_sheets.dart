@@ -108,9 +108,7 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
                 prefixIcon: Icon(AppIcons.shared),
                 counterText: '',
               ),
-              validator: (value) => (value == null || value.trim().isEmpty)
-                  ? 'Ponele un nombre'
-                  : null,
+              validator: (value) => (value == null || value.trim().isEmpty) ? 'Ponele un nombre' : null,
             ),
             const SizedBox(height: 20),
             SizedBox(
@@ -190,8 +188,7 @@ class _InviteSheetState extends State<InviteSheet> {
           context,
           error,
           forbidden: 'Solo un administrador del grupo puede invitar.',
-          conflict:
-              'Esa persona ya es parte del grupo (o ya tiene una invitación pendiente).',
+          conflict: 'Esa persona ya es parte del grupo (o ya tiene una invitación pendiente).',
           notFound: 'Ya no sos parte de este grupo.',
         );
       }

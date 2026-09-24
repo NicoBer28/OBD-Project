@@ -126,9 +126,7 @@ class PendingInvitationsCard extends StatelessWidget {
               const SizedBox(width: 7),
               Expanded(
                 child: Text(
-                  invitations.length == 1
-                      ? 'Te invitaron a un grupo'
-                      : 'Te invitaron a ${invitations.length} grupos',
+                  invitations.length == 1 ? 'Te invitaron a un grupo' : 'Te invitaron a ${invitations.length} grupos',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w800,
@@ -154,9 +152,7 @@ class PendingInvitationsCard extends StatelessWidget {
                   ),
                 ),
                 FilledButton(
-                  onPressed: acceptingId == null
-                      ? () => onAccept(invitations[i])
-                      : null,
+                  onPressed: acceptingId == null ? () => onAccept(invitations[i]) : null,
                   child: acceptingId == invitations[i].id
                       ? const SizedBox(
                           width: 16,

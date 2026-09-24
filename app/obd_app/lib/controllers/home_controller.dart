@@ -86,8 +86,7 @@ class HomeController extends ChangeNotifier {
   }
 
   /// ¿El auto seleccionado está compartido con el grupo seleccionado?
-  bool get carIsInGroup =>
-      car != null && group != null && car!.group?.id == group!.id;
+  bool get carIsInGroup => car != null && group != null && car!.group?.id == group!.id;
 
   /// Un auto sin grupo solo puede verlo su dueño, así que si está en mi lista
   /// y no tiene grupo, es mío. Con grupo no se puede saber sin probar.
@@ -96,8 +95,7 @@ class HomeController extends ChangeNotifier {
   bool isMe(String userId) => me?.id == userId;
 
   /// ¿El viaje abierto lo estoy manejando yo?
-  bool get activeTripIsMine =>
-      activeTrip != null && me != null && activeTrip!.driverId == me!.id;
+  bool get activeTripIsMine => activeTrip != null && me != null && activeTrip!.driverId == me!.id;
 
   /// Nombre de pila para mostrar junto a un viaje. Yo soy "Vos", como en el
   /// resto de la app; un conductor que no está en el grupo (se fue, o el auto
@@ -376,9 +374,7 @@ class HomeController extends ChangeNotifier {
   /// instante.
   Future<void> acceptInvitation(PendingInvitation invitation) async {
     await _api.invitations.accept(invitation.id);
-    invitations = invitations
-        .where((i) => i.id != invitation.id)
-        .toList(growable: false);
+    invitations = invitations.where((i) => i.id != invitation.id).toList(growable: false);
     try {
       groups = await _api.groups.list();
       // Unirse a un grupo puede traer autos compartidos nuevos.

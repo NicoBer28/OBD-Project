@@ -375,9 +375,7 @@ class ConsumptionChart extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.tokens;
 
-    final maxValue = values.isEmpty
-        ? 1.0
-        : values.reduce((a, b) => a > b ? a : b);
+    final maxValue = values.isEmpty ? 1.0 : values.reduce((a, b) => a > b ? a : b);
 
     // Prevent 0.0 / 0.0 NaN exceptions
     final safeDivisor = maxValue > 0 ? maxValue : 1.0;
@@ -403,8 +401,7 @@ class ConsumptionChart extends StatelessWidget {
                         horizontal: values.length > 14 ? 1 : 2,
                       ),
                       child: FractionallySizedBox(
-                        heightFactor:
-                            value / safeDivisor, // Use the safe divisor here
+                        heightFactor: value / safeDivisor, // Use the safe divisor here
                         alignment: Alignment.bottomCenter,
                         child: DecoratedBox(
                           decoration: BoxDecoration(
@@ -429,8 +426,7 @@ class ConsumptionChart extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              for (final label in labels)
-                Text(label, style: TextStyle(fontSize: 10, color: t.muted)),
+              for (final label in labels) Text(label, style: TextStyle(fontSize: 10, color: t.muted)),
             ],
           ),
         ],
@@ -466,9 +462,7 @@ class DriverBreakdown extends StatelessWidget {
                 height: 96,
                 child: CustomPaint(
                   painter: _DonutPainter(
-                    values: data
-                        .map((item) => _parseKm(item.distance))
-                        .toList(),
+                    values: data.map((item) => _parseKm(item.distance)).toList(),
                     colors: data.map((item) => item.member.color).toList(),
                   ),
                   child: Center(
@@ -515,11 +509,7 @@ class DriverBreakdown extends StatelessWidget {
   }
 
   double _parseKm(String value) {
-    final normalized = value
-        .replaceAll('.', '')
-        .replaceAll('km', '')
-        .replaceAll(',', '.')
-        .trim();
+    final normalized = value.replaceAll('.', '').replaceAll('km', '').replaceAll(',', '.').trim();
 
     return double.tryParse(normalized) ?? 0;
   }

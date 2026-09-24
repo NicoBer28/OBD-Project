@@ -19,14 +19,13 @@ class Reservation {
     required DateTime start,
     required DateTime end,
     this.note,
-  })  : start = start.toUtc(),
-        end = end.toUtc();
+  }) : start = start.toUtc(),
+       end = end.toUtc();
 
   Duration get duration => end.difference(start);
 
   bool overlaps(Reservation other) => overlapsRange(other.start, other.end);
 
   /// Half-open interval test: [start, end) intersects [otherStart, otherEnd).
-  bool overlapsRange(DateTime otherStart, DateTime otherEnd) =>
-      start.isBefore(otherEnd) && otherStart.isBefore(end);
+  bool overlapsRange(DateTime otherStart, DateTime otherEnd) => start.isBefore(otherEnd) && otherStart.isBefore(end);
 }

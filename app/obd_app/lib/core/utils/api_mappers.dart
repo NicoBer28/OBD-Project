@@ -20,15 +20,10 @@ abstract final class ApiMappers {
     AppPalette.member4,
   ];
 
-  static Color memberColor(int index) =>
-      _memberColors[index % _memberColors.length];
+  static Color memberColor(int index) => _memberColors[index % _memberColors.length];
 
   static String initialsOf(String name, String fallback) {
-    final parts = name
-        .trim()
-        .split(RegExp(r'\s+'))
-        .where((p) => p.isNotEmpty)
-        .toList();
+    final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
     if (parts.length >= 2) {
       return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
     }
@@ -68,9 +63,7 @@ abstract final class ApiMappers {
       // tengo el perfil completo y las iniciales quedan como en el avatar.
       return MemberData(
         id: id,
-        initials: isMe
-            ? me.initials
-            : initialsOf(name, email.isNotEmpty ? email[0].toUpperCase() : '?'),
+        initials: isMe ? me.initials : initialsOf(name, email.isNotEmpty ? email[0].toUpperCase() : '?'),
         name: isMe ? 'Vos' : name,
         color: memberColor(index),
         fuelShare: total == 0 ? 0 : used / total,
@@ -94,8 +87,7 @@ abstract final class ApiMappers {
       });
 
     return [
-      for (var i = 0; i < sorted.length; i++)
-        build(sorted[i].userId, sorted[i].name, sorted[i].email, i),
+      for (var i = 0; i < sorted.length; i++) build(sorted[i].userId, sorted[i].name, sorted[i].email, i),
     ];
   }
 
@@ -123,8 +115,7 @@ abstract final class ApiMappers {
     final from = DateTime(n.year, n.month).toUtc();
     return trips
         .where(
-          (t) =>
-              !t.active && t.startedAt != null && !t.startedAt!.isBefore(from),
+          (t) => !t.active && t.startedAt != null && !t.startedAt!.isBefore(from),
         )
         .toList(growable: false);
   }
@@ -162,9 +153,7 @@ abstract final class ApiMappers {
         TripData(
           id: t.id,
           day: t.startedAt == null ? '—' : TripFormat.dayLabel(t.startedAt!, n),
-          route: t.startedAt == null
-              ? 'Viaje'
-              : TripFormat.timeRange(t.startedAt!, t.endedAt),
+          route: t.startedAt == null ? 'Viaje' : TripFormat.timeRange(t.startedAt!, t.endedAt),
           distance: t.distance == null ? '—' : TripFormat.km(t.distance!),
           duration: _tripSubtitle(t),
           drivers: [memberOf(members, t.driverId)],
@@ -249,8 +238,7 @@ abstract final class ApiMappers {
     );
   }
 
-  static int _sumDistance(List<Trip> trips) =>
-      trips.fold(0, (sum, t) => sum + (t.distance ?? 0));
+  static int _sumDistance(List<Trip> trips) => trips.fold(0, (sum, t) => sum + (t.distance ?? 0));
 
   static Duration _sumTime(List<Trip> trips) => trips.fold(
     Duration.zero,
@@ -324,9 +312,7 @@ abstract final class ApiMappers {
     if (buckets.isEmpty || buckets[best] == 0) return '';
     final perWeek = days > 31;
     final start = from.add(Duration(days: perWeek ? best * 7 : best));
-    return perWeek
-        ? 'pico: semana del ${TripFormat.dayMonth(start)}'
-        : 'pico: ${TripFormat.shortDay(start)}';
+    return perWeek ? 'pico: semana del ${TripFormat.dayMonth(start)}' : 'pico: ${TripFormat.shortDay(start)}';
   }
 
   static List<MemberDistance> _driverDistances(
@@ -339,11 +325,9 @@ abstract final class ApiMappers {
       if (d == null || d <= 0) continue;
       byDriver[t.driverId] = (byDriver[t.driverId] ?? 0) + d;
     }
-    final entries = byDriver.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
+    final entries = byDriver.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
     return [
-      for (final e in entries)
-        MemberDistance(memberOf(members, e.key), TripFormat.km(e.value)),
+      for (final e in entries) MemberDistance(memberOf(members, e.key), TripFormat.km(e.value)),
     ];
   }
 }

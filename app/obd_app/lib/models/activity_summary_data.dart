@@ -91,8 +91,7 @@ class ActivitySummaryData {
     required this.driverDistances,
   });
 
-  bool get isEmpty =>
-      consumption.every((v) => v == 0) && driverDistances.isEmpty;
+  bool get isEmpty => consumption.every((v) => v == 0) && driverDistances.isEmpty;
 }
 
 class MemberDistance {

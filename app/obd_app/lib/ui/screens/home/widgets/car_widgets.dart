@@ -77,17 +77,13 @@ class CarHero extends StatelessWidget {
               ),
               TextStack(
                 crossAxisAlignment: CrossAxisAlignment.end,
-                title: mileage == null
-                    ? 'Sin odómetro'
-                    : TripFormat.km(mileage!),
+                title: mileage == null ? 'Sin odómetro' : TripFormat.km(mileage!),
                 titleStyle: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w800,
                   color: t.text,
                 ),
-                subtitle: lastSeen == null
-                    ? 'sin lecturas todavía'
-                    : 'leído ${TripFormat.ago(lastSeen!)}',
+                subtitle: lastSeen == null ? 'sin lecturas todavía' : 'leído ${TripFormat.ago(lastSeen!)}',
                 subtitleStyle: TextStyle(fontSize: 11, color: t.muted),
                 spacing: 3,
               ),
@@ -192,9 +188,7 @@ class ParkingCard extends StatelessWidget {
           const SizedBox(width: 11),
           Expanded(
             child: TextStack(
-              title: hasPosition
-                  ? TripFormat.coordinates(car.latitude!, car.longitude!)
-                  : 'Sin ubicación todavía',
+              title: hasPosition ? TripFormat.coordinates(car.latitude!, car.longitude!) : 'Sin ubicación todavía',
               subtitle: hasPosition
                   ? 'última posición · ${car.snapshotAt == null ? 'reportada' : TripFormat.ago(car.snapshotAt!)}'
                   : 'Aparece cuando el dongle reporte GPS.',
@@ -206,8 +200,7 @@ class ParkingCard extends StatelessWidget {
               subtitleStyle: TextStyle(fontSize: 11, color: t.muted),
             ),
           ),
-          if (hasPosition && onTap != null)
-            TextButton(onPressed: onTap, child: const Text('Ver')),
+          if (hasPosition && onTap != null) TextButton(onPressed: onTap, child: const Text('Ver')),
         ],
       ),
     );

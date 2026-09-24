@@ -28,7 +28,7 @@ class TripsApi {
   Future<Trip> start({required String carId, int? initialFuel}) async {
     final response = await _client.post(
       '/trips',
-      body: {'carId': carId, if (initialFuel != null) 'initialFuel': initialFuel},
+      body: {'carId': carId, 'initialFuel': ?initialFuel},
     );
     return Trip.fromJson(response.asMap);
   }
@@ -91,8 +91,8 @@ class TripsApi {
     final response = await _client.post(
       '/trips/$tripId/finish',
       body: {
-        if (tripFinalFuel != null) 'tripFinalFuel': tripFinalFuel,
-        if (tripDistance != null) 'tripDistance': tripDistance,
+        'tripFinalFuel': ?tripFinalFuel,
+        'tripDistance': ?tripDistance,
       },
     );
     return Trip.fromJson(response.asMap);

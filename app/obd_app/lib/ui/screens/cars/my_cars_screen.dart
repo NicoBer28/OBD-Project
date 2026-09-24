@@ -244,8 +244,7 @@ class _CarActionsSheetState extends State<CarActionsSheet> {
         context,
         error,
         notFound: 'Solo el dueño del auto puede hacer eso.',
-        conflict:
-            'Ese dongle ya está vinculado a otro auto. Desvinculalo ahí primero.',
+        conflict: 'Ese dongle ya está vinculado a otro auto. Desvinculalo ahí primero.',
       );
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -413,9 +412,7 @@ class _CarActionsSheetState extends State<CarActionsSheet> {
                     const Divider(height: 1),
                     SettingTile(
                       icon: AppIcons.dongle,
-                      title: device == null
-                          ? 'Vincular dongle OBD'
-                          : 'Dongle vinculado',
+                      title: device == null ? 'Vincular dongle OBD' : 'Dongle vinculado',
                       subtitle: _deviceLoading
                           ? 'Consultando…'
                           : device == null

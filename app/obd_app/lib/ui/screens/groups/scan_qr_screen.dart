@@ -111,8 +111,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
                 Icon(AppIcons.qr, color: Colors.white70, size: 28),
                 const SizedBox(height: 8),
                 Text(
-                  _hint ??
-                      'Apuntá al "Mi código QR" de la persona que querés invitar.',
+                  _hint ?? 'Apuntá al "Mi código QR" de la persona que querés invitar.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: _hint == null ? Colors.white : t.warning,
@@ -127,12 +126,9 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
     );
   }
 
-  String _cameraMessage(MobileScannerException error) =>
-      switch (error.errorCode) {
-        MobileScannerErrorCode.permissionDenied =>
-          'Sin permiso de cámara. Habilitalo en Ajustes para escanear.',
-        MobileScannerErrorCode.unsupported =>
-          'Este dispositivo no puede escanear códigos.',
-        _ => 'No se pudo abrir la cámara.',
-      };
+  String _cameraMessage(MobileScannerException error) => switch (error.errorCode) {
+    MobileScannerErrorCode.permissionDenied => 'Sin permiso de cámara. Habilitalo en Ajustes para escanear.',
+    MobileScannerErrorCode.unsupported => 'Este dispositivo no puede escanear códigos.',
+    _ => 'No se pudo abrir la cámara.',
+  };
 }

@@ -140,9 +140,7 @@ class AppTokens {
 }
 
 extension AppTokensContext on BuildContext {
-  AppTokens get tokens => Theme.of(this).brightness == Brightness.dark
-      ? AppTokens.dark
-      : AppTokens.light;
+  AppTokens get tokens => Theme.of(this).brightness == Brightness.dark ? AppTokens.dark : AppTokens.light;
 }
 
 ThemeData buildAppTheme([Brightness brightness = Brightness.light]) {
@@ -153,9 +151,7 @@ ThemeData buildAppTheme([Brightness brightness = Brightness.light]) {
   final text = isDark ? AppPalette.darkText : AppPalette.text;
   final muted = isDark ? AppPalette.darkMuted : AppPalette.muted;
   final accent = isDark ? AppPalette.darkAccent : AppPalette.accent;
-  final accentSubtle = isDark
-      ? AppPalette.darkAccentSubtle
-      : AppPalette.accentSubtle;
+  final accentSubtle = isDark ? AppPalette.darkAccentSubtle : AppPalette.accentSubtle;
   final scheme = ColorScheme.fromSeed(
     seedColor: accent,
     brightness: brightness,

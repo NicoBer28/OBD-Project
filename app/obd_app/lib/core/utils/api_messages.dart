@@ -58,9 +58,7 @@ abstract final class ApiMessages {
       forbidden: forbidden,
     );
     final isHard =
-        error is NetworkException ||
-        (error is ApiException &&
-            (error.isServerError || error.isUnauthorized));
+        error is NetworkException || (error is ApiException && (error.isServerError || error.isUnauthorized));
 
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()

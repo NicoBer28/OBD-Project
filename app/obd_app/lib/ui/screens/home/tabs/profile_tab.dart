@@ -75,9 +75,7 @@ class ProfileTab extends StatelessWidget {
         final me = controller.me;
         final car = controller.car;
         final group = controller.group;
-        final nombre = me?.fullName.isNotEmpty == true
-            ? me!.fullName
-            : nombreUsuario;
+        final nombre = me?.fullName.isNotEmpty == true ? me!.fullName : nombreUsuario;
 
         return ListView(
           key: const ValueKey('profile'),
@@ -125,24 +123,16 @@ class ProfileTab extends StatelessWidget {
                   const Divider(height: 1),
                   SettingTile(
                     icon: AppIcons.car,
-                    title: controller.cars.length > 1
-                        ? 'Mis autos (${controller.cars.length})'
-                        : 'Vehículo',
-                    subtitle: car == null
-                        ? 'Todavía no cargaste ninguno'
-                        : '${car.model.label} · ${car.name}',
+                    title: controller.cars.length > 1 ? 'Mis autos (${controller.cars.length})' : 'Vehículo',
+                    subtitle: car == null ? 'Todavía no cargaste ninguno' : '${car.model.label} · ${car.name}',
                     onTap: () => MyCarsScreen.show(context, controller),
                   ),
                   const Divider(height: 1),
                   SettingTile(
                     icon: AppIcons.dongle,
                     title: 'Dongle OBD',
-                    subtitle: controller.device == null
-                        ? 'Sin vincular a este auto'
-                        : controller.device!.serial,
-                    onTap: car == null
-                        ? null
-                        : () => CarActionsSheet.show(context, controller, car),
+                    subtitle: controller.device == null ? 'Sin vincular a este auto' : controller.device!.serial,
+                    onTap: car == null ? null : () => CarActionsSheet.show(context, controller, car),
                   ),
                   const Divider(height: 1),
                   SettingTile(
@@ -166,9 +156,7 @@ class ProfileTab extends StatelessWidget {
                   child: SwitchListTile(
                     value: mode == ThemeMode.dark,
                     onChanged: (enabled) {
-                      themeModeNotifier.value = enabled
-                          ? ThemeMode.dark
-                          : ThemeMode.light;
+                      themeModeNotifier.value = enabled ? ThemeMode.dark : ThemeMode.light;
                     },
                     secondary: const Icon(Icons.dark_mode_outlined),
                     title: const Text('Modo oscuro'),

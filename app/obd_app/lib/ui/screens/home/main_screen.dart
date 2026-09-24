@@ -180,8 +180,7 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
     _reservationsCarId = car.id;
     _reservationsMembersKey = membersKey;
     _reservations = ReservationsController(
-      repository:
-          widget.reservationRepository ?? InMemoryReservationRepository(),
+      repository: widget.reservationRepository ?? InMemoryReservationRepository(),
       carId: car.id,
       currentUserId: me.id,
       members: members,
@@ -277,8 +276,7 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
         connectionStatus: _connectionStatus,
         maintenanceAlerts: _maintenanceAlerts,
         tripAlerts: _tripAlerts,
-        onMaintenanceAlertsChanged: (value) =>
-            setState(() => _maintenanceAlerts = value),
+        onMaintenanceAlertsChanged: (value) => setState(() => _maintenanceAlerts = value),
         onTripAlertsChanged: (value) => setState(() => _tripAlerts = value),
       ),
     ];
@@ -333,10 +331,7 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
 
     if (name.isEmpty) return 'LM';
 
-    final parts = name
-        .split(RegExp(r'[\s._-]+'))
-        .where((part) => part.isNotEmpty)
-        .toList();
+    final parts = name.split(RegExp(r'[\s._-]+')).where((part) => part.isNotEmpty).toList();
 
     if (parts.length >= 2) {
       return '${parts.first[0]}${parts[1][0]}'.toUpperCase();
@@ -406,9 +401,7 @@ class _ErrorScaffold extends StatelessWidget {
                 EmptyStateCard(
                   icon: Icons.cloud_off_rounded,
                   title: 'No pudimos cargar tus datos',
-                  message: error == null
-                      ? 'Probá de nuevo.'
-                      : ApiMessages.of(error!),
+                  message: error == null ? 'Probá de nuevo.' : ApiMessages.of(error!),
                   actionLabel: 'Reintentar',
                   actionIcon: AppIcons.refresh,
                   onAction: onRetry,

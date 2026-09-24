@@ -181,11 +181,8 @@ class _CreateCarScreenState extends State<CreateCarScreen> {
                         child: Text(m.label, overflow: TextOverflow.ellipsis),
                       ),
                   ],
-                  onChanged: _guardando
-                      ? null
-                      : (value) => setState(() => _model = value),
-                  validator: (value) =>
-                      value == null ? 'Elegí el modelo' : null,
+                  onChanged: _guardando ? null : (value) => setState(() => _model = value),
+                  validator: (value) => value == null ? 'Elegí el modelo' : null,
                 ),
               if (_model != null) ...[
                 const SizedBox(height: 6),

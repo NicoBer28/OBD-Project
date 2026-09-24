@@ -126,6 +126,5 @@ class TelemetryUploader {
     _buffer.clear();
   }
 
-  static int? _nonNegative(int? value) =>
-      value == null || value < 0 ? null : value;
+  static int? _nonNegative(int? value) => value == null || value < 0 ? null : value;
 }

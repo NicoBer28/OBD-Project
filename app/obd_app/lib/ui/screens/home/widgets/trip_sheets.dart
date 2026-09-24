@@ -122,9 +122,7 @@ class _StartTripSheetState extends State<StartTripSheet> {
           ),
           const SizedBox(height: 6),
           Text(
-            car == null
-                ? 'Elegí un auto primero.'
-                : 'Vas a manejar ${car.name}. El grupo va a ver que lo tenés vos.',
+            car == null ? 'Elegí un auto primero.' : 'Vas a manejar ${car.name}. El grupo va a ver que lo tenés vos.',
             style: TextStyle(color: t.muted),
           ),
           const SizedBox(height: 22),
@@ -297,11 +295,9 @@ class _FinishTripSheetState extends State<FinishTripSheet> {
           const SizedBox(height: 6),
           Text(
             [
-              if (trip?.startedAt != null)
-                'Saliste a las ${TripFormat.clock(trip!.startedAt!)}',
+              if (trip?.startedAt != null) 'Saliste a las ${TripFormat.clock(trip!.startedAt!)}',
               if (elapsed != null) TripFormat.duration(elapsed),
-              if (trip?.initialFuel != null)
-                'nafta inicial ${trip!.initialFuel} %',
+              if (trip?.initialFuel != null) 'nafta inicial ${trip!.initialFuel} %',
             ].join(' · '),
             style: TextStyle(color: t.muted),
           ),

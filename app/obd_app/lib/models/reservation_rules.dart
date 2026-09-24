@@ -16,9 +16,7 @@ class ReservationCheck {
   /// [ReservationError.overlaps]).
   final Reservation? conflict;
 
-  const ReservationCheck.ok()
-      : error = null,
-        conflict = null;
+  const ReservationCheck.ok() : error = null, conflict = null;
 
   const ReservationCheck.fail(ReservationError this.error, {this.conflict});
 

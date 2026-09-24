@@ -45,10 +45,9 @@ class TelemetryReading {
   /// Both coordinates or neither.
   bool get hasValidPosition => (latitude == null) == (longitude == null);
 
-  bool get isInTheFuture =>
-      recordedAt.toUtc().isAfter(
-        DateTime.now().toUtc().add(const Duration(minutes: 5)),
-      );
+  bool get isInTheFuture => recordedAt.toUtc().isAfter(
+    DateTime.now().toUtc().add(const Duration(minutes: 5)),
+  );
 
   Map<String, dynamic> toJson() => {
     'recordedAt': recordedAt.toUtc().toIso8601String(),
@@ -81,19 +80,18 @@ class TelemetryRecord {
     this.raw,
   });
 
-  factory TelemetryRecord.fromJson(Map<String, dynamic> json) =>
-      TelemetryRecord(
-        tripId: json.str('tripId'),
-        recordedAt: json.instant('recordedAt') ?? DateTime.now().toUtc(),
-        receivedAt: json.instant('receivedAt'),
-        latitude: json.decimal('latitude'),
-        longitude: json.decimal('longitude'),
-        speed: json.integer('speed'),
-        fuelLevel: json.integer('fuelLevel'),
-        batteryLevel: json.integer('batteryLevel'),
-        mileage: json.integer('mileage'),
-        raw: json['raw'],
-      );
+  factory TelemetryRecord.fromJson(Map<String, dynamic> json) => TelemetryRecord(
+    tripId: json.str('tripId'),
+    recordedAt: json.instant('recordedAt') ?? DateTime.now().toUtc(),
+    receivedAt: json.instant('receivedAt'),
+    latitude: json.decimal('latitude'),
+    longitude: json.decimal('longitude'),
+    speed: json.integer('speed'),
+    fuelLevel: json.integer('fuelLevel'),
+    batteryLevel: json.integer('batteryLevel'),
+    mileage: json.integer('mileage'),
+    raw: json['raw'],
+  );
 
   /// The trip this reading was stamped with at ingestion, or null when the car
   /// was reporting outside any trip.
@@ -150,8 +148,7 @@ class TelemetryPage {
   final bool hasMore;
 
   @override
-  String toString() =>
-      'TelemetryPage(${readings.length} readings, hasMore: $hasMore)';
+  String toString() => 'TelemetryPage(${readings.length} readings, hasMore: $hasMore)';
 }
 
 /// `TelemetryDTO.Ingested` — what an upload returns.
@@ -168,15 +165,14 @@ class TelemetryIngestResult {
     this.latestRecordedAt,
   });
 
-  factory TelemetryIngestResult.fromJson(Map<String, dynamic> json) =>
-      TelemetryIngestResult(
-        carId: json.str('carId') ?? '',
-        stored: json.integer('stored') ?? 0,
-        duplicates: json.integer('duplicates') ?? 0,
-        tripId: json.str('tripId'),
-        snapshotUpdated: json.flag('snapshotUpdated'),
-        latestRecordedAt: json.instant('latestRecordedAt'),
-      );
+  factory TelemetryIngestResult.fromJson(Map<String, dynamic> json) => TelemetryIngestResult(
+    carId: json.str('carId') ?? '',
+    stored: json.integer('stored') ?? 0,
+    duplicates: json.integer('duplicates') ?? 0,
+    tripId: json.str('tripId'),
+    snapshotUpdated: json.flag('snapshotUpdated'),
+    latestRecordedAt: json.instant('latestRecordedAt'),
+  );
 
   /// The car the readings landed on. When uploading by serial, this is how the
   /// phone learns which car it is plugged into.
@@ -206,6 +202,5 @@ class TelemetryIngestResult {
   bool get hasOpenTrip => tripId != null;
 
   @override
-  String toString() =>
-      'TelemetryIngestResult(stored: $stored, duplicates: $duplicates)';
+  String toString() => 'TelemetryIngestResult(stored: $stored, duplicates: $duplicates)';
 }

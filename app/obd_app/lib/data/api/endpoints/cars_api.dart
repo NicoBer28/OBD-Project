@@ -41,7 +41,7 @@ class CarsApi {
         'name': name,
         'modelId': modelId,
         if (plate != null && plate.isNotEmpty) 'licensePlate': plate,
-        if (mileage != null) 'mileage': mileage,
+        'mileage': ?mileage,
       },
     );
     return Car.fromJson(response.asMap);

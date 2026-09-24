@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class NativeBleBridge {
@@ -10,9 +11,9 @@ class NativeBleBridge {
     try {
       // Le mandamos el mensaje "iniciarVinculacion" a Android
       final String result = await platform.invokeMethod('iniciarVinculacion');
-      print('Respuesta nativa: $result');
+      debugPrint('Respuesta nativa: $result');
     } on PlatformException catch (e) {
-      print('Fallo al llamar al código nativo: ${e.message}');
+      debugPrint('Fallo al llamar al código nativo: ${e.message}');
     }
   }
 }

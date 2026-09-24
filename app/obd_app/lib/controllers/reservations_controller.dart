@@ -18,8 +18,8 @@ class ReservationsController extends ChangeNotifier {
     required this.carId,
     required this.currentUserId,
     required List<MemberData> members,
-  })  : _repository = repository,
-        _members = members {
+  }) : _repository = repository,
+       _members = members {
     _subscription = repository.watch(carId).listen(_onData, onError: _onError);
   }
 
@@ -59,9 +59,7 @@ class ReservationsController extends ChangeNotifier {
     final from = now ?? DateTime.now();
     final until = from.add(Duration(days: days));
 
-    return _reservations
-        .where((r) => r.end.isAfter(from) && r.start.isBefore(until))
-        .toList();
+    return _reservations.where((r) => r.end.isAfter(from) && r.start.isBefore(until)).toList();
   }
 
   /// The current user's next (or ongoing) reservation.

@@ -144,9 +144,7 @@ class _BookingSheetState extends State<BookingSheet> {
     );
 
     _start = isToday ? ReservationRules.roundUpToQuarter(now) : midnight;
-    _end = nextMidnight.isAfter(_start)
-        ? nextMidnight
-        : _start.add(const Duration(hours: 1));
+    _end = nextMidnight.isAfter(_start) ? nextMidnight : _start.add(const Duration(hours: 1));
   }
 
   Future<void> _submit() async {
@@ -184,8 +182,7 @@ class _BookingSheetState extends State<BookingSheet> {
     if (error == null) return '';
 
     return switch (error) {
-      ReservationError.endBeforeStart =>
-        'El fin tiene que ser posterior al inicio.',
+      ReservationError.endBeforeStart => 'El fin tiene que ser posterior al inicio.',
       ReservationError.inThePast => 'El inicio ya pasó.',
       ReservationError.tooShort =>
         'La reserva mínima es de ${ReservationFormat.durationLabel(ReservationRules.minDuration)}.',
@@ -200,11 +197,8 @@ class _BookingSheetState extends State<BookingSheet> {
     if (other == null) return 'Ese horario ya está reservado.';
 
     final c = widget.controller;
-    final who = c.isMine(other)
-        ? 'tu reserva'
-        : 'la reserva de ${c.memberOf(other.userId).name}';
-    final when =
-        ReservationFormat.longDate(other.start, DateTime.now()).toLowerCase();
+    final who = c.isMine(other) ? 'tu reserva' : 'la reserva de ${c.memberOf(other.userId).name}';
+    final when = ReservationFormat.longDate(other.start, DateTime.now()).toLowerCase();
     final range = ReservationFormat.timeRange(other.start, other.end);
 
     return 'Se superpone con $who ($when, $range).';
@@ -219,11 +213,9 @@ class _BookingSheetState extends State<BookingSheet> {
       builder: (context, _) {
         final now = DateTime.now();
         final check = widget.controller.check(_start, _end, now: now);
-        final failure =
-            _serverError ?? (check.isValid ? null : _messageFor(check));
+        final failure = _serverError ?? (check.isValid ? null : _messageFor(check));
         final available = failure == null;
-        final statusText = failure ??
-            'Disponible · ${ReservationFormat.durationLabel(_end.difference(_start))}';
+        final statusText = failure ?? 'Disponible · ${ReservationFormat.durationLabel(_end.difference(_start))}';
 
         return SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(
@@ -307,9 +299,7 @@ class _BookingSheetState extends State<BookingSheet> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Icon(
-                    available
-                        ? Icons.check_circle_outline_rounded
-                        : Icons.error_outline_rounded,
+                    available ? Icons.check_circle_outline_rounded : Icons.error_outline_rounded,
                     size: 18,
                     color: available ? t.success : t.danger,
                   ),
@@ -425,9 +415,7 @@ class _DayTimeline extends StatelessWidget {
     final totalMinutes = dayEnd.difference(dayStart).inMinutes;
 
     double fraction(DateTime instant) =>
-        (instant.difference(dayStart).inMinutes / totalMinutes)
-            .clamp(0.0, 1.0)
-            .toDouble();
+        (instant.difference(dayStart).inMinutes / totalMinutes).clamp(0.0, 1.0).toDouble();
 
     final booked = reservations.where((r) => r.overlapsRange(dayStart, dayEnd));
     final proposedFrom = fraction(start);

@@ -133,8 +133,7 @@ class _FakeServer {
         },
       ]);
     }
-    if (method == 'GET' &&
-        RegExp(r'^/cars/[^/]+/trips/active$').hasMatch(path)) {
+    if (method == 'GET' && RegExp(r'^/cars/[^/]+/trips/active$').hasMatch(path)) {
       final open = trips.where((t) => t['active'] == true);
       return open.isEmpty ? http.Response('', 204) : json(open.first);
     }

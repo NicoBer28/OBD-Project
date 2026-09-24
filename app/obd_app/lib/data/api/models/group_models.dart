@@ -95,13 +95,12 @@ enum InvitationStatus {
   accepted,
   expired;
 
-  static InvitationStatus? parse(String? value) =>
-      switch (value?.toUpperCase()) {
-        'PENDING' => InvitationStatus.pending,
-        'ACCEPTED' => InvitationStatus.accepted,
-        'EXPIRED' => InvitationStatus.expired,
-        _ => null,
-      };
+  static InvitationStatus? parse(String? value) => switch (value?.toUpperCase()) {
+    'PENDING' => InvitationStatus.pending,
+    'ACCEPTED' => InvitationStatus.accepted,
+    'EXPIRED' => InvitationStatus.expired,
+    _ => null,
+  };
 
   String get wire => name.toUpperCase();
 }
@@ -165,14 +164,13 @@ class PendingInvitation {
     this.invitationExpiresAt,
   });
 
-  factory PendingInvitation.fromJson(Map<String, dynamic> json) =>
-      PendingInvitation(
-        id: json.str('id') ?? '',
-        groupId: json.str('groupId') ?? '',
-        groupName: json.str('groupName') ?? '',
-        invitationCreatedAt: json.instant('invitationCreatedAt'),
-        invitationExpiresAt: json.instant('invitationExpiresAt'),
-      );
+  factory PendingInvitation.fromJson(Map<String, dynamic> json) => PendingInvitation(
+    id: json.str('id') ?? '',
+    groupId: json.str('groupId') ?? '',
+    groupName: json.str('groupName') ?? '',
+    invitationCreatedAt: json.instant('invitationCreatedAt'),
+    invitationExpiresAt: json.instant('invitationExpiresAt'),
+  );
 
   final String id;
   final String groupId;

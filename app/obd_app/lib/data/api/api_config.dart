@@ -50,18 +50,14 @@ class ApiConfig {
   /// passed straight through. [DateTime]s are sent as UTC ISO-8601, which is
   /// what the API's `Instant` fields expect.
   Uri resolve(String path, [Map<String, Object?> query = const {}]) {
-    final host = baseUrl.endsWith('/')
-        ? baseUrl.substring(0, baseUrl.length - 1)
-        : baseUrl;
+    final host = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
     final route = path.startsWith('/') ? path : '/$path';
     final uri = Uri.parse('$host$prefix$route');
 
     final params = <String, String>{};
     query.forEach((key, value) {
       if (value == null) return;
-      params[key] = value is DateTime
-          ? value.toUtc().toIso8601String()
-          : '$value';
+      params[key] = value is DateTime ? value.toUtc().toIso8601String() : '$value';
     });
 
     return params.isEmpty ? uri : uri.replace(queryParameters: params);

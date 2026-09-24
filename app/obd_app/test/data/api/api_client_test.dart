@@ -24,12 +24,10 @@ String _authBody({String token = 'access-1', String email = 'ada@example.com'}) 
 
 /// Un `Set-Cookie` como el que manda `RefreshCookie`.
 Map<String, String> _cookie(String value) => {
-  'set-cookie':
-      'refreshToken=$value; Path=/api/v1/auth; HttpOnly; SameSite=Strict',
+  'set-cookie': 'refreshToken=$value; Path=/api/v1/auth; HttpOnly; SameSite=Strict',
 };
 
-ObdApi _apiWith(MockClient client) =>
-    ObdApi(config: _config, httpClient: client);
+ObdApi _apiWith(MockClient client) => ObdApi(config: _config, httpClient: client);
 
 void main() {
   group('autenticación', () {

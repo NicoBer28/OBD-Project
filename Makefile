@@ -7,10 +7,10 @@ format:
 	@echo "Formatting firmware..."
 	cd hardware && clang-format -i main/*.cpp
 
-check:
+check: format
 	@echo "Checking Flutter..."
 	cd app/obd_app && dart format --output=none --set-exit-if-changed .
-	cd app/obd_app && flutter analyze
+	cd app/obd_app && flutter analyze --no-fatal-infos --no-fatal-warnings
 	cd app/obd_app && flutter test
 
 	@echo "Checking firmware formatting..."

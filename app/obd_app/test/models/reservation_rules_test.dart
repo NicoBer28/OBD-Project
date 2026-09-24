@@ -2,12 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:obd_app/models/models.dart';
 
 Reservation _slot(String id, int fromHour, int toHour) => Reservation(
-      id: id,
-      carId: 'car',
-      userId: 'u1',
-      start: DateTime.utc(2030, 1, 1, fromHour),
-      end: DateTime.utc(2030, 1, 1, toHour),
-    );
+  id: id,
+  carId: 'car',
+  userId: 'u1',
+  start: DateTime.utc(2030, 1, 1, fromHour),
+  end: DateTime.utc(2030, 1, 1, toHour),
+);
 
 void main() {
   group('Reservation.overlaps', () {
@@ -42,13 +42,12 @@ void main() {
     final now = DateTime.utc(2029, 12, 31);
     final existing = [_slot('a', 9, 14)];
 
-    ReservationCheck check(DateTime start, DateTime end, {DateTime? at}) =>
-        ReservationRules.validate(
-          start: start,
-          end: end,
-          now: at ?? now,
-          existing: existing,
-        );
+    ReservationCheck check(DateTime start, DateTime end, {DateTime? at}) => ReservationRules.validate(
+      start: start,
+      end: end,
+      now: at ?? now,
+      existing: existing,
+    );
 
     test('accepts a free slot', () {
       expect(
@@ -58,8 +57,7 @@ void main() {
     });
 
     test('rejects an overlap and reports the conflicting reservation', () {
-      final result =
-          check(DateTime.utc(2030, 1, 1, 13), DateTime.utc(2030, 1, 1, 16));
+      final result = check(DateTime.utc(2030, 1, 1, 13), DateTime.utc(2030, 1, 1, 16));
       expect(result.error, ReservationError.overlaps);
       expect(result.conflict?.id, 'a');
     });
