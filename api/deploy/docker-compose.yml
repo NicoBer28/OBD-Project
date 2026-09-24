@@ -10,7 +10,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.vercel
-    env_file: /etc/obd/api.env
+    env_file: .env
     restart: unless-stopped
     # Loopback only - the outside world goes through Caddy. The deploy
     # workflow health-checks this port from the server itself.
