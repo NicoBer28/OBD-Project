@@ -1,0 +1,6 @@
+# Caddy obtains and renews the Let's Encrypt certificate for API_DOMAIN on its
+# own. No domain? Use <server-ip>.sslip.io, which resolves to that IP.
+{$API_DOMAIN} {
+	encode gzip
+	reverse_proxy api:8080
+}

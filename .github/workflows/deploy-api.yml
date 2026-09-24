@@ -1,0 +1,67 @@
+name: Deploy API
+
+# Redeploys the API on the Oracle VM whenever something under api/ lands on
+# development. Pushes that only touch the app, hardware or docs are ignored.
+on:
+  push:
+    branches:
+      - development
+    paths:
+      - "api/**"
+      - ".github/workflows/deploy-api.yml"
+  workflow_dispatch:
+
+# Two quick pushes must not deploy on top of each other; the second waits.
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_deploy ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host oracle
+            HostName ${{ secrets.ORACLE_HOST }}
+            User ${{ secrets.ORACLE_USER }}
+            IdentityFile ~/.ssh/id_deploy
+          EOF
+
+      # --delete removes files deleted from the repo; excluded paths (the
+      # server's deploy/.env and any build output) are left alone.
+      - name: Sync api/ to the server
+        run: |
+          rsync -az --delete \
+            --exclude 'target/' \
+            --exclude '.env*' \
+            --exclude 'graphify-out/' \
+            api/ oracle:~/obd-api/
+
+      - name: Build and restart
+        run: |
+          ssh oracle 'cd ~/obd-api/deploy \
+            && docker compose up -d --build --remove-orphans \
+            && docker image prune -f'
+
+      - name: Health check
+        run: |
+          ssh oracle 'for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8081/actuator/health; then exit 0; fi
+            sleep 5
+          done
+          echo "API did not become healthy in 150s" >&2
+          cd ~/obd-api/deploy && docker compose logs --tail 150 api
+          exit 1'
