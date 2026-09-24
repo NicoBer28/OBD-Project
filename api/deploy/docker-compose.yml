@@ -1,0 +1,37 @@
+# Production stack for the Oracle Cloud VM: the API plus Caddy in front of it
+# for HTTPS. The deploy workflow (.github/workflows/deploy-api.yml) syncs api/
+# to ~/obd-api on the server and runs `docker compose up -d --build` here.
+#
+# Secrets never live in this directory: the env file is created once by hand
+# on the server at /etc/obd/api.env (see README.md in this folder).
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile.vercel
+    env_file: /etc/obd/api.env
+    restart: unless-stopped
+    # Loopback only - the outside world goes through Caddy. The deploy
+    # workflow health-checks this port from the server itself.
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in ~/obd-api/deploy/.env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
