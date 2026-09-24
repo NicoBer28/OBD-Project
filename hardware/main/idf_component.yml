@@ -1,0 +1,7 @@
+dependencies:
+  idf:
+    version: '>=4.1.0'
+  h2zero/esp-nimble-cpp: '*'
+  mcp2515:
+    git: https://github.com/zeroomega/esp32-mcp2515.git
+    version: main
