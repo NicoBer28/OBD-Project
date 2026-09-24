@@ -7,7 +7,7 @@ dependencies.lock
 
 hardware/.vscode
 hardware/build
-
+hardware/managed_components
 exec_esp.sh
 
 circuito/*-bak
