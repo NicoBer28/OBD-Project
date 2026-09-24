@@ -11,6 +11,7 @@ import 'package:obd_app/data/api/endpoints/telemetry_api.dart';
 import 'package:obd_app/data/api/endpoints/trips_api.dart';
 import 'package:obd_app/data/api/endpoints/users_api.dart';
 import 'package:obd_app/data/api/session.dart';
+import 'package:obd_app/data/api/session_store.dart';
 
 export 'package:obd_app/data/api/api_client.dart' show ApiClient, ApiResponse;
 export 'package:obd_app/data/api/api_config.dart';
@@ -26,6 +27,7 @@ export 'package:obd_app/data/api/endpoints/trips_api.dart';
 export 'package:obd_app/data/api/endpoints/users_api.dart';
 export 'package:obd_app/data/api/models/api_models.dart';
 export 'package:obd_app/data/api/session.dart';
+export 'package:obd_app/data/api/session_store.dart';
 
 /// The whole OBD API, grouped by resource.
 ///
@@ -60,8 +62,12 @@ class ObdApi {
       trips = TripsApi(client),
       telemetry = TelemetryApi(client);
 
-  /// The shared instance the UI uses.
-  static final ObdApi instance = ObdApi();
+  /// The shared instance the UI uses. Its session is backed by the OS keystore,
+  /// so the refresh token survives closing the app (see `main()` for the
+  /// restore step). Instances built by tests have no store and keep nothing.
+  static final ObdApi instance = ObdApi(
+    session: ObdSession(store: SecureSessionStore()),
+  );
 
   final ApiClient client;
 

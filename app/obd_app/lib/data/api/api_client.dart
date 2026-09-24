@@ -22,8 +22,7 @@ class ApiResponse {
 
   bool get isEmpty => body == null;
 
-  Map<String, dynamic> get asMap =>
-      body is Map<String, dynamic> ? body as Map<String, dynamic> : const {};
+  Map<String, dynamic> get asMap => body is Map<String, dynamic> ? body as Map<String, dynamic> : const {};
 
   /// `Location` header — `POST /cars` and `POST /groups` set it.
   String? get location => headers['location'];
@@ -131,10 +130,7 @@ class ApiClient {
     final response = await _dispatch(method, uri, requestHeaders, body);
     _rememberRefreshCookie(response.headers);
 
-    if (response.statusCode == 401 &&
-        authenticated &&
-        retryOn401 &&
-        session.refreshToken != null) {
+    if (response.statusCode == 401 && authenticated && retryOn401 && session.refreshToken != null) {
       if (await refreshSession()) {
         return send(
           method,
@@ -165,9 +161,14 @@ class ApiClient {
 
   /// Exchanges the stored refresh cookie for a new access token.
   ///
-  /// Returns false when the session is gone for good (the caller should send
-  /// the user back to the login screen). Single-flight: callers that arrive
-  /// while a refresh is running await the same one.
+  /// Returns true when a new access token is in the session. Returns false
+  /// otherwise, and then `session.refreshToken` tells the two cases apart:
+  /// null means the server refused it and the session is gone for good (send
+  /// the user to the login screen); still set means the server could not be
+  /// reached or errored (5xx), the token may be fine and a retry is worth it.
+  ///
+  /// Single-flight: callers that arrive while a refresh is running await the
+  /// same one.
   Future<bool> refreshSession() {
     final running = _refreshInFlight;
     if (running != null) return running;
@@ -195,17 +196,13 @@ class ApiClient {
   }
 
   Future<void> _warmUp() async {
-    final host = config.baseUrl.endsWith('/')
-        ? config.baseUrl.substring(0, config.baseUrl.length - 1)
-        : config.baseUrl;
+    final host = config.baseUrl.endsWith('/') ? config.baseUrl.substring(0, config.baseUrl.length - 1) : config.baseUrl;
     try {
       final request = http.Request('GET', Uri.parse('$host/actuator/health'));
       request.headers['Accept'] = 'application/json';
       // Longer than the normal timeout: a cold start is exactly what this is
       // waiting for.
-      final streamed = await _http
-          .send(request)
-          .timeout(const Duration(seconds: 60));
+      final streamed = await _http.send(request).timeout(const Duration(seconds: 60));
       await streamed.stream.drain<void>();
     } catch (_) {
       // Offline, or the server is simply not there: nothing to do about it
@@ -229,6 +226,14 @@ class ApiClient {
         'Accept': 'application/json',
         'Cookie': '$refreshCookieName=$cookie',
       }, null);
+
+      if (response.statusCode >= 500) {
+        // The server is having a bad moment (a proxy 502/503, a cold start
+        // that gave up). The refresh token is persisted now, so wiping it here
+        // would turn a hiccup into a logout that survives restarts. Keep it
+        // and let the next call try again, exactly like the offline case.
+        return false;
+      }
 
       if (response.statusCode >= 400) {
         // Expired, already used, or revoked: this session is finished.
@@ -274,8 +279,7 @@ class ApiClient {
   /// Decodes as UTF-8 explicitly: `http.Response.body` falls back to latin-1
   /// when the response carries no charset, which mangles accented text — and
   /// `application/problem+json` carries none.
-  String _text(http.Response response) =>
-      utf8.decode(response.bodyBytes, allowMalformed: true);
+  String _text(http.Response response) => utf8.decode(response.bodyBytes, allowMalformed: true);
 
   Object? _decode(http.Response response) {
     if (response.statusCode == 204 || response.bodyBytes.isEmpty) return null;

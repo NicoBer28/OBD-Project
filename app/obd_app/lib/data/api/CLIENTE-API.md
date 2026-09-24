@@ -101,10 +101,23 @@ code.
 `userId` y el email. Es un `ChangeNotifier`, así que un widget puede escucharlo
 con `ListenableBuilder` para reaccionar al logout.
 
-**No se persiste nada en disco.** Cerrar la app desloguea. Agregarlo es una
-clase: guardar los tres campos en `flutter_secure_storage` y restaurarlos antes
-de `runApp`. Quedó afuera a propósito — un refresh token en
-`SharedPreferences` en texto plano es peor que volver a pedir la contraseña.
+**Solo el refresh token se guarda en disco**, en el keystore del sistema
+(Keychain en iOS, Android Keystore en Android) a través de `SessionStore` /
+`SecureSessionStore` y `flutter_secure_storage`. El access token, su
+vencimiento y la identidad quedan en memoria: `main()` llama a
+`session.restore()` antes de `runApp`, y `AuthGate` cambia el token restaurado
+por un access token nuevo (`POST /auth/refresh`) y entra directo a la app.
+
+- El token se reescribe en cada rotación (`rememberRefreshToken`) y se borra en
+  el logout o cuando el servidor rechaza el refresh (`401`).
+- Un fallo de red o un `5xx` en el refresh **no** borra nada: `AuthGate` ofrece
+  reintentar en vez de pedir la contraseña por un problema de conexión.
+- Un keystore ilegible (p. ej. datos restaurados de un backup en otro
+  teléfono) se trata como sesión cerrada.
+- Sin `store` (los tests) `ObdSession` se comporta como antes: solo memoria.
+
+Un refresh token en `SharedPreferences` en texto plano sería peor que volver a
+pedir la contraseña, por eso no se usa.
 
 ---
 
@@ -565,7 +578,6 @@ serial porque el firmware todavía no expone el serial del dongle.
 
 ## 6. Qué falta
 
-- **Persistir la sesión.** Hoy cerrar la app desloguea (ver arriba).
 - **Reservas.** La app las tiene en memoria (por teléfono); la API no las
   expone todavía.
 - **Unirse a un grupo por QR.** El QR de hoy lleva el correo del invitado

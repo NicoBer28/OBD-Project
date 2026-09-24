@@ -37,6 +37,7 @@ dependencies:
   flutter_blue_plus: ^2.3.12
   permission_handler: ^13.0.1
   http: ^1.6.0
+  flutter_secure_storage: ^10.0.0 # refresh token en Keychain / Android Keystore
   google_fonts: ^8.2.1
   pigeon: ^27.3.0
   geolocator: ^14.0.3
