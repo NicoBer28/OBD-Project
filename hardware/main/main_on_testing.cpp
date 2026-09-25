@@ -1,6 +1,4 @@
 #include "NimBLEDevice.h"
-#include "driver/gpio.h"
-#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -32,61 +30,73 @@ static const char *TAG_SYS = "MAIN";
 
 // PIDs OBD2 a utilizar
 #define PID_SUPPORTED_00_20 0x00
+#define PID_ENGINE_LOAD     0x04
 #define PID_ENGINE_TEMP     0x05
+#define PID_MAP             0x0B
 #define PID_ENGINE_RPM      0x0C
 #define PID_VEHICLE_SPEED   0x0D
+#define PID_MAF             0x10
 #define PID_FUEL_LEVEL      0x2F
 
 // ============================================================================
-// ESTRUCTURAS DE DATOS
+// ESTRUCTURAS DE DATOS UNIFICADAS
 // ============================================================================
-enum PacketType {
-    ID_SPEED_RPM = 0x01,
-    ID_ENGINE_STATUS = 0x02
+
+// Flags para indicar qué datos están disponibles y fueron leídos al menos una vez
+enum ValidDataFlags {
+    FLAG_SPEED = (1 << 0),
+    FLAG_RPM   = (1 << 1),
+    FLAG_TEMP  = (1 << 2),
+    FLAG_FUEL  = (1 << 3),
+    FLAG_MAP   = (1 << 4),
+    FLAG_MAF   = (1 << 5),
+    FLAG_LOAD  = (1 << 6)
 };
 
-struct __attribute__((packed)) SpeedRpmPacket {
-    uint8_t id = ID_SPEED_RPM;
+// Paquete unificado y empaquetado para mandar siempre del mismo tamaño por BT
+struct __attribute__((packed)) OBDPacket {
+    uint8_t packet_id = 0x10;   // Identificador de paquete de estado general
+    uint8_t valid_flags = 0;    // Bitmask indicando qué datos del struct son válidos/están disponibles
+    
+    // Datos básicos ya existentes
     uint8_t speed = 0;
     uint16_t rpm = 0;
-};
-
-struct __attribute__((packed)) EngTempFuelPacket {
-    uint8_t id = ID_ENGINE_STATUS;
-    uint8_t temp = 0;
+    uint8_t engine_temp = 0;
     uint8_t fuel_level = 0;
-};
-
-struct QueueMessage {
-    uint8_t packet_type; 
-    SpeedRpmPacket speed_rpm;
-    EngTempFuelPacket eng_temp_fuel;
+    
+    // Datos técnicos extra sugeridos para evaluar consumo/decaída de combustible
+    uint8_t map = 0;            // Presión absoluta del colector de admisión (kPa)
+    uint16_t maf = 0;           // Flujo de masa de aire (gramos/segundo, escalado x100)
+    uint8_t engine_load = 0;    // Carga calculada del motor (%)
 };
 
 // ============================================================================
-// RECURSOS COMPARTIDOS
+// VARIABLES GLOBALES (Recursos compartidos)
 // ============================================================================
 bool deviceConnected = false;
 NimBLECharacteristic* pTxCharacteristic = nullptr;
 
-SemaphoreHandle_t can_rx_semaphore = NULL;  
-QueueHandle_t ble_tx_queue = NULL;          
-SemaphoreHandle_t obd_data_mutex = NULL;        
+// RTOS Primitives
+SemaphoreHandle_t can_rx_semaphore = NULL;  // Semáforo para despertar la tarea OBD tras interrupción
+QueueHandle_t ble_tx_queue = NULL;          // Cola para enviar los paquetes a la tarea BLE
+SemaphoreHandle_t obd_data_mutex = NULL;        // Mutex para proteger la estructura de datos unificada si es necesario
 
-spi_device_handle_t spi_handle;
-MCP2515* mcp2515_ptr = nullptr;             
+spi_device_handle_t spi_handle;             // Handle del bus SPI
+MCP2515* mcp2515_ptr = nullptr;             // Puntero global para el driver MCP
 
-SpeedRpmPacket currentSpeedRpm;
-EngTempFuelPacket currentEngTempFuel;
-uint32_t supported_pids_01_20 = 0; 
+// Estado actual global (protegido si se accede desde múltiples tareas)
+OBDPacket current_obd_data;
+uint32_t supported_pids_01_20 = 0; // Bitmask de PIDs soportados (obtenido de PID 0x00)
 
 // ============================================================================
-// AUXILIARES Y CALLBACKS
+// FUNCIONES AUXILIARES & CALLBACKS
 // ============================================================================
 
+// ISR para la interrupción del MCP2515 (cuando llega un mensaje CAN)
 static void IRAM_ATTR gpioInterruptCan(void *args) {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     if (can_rx_semaphore != NULL) {
+        // Despierta a la tarea OBD que está esperando el semáforo
         xSemaphoreGiveFromISR(can_rx_semaphore, &xHigherPriorityTaskWoken);
     }
     if (xHigherPriorityTaskWoken) {
@@ -94,20 +104,21 @@ static void IRAM_ATTR gpioInterruptCan(void *args) {
     }
 }
 
+// Callbacks Servidor BLE
 class MyServerCallbacks: public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
         deviceConnected = true;
         ESP_LOGI(TAG_BLE, "> Dispositivo conectado");
     }
 
-    void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override
-    {
+    void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
         deviceConnected = false;
         ESP_LOGI(TAG_BLE, "> Dispositivo desconectado, reiniciando advertising...");
         NimBLEDevice::startAdvertising();
     }
 };
 
+// Callbacks Característica RX (App -> ESP32)
 class MyRxCallbacks: public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
         std::string rxValue = pCharacteristic->getValue();
@@ -124,7 +135,7 @@ class MyRxCallbacks: public NimBLECharacteristicCallbacks {
 };
 
 // ============================================================================
-// INITS
+// MÓDULOS DE INICIALIZACIÓN
 // ============================================================================
 
 void init_spi_and_mcp() {
@@ -144,6 +155,7 @@ void init_spi_and_mcp() {
     
     ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &devcfg, &spi_handle));
 
+    // Inicializar pin de interrupción del MCP
     gpio_install_isr_service(0);
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_NEGEDGE;
@@ -154,9 +166,10 @@ void init_spi_and_mcp() {
     gpio_config(&io_conf);
     gpio_isr_handler_add(MCP2515_INT_PIN, gpioInterruptCan, NULL);
 
+    // Init driver
     mcp2515_ptr = new MCP2515(&spi_handle);
     mcp2515_ptr->reset();
-    mcp2515_ptr->setBitrate(CAN_500KBPS, MCP_8MHZ);
+    mcp2515_ptr->setBitrate(CAN_500KBPS, MCP_8MHZ); // Ajustar según el vehículo (a veces 500KBPS)
     mcp2515_ptr->setNormalMode();
     mcp2515_ptr->clearInterrupts();
     mcp2515_ptr->setInterruptMask(MCP2515::CANINTF_RX0IF | MCP2515::CANINTF_RX1IF);
@@ -194,7 +207,7 @@ void init_ble() {
 }
 
 // ============================================================================
-// OBD
+// FUNCIONES OBD2 UNIFICADAS
 // ============================================================================
 
 void request_obd_pid(uint8_t pid) {
@@ -211,24 +224,25 @@ void request_obd_pid(uint8_t pid) {
     mcp2515_ptr->sendMessage(&tx_frame);
 }
 
+// Verifica en la bitmask si el PID está soportado por el auto
 bool is_pid_supported(uint8_t pid) {
     if (pid >= 0x01 && pid <= 0x20) {
+        // pid 1 está en el bit 31, pid 32 está en el bit 0 de la respuesta
         uint8_t shift = 32 - pid; 
         return (supported_pids_01_20 & (1UL << shift)) != 0;
     }
-    return true; 
+    return true; // Si es mayor a 0x20, asumimos temporalmente true hasta implementar lectura extendida (PID 0x20, 0x40...)
 }
 
+// Procesa una respuesta OBD genérica y actualiza la estructura unificada
 void process_obd_response(const can_frame& frame) {
-    if (frame.can_id < 0x7E8 || frame.can_id > 0x7EF || frame.data[1] != 0x41) return; 
+    if (frame.can_id < 0x7E8 || frame.can_id > 0x7EF || frame.data[1] != 0x41) return; // Filtro de respuesta OBD estándar
     
     uint8_t pid = frame.data[2];
     
+    // Obtenemos el mutex para proteger la escritura de current_obd_data
     if (xSemaphoreTake(obd_data_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
         
-        bool send_speed_rpm = false;
-        bool send_temp_fuel = false;
-
         switch(pid) {
             case PID_SUPPORTED_00_20:
                 supported_pids_01_20 = (frame.data[3] << 24) | (frame.data[4] << 16) | (frame.data[5] << 8) | frame.data[6];
@@ -236,68 +250,83 @@ void process_obd_response(const can_frame& frame) {
                 break;
                 
             case PID_VEHICLE_SPEED:
-                currentSpeedRpm.speed = frame.data[3];
-                send_speed_rpm = true;
+                current_obd_data.speed = frame.data[3];
+                current_obd_data.valid_flags |= FLAG_SPEED;
                 break;
                 
             case PID_ENGINE_RPM:
-                currentSpeedRpm.rpm = ((frame.data[3] * 256) + frame.data[4]) / 4;
-                send_speed_rpm = true;
+                current_obd_data.rpm = ((frame.data[3] * 256) + frame.data[4]) / 4;
+                current_obd_data.valid_flags |= FLAG_RPM;
                 break;
                 
             case PID_ENGINE_TEMP:
-                currentEngTempFuel.temp = frame.data[3] - 40; 
-                send_temp_fuel = true;
+                current_obd_data.engine_temp = frame.data[3] - 40; // Ecuación estándar OBD
+                current_obd_data.valid_flags |= FLAG_TEMP;
                 break;
                 
             case PID_FUEL_LEVEL:
-                currentEngTempFuel.fuel_level = (frame.data[3] * 100) / 255; 
-                send_temp_fuel = true;
+                current_obd_data.fuel_level = (frame.data[3] * 100) / 255; // Ecuación estándar: A * 100 / 255 (%)
+                current_obd_data.valid_flags |= FLAG_FUEL;
+                break;
+
+            case PID_MAP:
+                current_obd_data.map = frame.data[3]; // kPa
+                current_obd_data.valid_flags |= FLAG_MAP;
+                break;
+
+            case PID_MAF:
+                current_obd_data.maf = ((frame.data[3] * 256) + frame.data[4]) / 100; // gramos/seg (div 100, guardamos escalar si hace falta)
+                current_obd_data.valid_flags |= FLAG_MAF;
+                break;
+
+            case PID_ENGINE_LOAD:
+                current_obd_data.engine_load = (frame.data[3] * 100) / 255; // %
+                current_obd_data.valid_flags |= FLAG_LOAD;
                 break;
         }
         
-        if (send_speed_rpm) {
-            QueueMessage msg;
-            msg.packet_type = ID_SPEED_RPM;
-            msg.speed_rpm = currentSpeedRpm;
-            xQueueSend(ble_tx_queue, &msg, 0); 
-        } else if (send_temp_fuel) {
-            QueueMessage msg;
-            msg.packet_type = ID_ENGINE_STATUS;
-            msg.eng_temp_fuel = currentEngTempFuel;
-            xQueueSend(ble_tx_queue, &msg, 0); 
-        }
+        // Enviamos una copia de los datos al task de BLE si hay una actualización
+        // (Podría optimizarse para no enviar en c/respuesta sino periódicamente)
+        OBDPacket packet_to_send = current_obd_data;
+        xQueueOverwrite(ble_tx_queue, &packet_to_send); // Sobreescribe para tener siempre el último dato
         
         xSemaphoreGive(obd_data_mutex);
     }
 }
 
 // ============================================================================
-// TASK OBD
+// TAREAS FREERTOS
 // ============================================================================
 
+// Tarea para manejar CAN / OBD2
 void vOBDTask(void *pvParameters) {
     ESP_LOGI(TAG_OBD, "Tarea OBD Iniciada en core %d", xPortGetCoreID());
     
+    // Lista de PIDs a ciclar (Priorizar los más importantes/rápidos)
     std::vector<uint8_t> pids_to_poll = {
-        PID_ENGINE_RPM, PID_VEHICLE_SPEED, PID_ENGINE_TEMP, PID_FUEL_LEVEL
+        PID_ENGINE_RPM, PID_VEHICLE_SPEED, PID_ENGINE_LOAD, 
+        PID_MAP, PID_MAF, PID_ENGINE_TEMP, PID_FUEL_LEVEL
     };
     uint8_t current_pid_index = 0;
     
+    // Pedir los soportados al arrancar
     request_obd_pid(PID_SUPPORTED_00_20);
-    vTaskDelay(pdMS_TO_TICKS(100)); 
+    vTaskDelay(pdMS_TO_TICKS(100)); // Esperar respuesta
 
     while(1) {
+        // Pedir el siguiente PID de la lista
         uint8_t next_pid = pids_to_poll[current_pid_index];
         
+        // Si ya evaluamos los soportados y sabemos que NO lo soporta, lo saltamos
         if (supported_pids_01_20 != 0 && !is_pid_supported(next_pid)) {
-             // skip
+             // Avanzar y probar con otro la próxima
         } else {
              request_obd_pid(next_pid);
         }
         
         current_pid_index = (current_pid_index + 1) % pids_to_poll.size();
 
+        // Esperar por la interrupción (o timeout por si falla un request)
         if (xSemaphoreTake(can_rx_semaphore, pdMS_TO_TICKS(100)) == pdTRUE || gpio_get_level(MCP2515_INT_PIN) == 0) {
             while (gpio_get_level(MCP2515_INT_PIN) == 0) {
                 uint8_t irq = mcp2515_ptr->getInterrupts();
@@ -315,53 +344,56 @@ void vOBDTask(void *pvParameters) {
                     }
                 }
 
+                // Limpiar otras interrupciones de error o transmisión
                 if (irq & (MCP2515::CANINTF_TX0IF | MCP2515::CANINTF_TX1IF | MCP2515::CANINTF_TX2IF)) {
                     mcp2515_ptr->clearTXInterrupts();
                 }
                 if (irq & MCP2515::CANINTF_MERRF) mcp2515_ptr->clearMERR();
                 if (irq & MCP2515::CANINTF_ERRIF) mcp2515_ptr->clearERRIF();
-                
+
                 if (irq == 0) break;
             }
         }
 
+        // Pequeño delay entre requests para no saturar el bus CAN del vehículo
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
 
-// ============================================================================
-// TASK BT
-// ============================================================================
+// Tarea para manejar notificaciones BLE
 void vBLETask(void *pvParameters) {
     ESP_LOGI(TAG_BLE, "Tarea BLE Iniciada en core %d", xPortGetCoreID());
-    QueueMessage rx_packet;
+    OBDPacket rx_packet;
     
     while(1) {
+        // Esperamos que haya un paquete nuevo en la cola (bloqueante)
         if (xQueueReceive(ble_tx_queue, &rx_packet, portMAX_DELAY) == pdTRUE) {
             if (deviceConnected && pTxCharacteristic != nullptr) {
-                if (rx_packet.packet_type == ID_SPEED_RPM) {
-                    pTxCharacteristic->setValue((uint8_t*)&rx_packet.speed_rpm, sizeof(SpeedRpmPacket));
-                } else if (rx_packet.packet_type == ID_ENGINE_STATUS) {
-                    pTxCharacteristic->setValue((uint8_t*)&rx_packet.eng_temp_fuel, sizeof(EngTempFuelPacket));
-                }
+                // Notificar por bluetooth usando el struct unificado
+                pTxCharacteristic->setValue((uint8_t*)&rx_packet, sizeof(OBDPacket));
                 pTxCharacteristic->notify();
+                // ESP_LOGI(TAG_BLE, "Notificando BT: RPM %d, Vel %d", rx_packet.rpm, rx_packet.speed);
             }
         }
         
-        vTaskDelay(pdMS_TO_TICKS(20));
+        // Limitar la tasa de envío a max 10Hz (100ms) para no saturar BLE
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
 // ============================================================================
-// START
+// APP MAIN
 // ============================================================================
 extern "C" void app_main(void) {
     ESP_LOGI(TAG_SYS, "Arrancando sistema OBD2...");
 
+    // Inicializar recursos RTOS
+    // Se usa un semáforo binario para la ISR del MCP
     can_rx_semaphore = xSemaphoreCreateBinary(); 
     
-    ble_tx_queue = xQueueCreate(10, sizeof(QueueMessage)); 
+    // Cola de tamaño 1 usando Overwrite para mantener el último estado sin retrasos
+    ble_tx_queue = xQueueCreate(1, sizeof(OBDPacket)); 
     
     obd_data_mutex = xSemaphoreCreateMutex();
 
@@ -370,11 +402,14 @@ extern "C" void app_main(void) {
         return;
     }
 
+    // Inicializar hardware y subsistemas
     init_spi_and_mcp();
     init_ble();
 
+    // Crear tareas y asginar núcleos (Core 0 para OBD/Comunicaciones hardware, Core 1 para BLE)
     xTaskCreatePinnedToCore(vOBDTask, "OBD_Task", 4096, NULL, 5, NULL, 0);
     xTaskCreatePinnedToCore(vBLETask, "BLE_Task", 4096, NULL, 4, NULL, 1);
 
     ESP_LOGI(TAG_SYS, "Sistema corriendo.");
 }
+
