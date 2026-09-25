@@ -1,26 +1,56 @@
-.PHONY: format check test
+.PHONY: format format-flutter format-firmware \
+        check check-flutter check-firmware \
+        test setup verify
 
-format:
+FLUTTER_DIR := app/obd_app
+FIRMWARE_DIR := hardware
+GITHOOKS_DIR := .githooks
+
+# ---------------------------------------------------------------------------
+# Formatting
+# ---------------------------------------------------------------------------
+
+format: format-flutter format-firmware
+
+format-flutter:
 	@echo "Formatting Flutter..."
-	cd app/obd_app && dart format .
+	cd $(FLUTTER_DIR) && dart format .
 
+format-firmware:
 	@echo "Formatting firmware..."
-	cd hardware && clang-format -i main/*.cpp
+	cd $(FIRMWARE_DIR) && clang-format -i main/*.cpp
 
-check: format
-	@echo "Checking Flutter..."
-	cd app/obd_app && dart format --output=none --set-exit-if-changed .
-	cd app/obd_app && flutter analyze --no-fatal-infos --no-fatal-warnings
-	cd app/obd_app && flutter test
+# ---------------------------------------------------------------------------
+# Checks
+# ---------------------------------------------------------------------------
 
+check: check-flutter check-firmware
+
+check-flutter:
+	@echo "Checking Flutter formatting..."
+	cd $(FLUTTER_DIR) && dart format --output=none --set-exit-if-changed .
+
+	@echo "Running Flutter analyzer..."
+	cd $(FLUTTER_DIR) && flutter analyze --no-fatal-infos --no-fatal-warnings
+
+check-firmware:
 	@echo "Checking firmware formatting..."
-	cd hardware && clang-format --dry-run --Werror main/*.cpp
+	cd $(FIRMWARE_DIR) && clang-format --dry-run --Werror main/*.cpp
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
 
 test:
 	@echo "Running Flutter tests..."
-	cd app/obd_app && flutter test
+	cd $(FLUTTER_DIR) && flutter test
+
+# ---------------------------------------------------------------------------
+# Development setup
+# ---------------------------------------------------------------------------
 
 setup:
-	chmod -R u+x ./.githooks 
+	@echo "Installing Git hooks..."
+	chmod u+x $(GITHOOKS_DIR)/*
 	lefthook install
 	@echo "Git hooks installed successfully."

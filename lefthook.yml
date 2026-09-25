@@ -1,3 +1,4 @@
+# Format only staged files
 pre-commit:
   parallel: true
   commands:
@@ -11,12 +12,14 @@ pre-commit:
       run: clang-format -i {staged_files}
       stage_fixed: true
 
+# Conventional-commits
 commit-msg:
   commands:
     conventional:
       run: .githooks/commit-msg {1}
 
+# Testing
 pre-push:
   commands:
-    check:
-      run: make check
+    test:
+      run: make test
