@@ -1,13 +1,8 @@
 import 'package:flutter/material.dart';
 
 import './register_screen.dart';
+import './bluetooth_scanner_screen.dart';
 import './main_screen.dart';
-
-import 'dart:convert';
-
-import 'package:http/http.dart' as http;
-
-import '../ui/app_theme.dart';
 
 // Login: valida las credenciales localmente y conserva el nombre de usuario.
 // Actualmente no existe una autenticación contra un servidor.
@@ -23,75 +18,47 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
 
   // Los controllers permiten leer el contenido de los campos de texto.
-  final _emailController = TextEditingController();
+  final _userController = TextEditingController();
   final _passwordController = TextEditingController();
 
   // Los controllers deben liberarse cuando el State deja de existir.
   @override
   void dispose() {
-    _emailController.dispose();
+    _userController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
-void _ingresar() async {
-    // Si la validación local de formato pasa, navegamos directo sin llamar al backend
+  void _ingresar() {
+    // Si la validación local es correcta, se inicia el flujo BLE.
     if (_formKey.currentState!.validate()) {
-      final userEmail = _emailController.text.trim();
-      final userPassword = _passwordController.text;
-
+      final nombreUsuario = _userController.text.trim();
       final navigator = Navigator.of(context);
-      final scaffoldMessenger = ScaffoldMessenger.of(context);
 
-      final url = Uri.parse('http://192.168.1.19:8080/api/v1/auth/login');
-
-      try {
-        // Disparamos la petición a la API
-        final response = await http.post(
-          url,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'userMail': userEmail,
-            'userPassword': userPassword,
-          }),
-        );
-
-        // Si las credenciales coinciden en la base de datos, el 200 es que salio todo bien
-        if (response.statusCode == 200) {
-          // Primero se busca el dispositivo OBD antes de mostrar el panel.
-          navigator.pushReplacement(
-            MaterialPageRoute(
-              builder: (context) => MainScreen(
-                nombreUsuario: userEmail
-              ),
-            ),
-          );
-        } else if (response.statusCode == 401) {
-          // 401 Unauthorized: email o contraseña incorrectos
-          scaffoldMessenger.showSnackBar(
-            const SnackBar(
-              content: Text('Correo o contraseña incorrectos'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        } else {
-          // eror del servidor
-          scaffoldMessenger.showSnackBar(
-            SnackBar(
-              content: Text('Error del servidor (${response.statusCode})'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-      } catch (error) {
-        // problema de wifi o servidor apagado
-        scaffoldMessenger.showSnackBar(
-          const SnackBar(
-            content: Text('No se pudo conectar. Revisá tu conexión Wi-Fi.'),
-            backgroundColor: Colors.red,
+      // Primero se busca el dispositivo OBD antes de mostrar el panel.
+      navigator.pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => BluetoothScannerScreen(
+            nombreUsuario: nombreUsuario,
+            onConnected: (device) {
+              // Reemplazar la ruta evita volver al login con el botón Atrás.
+              navigator.pushReplacement(
+                MaterialPageRoute(
+                  builder: (context) => MainScreen(nombreUsuario: nombreUsuario, device: device),
+                ),
+              );
+            },
+            onContinueWithoutConnection: () {
+              // Este camino conserva el simulador para pruebas sin hardware.
+              navigator.pushReplacement(
+                MaterialPageRoute(
+                  builder: (context) => MainScreen(nombreUsuario: nombreUsuario),
+                ),
+              );
+            },
           ),
-        );
-      }
+        ),
+      );
     }
   }
 
@@ -100,91 +67,68 @@ void _ingresar() async {
     return Scaffold(
       body: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
+          padding: const EdgeInsets.all(32.0),
           child: Form(
             key: _formKey,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Container(
-                  width: 68,
-                  height: 68,
-                  decoration: BoxDecoration(
-                    color: AppColors.accentSubtle,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Icon(
-                    Icons.directions_car_outlined,
-                    size: 36,
-                    color: AppColors.accent,
-                  ),
+                const Icon(
+                  Icons.directions_car,
+                  size: 80,
+                  color: Colors.blueAccent,
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 32),
                 const Text(
                   'Bienvenido a OBD-C',
-                  style: TextStyle(
-                    fontSize: 27,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.5,
-                  ),
+                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Ingresá para ver cómo está tu auto.',
-                  style: TextStyle(color: AppColors.muted),
-                ),
-                const SizedBox(height: 28),
+                const SizedBox(height: 32),
 
-                // Input de Email
+                // Input de Usuario
                 TextFormField(
-                  controller: _emailController,
+                  controller: _userController,
                   decoration: const InputDecoration(
-                    labelText: 'Correo electronico',
+                    labelText: 'Usuario',
                     border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.email),
+                    prefixIcon: Icon(Icons.person),
                   ),
                   validator: (value) {
                     if (value == null || value.isEmpty) {
-                      return 'Por favor, ingresá un correo';
-                    }
-                    if (!value.contains('@')) {
-                      return 'El formato del correo no es válido';
+                      return 'Por favor, ingresá un nombre';
                     }
                     return null;
                   },
                 ),
                 const SizedBox(height: 16),
 
-                // Campo: Contraseña (userPassword)
+                // Input de Contraseña
                 TextFormField(
                   controller: _passwordController,
-                  obscureText: true, // Oculta la contraseña con puntitos
+                  obscureText: true, // Oculta los caracteres
                   decoration: const InputDecoration(
                     labelText: 'Contraseña',
                     border: OutlineInputBorder(),
                     prefixIcon: Icon(Icons.lock),
                   ),
                   validator: (value) {
-                    // La API exige entre 8 y 72 caracteres
-                    if (value == null || value.length < 8) {
-                      return 'La contraseña debe tener al menos 8 caracteres';
+                    if (value == null || value.length < 4) {
+                      return 'La contraseña debe tener al menos 4 caracteres';
                     }
                     return null;
                   },
                 ),
-                const SizedBox(height: 28),
+
+                const SizedBox(height: 32),
                 // Botón de Ingreso
                 SizedBox(
                   width: double.infinity,
-                  height: 52,
+                  height: 50,
                   child: ElevatedButton(
                     onPressed: _ingresar,
                     child: const Text(
-                      'INGRESAR',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
+                      'Ingresar',
+                      style: TextStyle(fontSize: 18),
                     ),
                   ),
                 ),

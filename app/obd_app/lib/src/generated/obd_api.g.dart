@@ -18,6 +18,7 @@ List<Object?> wrapResponse({Object? result, PlatformException? error, bool empty
   }
   return <Object?>[error.code, error.message, error.details];
 }
+
 bool _deepEquals(Object? a, Object? b) {
   if (identical(a, b)) {
     return true;
@@ -29,9 +30,7 @@ bool _deepEquals(Object? a, Object? b) {
     return a == b;
   }
   if (a is List && b is List) {
-    return a.length == b.length &&
-        a.indexed
-            .every(((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]));
+    return a.length == b.length && a.indexed.every(((int, dynamic) item) => _deepEquals(item.$2, b[item.$1]));
   }
   if (a is Map && b is Map) {
     if (a.length != b.length) {
@@ -80,7 +79,6 @@ int _deepHash(Object? value) {
   return value.hashCode;
 }
 
-
 class TelemetryEvent {
   TelemetryEvent({
     this.speed,
@@ -111,7 +109,8 @@ class TelemetryEvent {
   }
 
   Object encode() {
-    return _toList();  }
+    return _toList();
+  }
 
   static TelemetryEvent decode(Object result) {
     result as List<Object?>;
@@ -133,7 +132,11 @@ class TelemetryEvent {
     if (identical(this, other)) {
       return true;
     }
-    return _deepEquals(speed, other.speed) && _deepEquals(rpm, other.rpm) && _deepEquals(fuel, other.fuel) && _deepEquals(lat, other.lat) && _deepEquals(lng, other.lng);
+    return _deepEquals(speed, other.speed) &&
+        _deepEquals(rpm, other.rpm) &&
+        _deepEquals(fuel, other.fuel) &&
+        _deepEquals(lat, other.lat) &&
+        _deepEquals(lng, other.lng);
   }
 
   @override
@@ -146,7 +149,6 @@ class TelemetryEvent {
   }
 }
 
-
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
   @override
@@ -154,7 +156,7 @@ class _PigeonCodec extends StandardMessageCodec {
     if (value is int) {
       buffer.putUint8(4);
       buffer.putInt64(value);
-    }    else if (value is TelemetryEvent) {
+    } else if (value is TelemetryEvent) {
       buffer.putUint8(129);
       writeValue(buffer, value.encode());
     } else {
@@ -178,16 +180,18 @@ abstract class ObdFlutterApi {
 
   void onTelemetryUpdated(TelemetryEvent event);
 
-  static void setUp(ObdFlutterApi? api, {
-    BinaryMessenger? binaryMessenger, 
+  static void setUp(
+    ObdFlutterApi? api, {
+    BinaryMessenger? binaryMessenger,
     String messageChannelSuffix = '',
-  }) 
-{
+  }) {
     messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
     {
       final pigeonVar_channel = BasicMessageChannel<Object?>(
-          'dev.flutter.pigeon.obd_app.ObdFlutterApi.onTelemetryUpdated$messageChannelSuffix', pigeonChannelCodec,
-          binaryMessenger: binaryMessenger);
+        'dev.flutter.pigeon.obd_app.ObdFlutterApi.onTelemetryUpdated$messageChannelSuffix',
+        pigeonChannelCodec,
+        binaryMessenger: binaryMessenger,
+      );
       if (api == null) {
         pigeonVar_channel.setMessageHandler(null);
       } else {
@@ -199,8 +203,10 @@ abstract class ObdFlutterApi {
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);
-          }          catch (e) {
-            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          } catch (e) {
+            return wrapResponse(
+              error: PlatformException(code: 'error', message: e.toString()),
+            );
           }
         });
       }

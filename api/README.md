@@ -87,35 +87,96 @@ needs the firmware half.
 
 ## Running
 
-Copy `.env.example` to `.env` and fill in real values, then load it into your
-shell before running (this app does **not** auto-load `.env` — see the note
-in `.env.example` for why):
+The app reads all of its configuration from environment variables and does
+**not** auto-load `.env` files (see the note in `.env.example` for why), so you
+load the right file into your shell first, then start the app.
 
-```bash
-set -a; source .env; set +a
-./mvnw spring-boot:run
-```
+Keep **two env files, one per environment**, both git-ignored:
 
-Or build and run the jar directly:
+| File | Used for | Points at |
+|---|---|---|
+| `.env.dev` | local development (`dev` profile) | the **development** Supabase project (or a local Postgres) |
+| `.env.prod` | production / running the prod build locally | the **production** Supabase project |
 
-```bash
-set -a; source .env; set +a
-./mvnw -DskipTests package
-java -jar target/api-0.0.1-SNAPSHOT.jar
-```
+Copy `.env.example` to each and fill in the values for that environment. They
+must never point at the same database: Flyway runs the migrations against
+whatever `DB_URL` it finds on first start, and migrations are immutable once
+applied, so a dev experiment against the prod DB cannot be undone.
 
-In IntelliJ: open the Run/Debug configuration for `ApiApplication`, go to
-**Modify options → Environment variables**, and set the values there (or use
-an EnvFile-capable plugin) instead of relying on `.env`.
-
-Required environment variables (see `.env.example` / `application.properties`):
+Variables (same set in both files, different values):
 
 | Variable | Purpose |
 |---|---|
-| `DB_USER` / `DB_PASSWORD` | Postgres credentials |
-| `DB_URL` | JDBC URL; optional, defaults to `jdbc:postgresql://localhost:5432/obd` |
-| `JWT_SECRET` | Base64-encoded HMAC signing key for access tokens |
-| `CORS_ORIGINS` | Comma-separated frontend origin(s) allowed via CORS (defaults to `http://localhost:5173`) |
+| `DB_URL` | JDBC URL. For Supabase use the **session pooler** host, e.g. `jdbc:postgresql://aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require` (the direct host is IPv6-only). Defaults to `jdbc:postgresql://localhost:5432/obd` |
+| `DB_USER` / `DB_PASSWORD` | Postgres credentials. Supabase pooler user is `postgres.<project-ref>` |
+| `JWT_SECRET` | Base64-encoded HMAC signing key for access tokens (`openssl rand -base64 32`). Use a different key per environment |
+| `CORS_ORIGINS` | Comma-separated frontend origin(s) allowed via CORS. Dev: `http://localhost:5173`; prod: the deployed frontend URL |
+| `PORT` | Optional. Port to listen on, defaults to `8080`. Hosting platforms set this themselves |
+
+### Profiles
+
+Compilation does not depend on the environment: `./mvnw package` builds one
+jar containing every `application-*.properties`. The environment is chosen
+**at run time** by the active Spring profile:
+
+- **`dev`** (`application-dev.properties`): refresh cookie sent over plain
+  HTTP, small Hikari pool sized for the Supabase pooler. Activated by
+  `SPRING_PROFILES_ACTIVE=dev`, which lives in `.env.dev` so the file itself
+  selects the profile.
+- **no profile** (`application.properties` only): production settings —
+  `Secure` cookies, no error details in responses. This is what runs in
+  production; never activate `dev` there.
+
+The startup log tells you which one took effect: `The following 1 profile is
+active: "dev"` vs `No active profile set`.
+
+### Development
+
+```bash
+set -a; source .env.dev; set +a
+./mvnw spring-boot:run
+```
+
+Or build once and run the jar with the profile:
+
+```bash
+./mvnw -DskipTests package
+set -a; source .env.dev; set +a
+java -jar target/api-0.0.1-SNAPSHOT.jar
+```
+
+Or run the production container image against the dev database:
+
+```bash
+docker build -f Dockerfile.vercel -t obd-api .
+docker run --rm -p 8080:8080 --env-file .env.dev obd-api
+```
+
+In IntelliJ: open the Run/Debug configuration for `ApiApplication` and under
+**Modify options → Environment variables** paste the values from `.env.dev`,
+including `SPRING_PROFILES_ACTIVE=dev` (or use an EnvFile-capable plugin).
+
+### Production
+
+Locally, to run exactly what production runs (no profile, prod database):
+
+```bash
+./mvnw -DskipTests package
+set -a; source .env.prod; set +a
+java -jar target/api-0.0.1-SNAPSHOT.jar
+```
+
+On the hosting platform there is no `.env.prod` file at all: enter the same
+variables in the platform's environment-variable settings (e.g. Vercel →
+Project → Settings → Environment Variables, marking `DB_PASSWORD` and
+`JWT_SECRET` as sensitive) and do **not** set `SPRING_PROFILES_ACTIVE`. The
+container is built from `Dockerfile.vercel`; `PORT` must match the port the
+platform routes to.
+
+If you also want a hosted **dev** deployment (e.g. Vercel's Preview
+environment), give that environment the values from `.env.dev` - including
+`SPRING_PROFILES_ACTIVE=dev` - scoped to Preview only, so production keeps
+the default profile and the production database.
 
 ## Endpoints
 

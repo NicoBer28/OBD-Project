@@ -1,0 +1,363 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:obd_app/core/theme/app_theme.dart';
+import 'package:obd_app/data/api/obd_api.dart';
+import 'package:obd_app/ui/screens/home/main_screen.dart';
+
+/// Registro: crea la cuenta contra `POST /api/v1/auth/register`.
+///
+/// Ese endpoint además deja la sesión abierta (devuelve los mismos tokens que
+/// el login), así que al terminar entramos directo a la app en vez de volver
+/// al login a pedir la contraseña de nuevo. Si preferís el flujo anterior,
+/// reemplazá el `pushAndRemoveUntil` por `navigator.pop()`.
+class RegisterScreen extends StatefulWidget {
+  const RegisterScreen({super.key});
+
+  @override
+  State<RegisterScreen> createState() => _RegisterScreenState();
+}
+
+class _RegisterScreenState extends State<RegisterScreen> {
+  // Permite ejecutar todos los validators del Form en una sola operación.
+  final _formKey = GlobalKey<FormState>();
+
+  // El mismo patrón que valida el servidor (`UserDTO.PHONE`). Sin esto el
+  // registro fallaba con un 400 "Invalid Phone Number" para formatos como
+  // "+54 9 11 1234 5678", que tienen más grupos de los que el patrón admite.
+  static final _phonePattern = RegExp(
+    r'^\+?(\d{1,3})?[-.\s]?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}$',
+  );
+
+  // Los controllers permiten leer el contenido de los campos de texto.
+  final _nombreController = TextEditingController(); // Para userName
+  final _apellidoController = TextEditingController(); // Para userLastName
+  final _emailController = TextEditingController(); // Para userEmail
+  final _passwordController = TextEditingController(); // Para userPassword
+  final _telefonoController = TextEditingController(); // Para userPhone (Opcional)
+
+  bool _cargando = false;
+
+  // Pasados unos segundos sin respuesta avisamos que el servidor puede estar
+  // despertando (Vercel duerme el contenedor y el primer pedido tarda ~20 s).
+  bool _lento = false;
+  Timer? _avisoLento;
+
+  // Los controllers deben liberarse cuando el State deja de existir.
+  @override
+  void dispose() {
+    _avisoLento?.cancel();
+    _nombreController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    _apellidoController.dispose();
+    _telefonoController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _registrarse() async {
+    if (_cargando || !_formKey.currentState!.validate()) return;
+
+    final api = ObdApi.instance;
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final nombre = _nombreController.text.trim();
+
+    setState(() {
+      _cargando = true;
+      _lento = false;
+    });
+    _avisoLento = Timer(const Duration(seconds: 5), () {
+      if (mounted && _cargando) setState(() => _lento = true);
+    });
+
+    try {
+      // register crea la cuenta Y la loguea: el cliente guarda los tokens solo.
+      await api.auth.register(
+        userName: nombre,
+        userLastName: _apellidoController.text.trim(),
+        userEmail: _emailController.text.trim(),
+        userPassword: _passwordController.text,
+        userPhone: _telefonoController.text,
+      );
+
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('¡Cuenta creada con éxito!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      if (!mounted) return;
+      // Sacamos el login de la pila: ya hay sesión abierta.
+      navigator.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => MainScreen(nombreUsuario: nombre)),
+        (route) => false,
+      );
+    } on ApiException catch (error) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(_mensajeDeError(error)),
+          backgroundColor: error.isConflict ? Colors.red : Colors.orange,
+        ),
+      );
+    } on NetworkException {
+      // El pedido venció o se cortó, pero el servidor puede haber creado la
+      // cuenta igual (pasaba con el cold start de Vercel: 23 s de respuesta
+      // contra 15 s de timeout). Si ahora el login entra, la cuenta existe y
+      // seguimos como si el registro hubiera contestado.
+      if (await _intentarLoginDeRescate()) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No se pudo conectar con el servidor. Si ya tenés cuenta, probá ingresar.',
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      _avisoLento?.cancel();
+      if (mounted) {
+        setState(() {
+          _cargando = false;
+          _lento = false;
+        });
+      }
+    }
+  }
+
+  /// Después de un timeout en `register`: ¿quedó creada la cuenta? Un login
+  /// exitoso lo confirma y deja la sesión abierta; un 401 dice que no, y
+  /// cualquier otra cosa se trata como el error de red original.
+  Future<bool> _intentarLoginDeRescate() async {
+    final api = ObdApi.instance;
+    final navigator = Navigator.of(context);
+    final nombre = _nombreController.text.trim();
+    try {
+      await api.auth.login(
+        userEmail: _emailController.text.trim(),
+        userPassword: _passwordController.text,
+      );
+    } on ObdApiException {
+      return false;
+    }
+    if (!mounted) return true;
+    navigator.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => MainScreen(nombreUsuario: nombre)),
+      (route) => false,
+    );
+    return true;
+  }
+
+  /// La API devuelve 409 si el mail ya existe y 400 con un mapa campo →
+  /// mensaje si algo no pasó la validación; mostramos el primero de esos.
+  String _mensajeDeError(ApiException error) {
+    if (error.isConflict) return 'Ese correo ya está registrado';
+    if (error.isValidation) {
+      if (error.fieldErrors.isNotEmpty) {
+        final primero = error.fieldErrors.entries.first;
+        return '${_etiquetaDe(primero.key)}: ${primero.value}';
+      }
+      return 'Revisá los datos ingresados';
+    }
+    return 'Error del servidor (${error.statusCode})';
+  }
+
+  String _etiquetaDe(String campo) => switch (campo) {
+    'userName' => 'Nombre',
+    'userLastName' => 'Apellido',
+    'userEmail' => 'Correo',
+    'userPassword' => 'Contraseña',
+    'userPhone' => 'Teléfono',
+    _ => campo,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Crear Cuenta')),
+      body: Center(
+        // SingleChildScrollView evita que el teclado tape los botones al escribir.
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+          child: Form(
+            key: _formKey, // Conectamos el formulario con nuestra llave maestra
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Icono decorativo al igual que en el login
+                Container(
+                  width: 62,
+                  height: 62,
+                  decoration: BoxDecoration(
+                    color: AppColors.accentSubtle,
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: const Icon(
+                    Icons.person_add_alt_1_outlined,
+                    size: 32,
+                    color: AppColors.accent,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Creá tu cuenta',
+                    style: TextStyle(
+                      fontSize: 25,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 5),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Empezá a conocer mejor tu auto.',
+                    style: TextStyle(color: AppColors.muted),
+                  ),
+                ),
+                const SizedBox(height: 26),
+
+                // Campo: Nombre (userName)
+                TextFormField(
+                  controller: _nombreController,
+                  enabled: !_cargando,
+                  decoration: const InputDecoration(
+                    labelText: 'Nombre',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.person),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Por favor, ingresá tu nombre';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // Campo: Apellido (userLastName)
+                TextFormField(
+                  controller: _apellidoController,
+                  enabled: !_cargando,
+                  decoration: const InputDecoration(
+                    labelText: 'Apellido',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.badge),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Por favor, ingresá tu apellido';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // Campo: Correo Electrónico (userEmail)
+                TextFormField(
+                  controller: _emailController,
+                  enabled: !_cargando,
+                  keyboardType: TextInputType.emailAddress, // Muestra el teclado con el "@"
+                  decoration: const InputDecoration(
+                    labelText: 'Correo electrónico',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.email),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Por favor, ingresá un correo';
+                    }
+                    if (!value.contains('@')) {
+                      return 'El formato del correo no es válido';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // Campo: Teléfono (userPhone) - Opcional según API
+                TextFormField(
+                  controller: _telefonoController,
+                  enabled: !_cargando,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(
+                    labelText: 'Teléfono (Opcional)',
+                    hintText: '+54 11 1234 5678',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.phone),
+                  ),
+                  validator: (value) {
+                    final phone = value?.trim() ?? '';
+                    if (phone.isEmpty) return null;
+                    if (!_phonePattern.hasMatch(phone)) {
+                      return 'Usá el formato +54 11 1234 5678 (sin el 9 ni el 15)';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // Campo: Contraseña (userPassword)
+                TextFormField(
+                  controller: _passwordController,
+                  enabled: !_cargando,
+                  obscureText: true, // Oculta la contraseña con puntitos
+                  decoration: const InputDecoration(
+                    labelText: 'Contraseña',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.lock),
+                  ),
+                  validator: (value) {
+                    // La API exige entre 8 y 72 caracteres
+                    if (value == null || value.length < 8) {
+                      return 'La contraseña debe tener al menos 8 caracteres';
+                    }
+                    if (value.length > 72) {
+                      return 'La contraseña no puede superar los 72 caracteres';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 32),
+
+                // Botón de Registro
+                SizedBox(
+                  width: double.infinity, // Ocupa todo el ancho disponible
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: _cargando ? null : _registrarse,
+                    child: _cargando
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text(
+                            'REGISTRARSE',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                  ),
+                ),
+                if (_lento) ...[
+                  const SizedBox(height: 10),
+                  const Text(
+                    'El servidor está despertando, puede tardar unos segundos…',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: AppColors.muted),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

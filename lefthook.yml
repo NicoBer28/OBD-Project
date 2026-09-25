@@ -1,0 +1,25 @@
+# Format only staged files
+pre-commit:
+  parallel: true
+  commands:
+    dart-format:
+      glob: "app/obd_app/**/*.dart"
+      run: dart format {staged_files}
+      stage_fixed: true
+
+    cpp-format:
+      glob: "hardware/main/*.{c,cpp,h,hpp}"
+      run: clang-format -i {staged_files}
+      stage_fixed: true
+
+# Conventional-commits
+commit-msg:
+  commands:
+    conventional:
+      run: .githooks/commit-msg {1}
+
+# Testing
+pre-push:
+  commands:
+    test:
+      run: make test

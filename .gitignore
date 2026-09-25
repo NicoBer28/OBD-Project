@@ -3,11 +3,13 @@ sdkconfig
 sdkconfig.old
 dependencies.lock
 
+.vscode/
+
 .DS_Store
 
 hardware/.vscode
 hardware/build
-
+hardware/managed_components
 exec_esp.sh
 
 circuito/*-bak
@@ -16,7 +18,9 @@ circuito/*.bck
 circuito/*.kicad_pcb-bak
 circuito/*.kicad_sch-bak
 circuito/*.fp-info-cache
+circuito/*.lck
 
 .devcontainer/
+
 ### graphify ###
 graphify-out/

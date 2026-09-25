@@ -1,0 +1,19 @@
+BasedOnStyle: LLVM
+
+# --- Indentation -------------------------------------------------------------
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+IndentCaseLabels: true
+IndentPPDirectives: None
+
+# --- Braces ------------------------------------------------------------------
+BreakBeforeBraces: Allman
+InsertBraces: true
+
+# --- Line length ------------------------------------------------------------------
+ColumnLimit: 120
+
+# --- Pointers ------------------------------------------------------------------
+PointerAlignment: Left

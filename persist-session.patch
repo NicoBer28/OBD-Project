@@ -1,0 +1,944 @@
+diff --git a/app/obd_app/lib/data/api/CLIENTE-API.md b/app/obd_app/lib/data/api/CLIENTE-API.md
+index 439b8f9..bda6faf 100644
+--- a/app/obd_app/lib/data/api/CLIENTE-API.md
++++ b/app/obd_app/lib/data/api/CLIENTE-API.md
+@@ -101,10 +101,23 @@ code.
+ `userId` y el email. Es un `ChangeNotifier`, así que un widget puede escucharlo
+ con `ListenableBuilder` para reaccionar al logout.
+ 
+-**No se persiste nada en disco.** Cerrar la app desloguea. Agregarlo es una
+-clase: guardar los tres campos en `flutter_secure_storage` y restaurarlos antes
+-de `runApp`. Quedó afuera a propósito — un refresh token en
+-`SharedPreferences` en texto plano es peor que volver a pedir la contraseña.
++**Solo el refresh token se guarda en disco**, en el keystore del sistema
++(Keychain en iOS, Android Keystore en Android) a través de `SessionStore` /
++`SecureSessionStore` y `flutter_secure_storage`. El access token, su
++vencimiento y la identidad quedan en memoria: `main()` llama a
++`session.restore()` antes de `runApp`, y `AuthGate` cambia el token restaurado
++por un access token nuevo (`POST /auth/refresh`) y entra directo a la app.
++
++- El token se reescribe en cada rotación (`rememberRefreshToken`) y se borra en
++  el logout o cuando el servidor rechaza el refresh (`401`).
++- Un fallo de red o un `5xx` en el refresh **no** borra nada: `AuthGate` ofrece
++  reintentar en vez de pedir la contraseña por un problema de conexión.
++- Un keystore ilegible (p. ej. datos restaurados de un backup en otro
++  teléfono) se trata como sesión cerrada.
++- Sin `store` (los tests) `ObdSession` se comporta como antes: solo memoria.
++
++Un refresh token en `SharedPreferences` en texto plano sería peor que volver a
++pedir la contraseña, por eso no se usa.
+ 
+ ---
+ 
+@@ -565,7 +578,6 @@ serial porque el firmware todavía no expone el serial del dongle.
+ 
+ ## 6. Qué falta
+ 
+-- **Persistir la sesión.** Hoy cerrar la app desloguea (ver arriba).
+ - **Reservas.** La app las tiene en memoria (por teléfono); la API no las
+   expone todavía.
+ - **Unirse a un grupo por QR.** El QR de hoy lleva el correo del invitado
+diff --git a/app/obd_app/lib/data/api/README.md b/app/obd_app/lib/data/api/README.md
+index 439b8f9..bda6faf 100644
+--- a/app/obd_app/lib/data/api/README.md
++++ b/app/obd_app/lib/data/api/README.md
+@@ -101,10 +101,23 @@ code.
+ `userId` y el email. Es un `ChangeNotifier`, así que un widget puede escucharlo
+ con `ListenableBuilder` para reaccionar al logout.
+ 
+-**No se persiste nada en disco.** Cerrar la app desloguea. Agregarlo es una
+-clase: guardar los tres campos en `flutter_secure_storage` y restaurarlos antes
+-de `runApp`. Quedó afuera a propósito — un refresh token en
+-`SharedPreferences` en texto plano es peor que volver a pedir la contraseña.
++**Solo el refresh token se guarda en disco**, en el keystore del sistema
++(Keychain en iOS, Android Keystore en Android) a través de `SessionStore` /
++`SecureSessionStore` y `flutter_secure_storage`. El access token, su
++vencimiento y la identidad quedan en memoria: `main()` llama a
++`session.restore()` antes de `runApp`, y `AuthGate` cambia el token restaurado
++por un access token nuevo (`POST /auth/refresh`) y entra directo a la app.
++
++- El token se reescribe en cada rotación (`rememberRefreshToken`) y se borra en
++  el logout o cuando el servidor rechaza el refresh (`401`).
++- Un fallo de red o un `5xx` en el refresh **no** borra nada: `AuthGate` ofrece
++  reintentar en vez de pedir la contraseña por un problema de conexión.
++- Un keystore ilegible (p. ej. datos restaurados de un backup en otro
++  teléfono) se trata como sesión cerrada.
++- Sin `store` (los tests) `ObdSession` se comporta como antes: solo memoria.
++
++Un refresh token en `SharedPreferences` en texto plano sería peor que volver a
++pedir la contraseña, por eso no se usa.
+ 
+ ---
+ 
+@@ -565,7 +578,6 @@ serial porque el firmware todavía no expone el serial del dongle.
+ 
+ ## 6. Qué falta
+ 
+-- **Persistir la sesión.** Hoy cerrar la app desloguea (ver arriba).
+ - **Reservas.** La app las tiene en memoria (por teléfono); la API no las
+   expone todavía.
+ - **Unirse a un grupo por QR.** El QR de hoy lleva el correo del invitado
+diff --git a/app/obd_app/lib/data/api/api_client.dart b/app/obd_app/lib/data/api/api_client.dart
+index e7ee137..ca4b99f 100644
+--- a/app/obd_app/lib/data/api/api_client.dart
++++ b/app/obd_app/lib/data/api/api_client.dart
+@@ -165,9 +165,14 @@ class ApiClient {
+ 
+   /// Exchanges the stored refresh cookie for a new access token.
+   ///
+-  /// Returns false when the session is gone for good (the caller should send
+-  /// the user back to the login screen). Single-flight: callers that arrive
+-  /// while a refresh is running await the same one.
++  /// Returns true when a new access token is in the session. Returns false
++  /// otherwise, and then `session.refreshToken` tells the two cases apart:
++  /// null means the server refused it and the session is gone for good (send
++  /// the user to the login screen); still set means the server could not be
++  /// reached or errored (5xx), the token may be fine and a retry is worth it.
++  ///
++  /// Single-flight: callers that arrive while a refresh is running await the
++  /// same one.
+   Future<bool> refreshSession() {
+     final running = _refreshInFlight;
+     if (running != null) return running;
+@@ -230,6 +235,14 @@ class ApiClient {
+         'Cookie': '$refreshCookieName=$cookie',
+       }, null);
+ 
++      if (response.statusCode >= 500) {
++        // The server is having a bad moment (a proxy 502/503, a cold start
++        // that gave up). The refresh token is persisted now, so wiping it here
++        // would turn a hiccup into a logout that survives restarts. Keep it
++        // and let the next call try again, exactly like the offline case.
++        return false;
++      }
++
+       if (response.statusCode >= 400) {
+         // Expired, already used, or revoked: this session is finished.
+         session.clear();
+diff --git a/app/obd_app/lib/data/api/obd_api.dart b/app/obd_app/lib/data/api/obd_api.dart
+index 83fea9f..9f8d8ef 100644
+--- a/app/obd_app/lib/data/api/obd_api.dart
++++ b/app/obd_app/lib/data/api/obd_api.dart
+@@ -11,6 +11,7 @@ import 'package:obd_app/data/api/endpoints/telemetry_api.dart';
+ import 'package:obd_app/data/api/endpoints/trips_api.dart';
+ import 'package:obd_app/data/api/endpoints/users_api.dart';
+ import 'package:obd_app/data/api/session.dart';
++import 'package:obd_app/data/api/session_store.dart';
+ 
+ export 'package:obd_app/data/api/api_client.dart' show ApiClient, ApiResponse;
+ export 'package:obd_app/data/api/api_config.dart';
+@@ -26,6 +27,7 @@ export 'package:obd_app/data/api/endpoints/trips_api.dart';
+ export 'package:obd_app/data/api/endpoints/users_api.dart';
+ export 'package:obd_app/data/api/models/api_models.dart';
+ export 'package:obd_app/data/api/session.dart';
++export 'package:obd_app/data/api/session_store.dart';
+ 
+ /// The whole OBD API, grouped by resource.
+ ///
+@@ -60,8 +62,12 @@ class ObdApi {
+       trips = TripsApi(client),
+       telemetry = TelemetryApi(client);
+ 
+-  /// The shared instance the UI uses.
+-  static final ObdApi instance = ObdApi();
++  /// The shared instance the UI uses. Its session is backed by the OS keystore,
++  /// so the refresh token survives closing the app (see `main()` for the
++  /// restore step). Instances built by tests have no store and keep nothing.
++  static final ObdApi instance = ObdApi(
++    session: ObdSession(store: SecureSessionStore()),
++  );
+ 
+   final ApiClient client;
+ 
+diff --git a/app/obd_app/lib/data/api/session.dart b/app/obd_app/lib/data/api/session.dart
+index f3e315b..6582851 100644
+--- a/app/obd_app/lib/data/api/session.dart
++++ b/app/obd_app/lib/data/api/session.dart
+@@ -1,5 +1,6 @@
+ import 'package:flutter/foundation.dart';
+ import 'package:obd_app/data/api/models/api_models.dart';
++import 'package:obd_app/data/api/session_store.dart';
+ 
+ /// Who is signed in, and the two tokens that prove it.
+ ///
+@@ -7,12 +8,22 @@ import 'package:obd_app/data/api/models/api_models.dart';
+ /// (`ListenableBuilder`), which is how an app-wide "logged out" redirect is
+ /// wired without a state-management package.
+ ///
+-/// **Nothing is written to disk.** Closing the app signs the user out. Adding
+-/// persistence is one class: store [accessToken], [refreshToken] and
+-/// [expiresAt] in `flutter_secure_storage` on every change and restore them
+-/// before `runApp`. It was left out on purpose — a refresh token in plain
+-/// `SharedPreferences` is worse than asking for the password again.
++/// **Only the refresh token is persisted** (through a [SessionStore], the OS
++/// keystore in the real app). The access token, its expiry and the user
++/// identity stay in memory: after a restart [restore] brings the refresh token
++/// back and `ApiClient.refreshSession` trades it for all of those again.
++///
++/// Persistence is optional. Without a store — as in the unit tests — the
++/// session behaves exactly as it always did and closing the app signs out.
+ class ObdSession extends ChangeNotifier {
++  ObdSession({SessionStore? store}) : _store = store;
++
++  final SessionStore? _store;
++
++  /// Tail of the queue of pending disk writes. Chained so that a token saved
++  /// and then cleared right after can never land on disk in the wrong order.
++  Future<void> _writes = Future<void>.value();
++
+   String? _accessToken;
+   String? _refreshToken;
+   DateTime? _expiresAt;
+@@ -44,6 +55,34 @@ class ObdSession extends ChangeNotifier {
+     return expiry != null && DateTime.now().isAfter(expiry);
+   }
+ 
++  /// Loads the refresh token saved by a previous run of the app.
++  ///
++  /// Call once, before the first screen, and only then look at
++  /// [refreshToken]. This does **not** make the session [isAuthenticated]:
++  /// there is still no access token, so the caller has to run
++  /// `ApiClient.refreshSession` to get one.
++  ///
++  /// A store that cannot be read (keystore reset, data restored from a backup
++  /// onto another device) is treated as "signed out", never as an error.
++  Future<void> restore() async {
++    final store = _store;
++    if (store == null) return;
++    try {
++      final saved = await store.readRefreshToken();
++      if (saved != null && saved.isNotEmpty) {
++        _refreshToken = saved;
++        notifyListeners();
++      }
++    } catch (_) {
++      _persist(null);
++    }
++  }
++
++  /// Completes when every disk write started so far has finished. Only tests
++  /// need to wait for this; the app fires and forgets.
++  @visibleForTesting
++  Future<void> get pendingWrites => _writes;
++
+   /// Stores what `register` / `login` / `refresh` returned.
+   void save(AuthSession auth) {
+     _accessToken = auth.accessToken;
+@@ -58,6 +97,7 @@ class ObdSession extends ChangeNotifier {
+   void rememberRefreshToken(String? value) {
+     if (_refreshToken == value) return;
+     _refreshToken = value;
++    _persist(value);
+     notifyListeners();
+   }
+ 
+@@ -74,9 +114,29 @@ class ObdSession extends ChangeNotifier {
+     _expiresAt = null;
+     _userId = null;
+     _email = null;
++    _persist(null);
+     notifyListeners();
+   }
+ 
++  /// Mirrors the refresh token to the store, or deletes it when [token] is
++  /// null. Best effort: if the write fails the app still works, the user just
++  /// has to log in again after the next restart.
++  void _persist(String? token) {
++    final store = _store;
++    if (store == null) return;
++    _writes = _writes.then((_) async {
++      try {
++        if (token == null) {
++          await store.deleteRefreshToken();
++        } else {
++          await store.writeRefreshToken(token);
++        }
++      } catch (_) {
++        // Nothing useful to do; see above.
++      }
++    });
++  }
++
+   @override
+   String toString() =>
+       'ObdSession(${isAuthenticated ? _email : 'signed out'})';
+diff --git a/app/obd_app/lib/data/api/session_store.dart b/app/obd_app/lib/data/api/session_store.dart
+new file mode 100644
+index 0000000..76097e4
+--- /dev/null
++++ b/app/obd_app/lib/data/api/session_store.dart
+@@ -0,0 +1,41 @@
++import 'package:flutter_secure_storage/flutter_secure_storage.dart';
++
++/// Where the refresh token lives between launches of the app.
++///
++/// Only the refresh token is stored. The access token is a 15-minute JWT that
++/// `POST /auth/refresh` hands out again, and the user id / email come back in
++/// the same response, so there is nothing else worth putting on disk.
++///
++/// An interface so tests can use an in-memory fake and never touch a platform
++/// channel.
++abstract interface class SessionStore {
++  Future<String?> readRefreshToken();
++
++  Future<void> writeRefreshToken(String token);
++
++  Future<void> deleteRefreshToken();
++}
++
++/// Keeps the refresh token in the OS keystore: Keychain on iOS / macOS, an
++/// AES-GCM key held in the Android Keystore on Android.
++///
++/// A refresh token in plain `SharedPreferences` would be readable by anyone
++/// with a backup or a rooted device, which is why this is not that.
++class SecureSessionStore implements SessionStore {
++  SecureSessionStore([FlutterSecureStorage? storage])
++    : _storage = storage ?? FlutterSecureStorage();
++
++  static const String _refreshTokenKey = 'obd.refresh_token';
++
++  final FlutterSecureStorage _storage;
++
++  @override
++  Future<String?> readRefreshToken() => _storage.read(key: _refreshTokenKey);
++
++  @override
++  Future<void> writeRefreshToken(String token) =>
++      _storage.write(key: _refreshTokenKey, value: token);
++
++  @override
++  Future<void> deleteRefreshToken() => _storage.delete(key: _refreshTokenKey);
++}
+diff --git a/app/obd_app/lib/main.dart b/app/obd_app/lib/main.dart
+index 9f038bf..3165a98 100644
+--- a/app/obd_app/lib/main.dart
++++ b/app/obd_app/lib/main.dart
+@@ -1,10 +1,20 @@
+ import 'package:flutter/material.dart';
+ 
+ import 'package:obd_app/core/theme/app_theme.dart';
+-import 'package:obd_app/ui/screens/auth/login_screen.dart';
++import 'package:obd_app/data/api/obd_api.dart';
++import 'package:obd_app/ui/screens/auth/auth_gate.dart';
+ 
+-void main() {
+-  // Punto de entrada de Dart. Flutter comienza construyendo OBDCApp.
++Future<void> main() async {
++  // Punto de entrada de Dart. Hace falta antes de tocar el keystore, que se
++  // habla con la plataforma por un canal.
++  WidgetsFlutterBinding.ensureInitialized();
++
++  // Recupera el refresh token que dejó la corrida anterior. Es una lectura
++  // local (milisegundos), no una llamada de red: la red la hace AuthGate ya
++  // con la app en pantalla.
++  await ObdApi.instance.session.restore();
++
++  // Flutter comienza construyendo OBDCApp.
+   runApp(const OBDCApp());
+ }
+ 
+@@ -22,10 +32,11 @@ class OBDCApp extends StatelessWidget {
+         theme: buildAppTheme(),
+         darkTheme: buildAppTheme(Brightness.dark),
+         themeMode: mode,
+-        // La app arranca en el login. Antes entraba directo a MainScreen con
+-        // un usuario de prueba; ahora MainScreen se construye recién cuando
+-        // `POST /api/v1/auth/login` (o `/register`) devolvió una sesión.
+-        home: const LoginScreen(),
++        // AuthGate decide la primera pantalla: si quedó una sesión guardada la
++        // recupera y entra directo a MainScreen; si no, muestra el login.
++        // MainScreen se construye recién cuando hay una sesión válida, sea
++        // por `POST /api/v1/auth/refresh` o por login / registro.
++        home: const AuthGate(),
+       ),
+     );
+   }
+diff --git a/app/obd_app/lib/ui/screens/auth/auth_gate.dart b/app/obd_app/lib/ui/screens/auth/auth_gate.dart
+new file mode 100644
+index 0000000..35f762b
+--- /dev/null
++++ b/app/obd_app/lib/ui/screens/auth/auth_gate.dart
+@@ -0,0 +1,252 @@
++import 'dart:async';
++
++import 'package:flutter/material.dart';
++import 'package:obd_app/core/theme/app_theme.dart';
++import 'package:obd_app/data/api/obd_api.dart';
++import 'package:obd_app/ui/screens/auth/login_screen.dart';
++import 'package:obd_app/ui/screens/home/main_screen.dart';
++
++enum _Phase {
++  /// Hay un refresh token guardado y lo estamos cambiando por un access token.
++  restoring,
++
++  /// El servidor no respondió. El token guardado sigue ahí: se puede reintentar.
++  offline,
++
++  /// La sesión se recuperó: directo a la app.
++  signedIn,
++
++  /// No había sesión guardada, o el servidor la rechazó: al login.
++  signedOut,
++}
++
++/// Primera pantalla de la app: decide entre el login y la app misma.
++///
++/// `main()` ya cargó del keystore el refresh token que dejó la corrida
++/// anterior (`ObdSession.restore`). Acá, si hay uno, se cambia por un access
++/// token nuevo (`POST /api/v1/auth/refresh`) y se entra directo a
++/// [MainScreen]; sin token guardado es el [LoginScreen] de siempre, sin
++/// pantalla intermedia ni demora.
++///
++/// Que el refresh falle puede significar dos cosas muy distintas, y se tratan
++/// distinto:
++///
++/// * **El servidor lo rechazó** (vencido a los 14 días, ya usado, revocado por
++///   un logout en otro dispositivo): el cliente borra la sesión y se va al
++///   login.
++/// * **No se pudo llegar al servidor** (sin señal, servidor caído): el token
++///   puede estar perfecto, así que no se toca. Se muestra un aviso con
++///   "Reintentar" en lugar de mandar al usuario a escribir la contraseña por
++///   un problema de red.
++class AuthGate extends StatefulWidget {
++  const AuthGate({super.key, this.api});
++
++  /// Solo para tests; en la app se usa la instancia compartida.
++  final ObdApi? api;
++
++  @override
++  State<AuthGate> createState() => _AuthGateState();
++}
++
++class _AuthGateState extends State<AuthGate> {
++  late final ObdApi _api = widget.api ?? ObdApi.instance;
++
++  _Phase _phase = _Phase.signedOut;
++  String _nombre = '';
++
++  @override
++  void initState() {
++    super.initState();
++    // Sin token guardado no hay nada que esperar: el login aparece en el
++    // primer frame.
++    if (_api.session.refreshToken != null) {
++      _phase = _Phase.restoring;
++      _restore();
++    }
++  }
++
++  Future<void> _restore() async {
++    final restored = await _api.client.refreshSession();
++    if (!mounted) return;
++
++    if (!restored) {
++      // Un rechazo del servidor borra el refresh token de la sesión; un fallo
++      // de red no. Es la forma de distinguirlos (ver `refreshSession`).
++      setState(() {
++        _phase = _api.session.refreshToken != null
++            ? _Phase.offline
++            : _Phase.signedOut;
++      });
++      return;
++    }
++
++    // Igual que en el login: el nombre de pila viene del perfil y, si el
++    // perfil falla, alcanza con el correo.
++    var nombre = _api.session.email ?? '';
++    try {
++      final perfil = await _api.users.me();
++      if (perfil.userName.isNotEmpty) nombre = perfil.userName;
++    } on ObdApiException {
++      // El perfil es un lujo, no un requisito.
++    }
++
++    if (!mounted) return;
++    setState(() {
++      _nombre = nombre;
++      _phase = _Phase.signedIn;
++    });
++  }
++
++  void _retry() {
++    setState(() => _phase = _Phase.restoring);
++    _restore();
++  }
++
++  void _useAnotherAccount() {
++    _api.session.clear();
++    setState(() => _phase = _Phase.signedOut);
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    return switch (_phase) {
++      _Phase.signedOut => const LoginScreen(),
++      _Phase.signedIn => MainScreen(nombreUsuario: _nombre),
++      _Phase.restoring => const _RestoringView(),
++      _Phase.offline => _OfflineView(
++        onRetry: _retry,
++        onUseAnotherAccount: _useAnotherAccount,
++      ),
++    };
++  }
++}
++
++/// Logo + spinner mientras se recupera la sesión.
++class _RestoringView extends StatefulWidget {
++  const _RestoringView();
++
++  @override
++  State<_RestoringView> createState() => _RestoringViewState();
++}
++
++class _RestoringViewState extends State<_RestoringView> {
++  // Pasados unos segundos avisamos que el servidor puede estar despertando,
++  // igual que hace el login.
++  bool _lento = false;
++  Timer? _avisoLento;
++
++  @override
++  void initState() {
++    super.initState();
++    _avisoLento = Timer(const Duration(seconds: 5), () {
++      if (mounted) setState(() => _lento = true);
++    });
++  }
++
++  @override
++  void dispose() {
++    _avisoLento?.cancel();
++    super.dispose();
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    return Scaffold(
++      body: Center(
++        child: Padding(
++          padding: const EdgeInsets.all(24),
++          child: Column(
++            mainAxisSize: MainAxisSize.min,
++            children: [
++              const _Logo(),
++              const SizedBox(height: 28),
++              const CircularProgressIndicator(),
++              const SizedBox(height: 20),
++              const Text('Retomando tu sesión…'),
++              if (_lento) ...[
++                const SizedBox(height: 6),
++                const Text(
++                  'El servidor puede estar despertando, un momento.',
++                  textAlign: TextAlign.center,
++                  style: TextStyle(color: AppColors.muted),
++                ),
++              ],
++            ],
++          ),
++        ),
++      ),
++    );
++  }
++}
++
++/// Aviso cuando no hubo forma de llegar al servidor.
++class _OfflineView extends StatelessWidget {
++  const _OfflineView({required this.onRetry, required this.onUseAnotherAccount});
++
++  final VoidCallback onRetry;
++  final VoidCallback onUseAnotherAccount;
++
++  @override
++  Widget build(BuildContext context) {
++    return Scaffold(
++      body: Center(
++        child: Padding(
++          padding: const EdgeInsets.all(24),
++          child: Column(
++            mainAxisSize: MainAxisSize.min,
++            children: [
++              const _Logo(),
++              const SizedBox(height: 24),
++              const Text(
++                'No pudimos conectar con el servidor',
++                textAlign: TextAlign.center,
++                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
++              ),
++              const SizedBox(height: 8),
++              const Text(
++                'Tu sesión sigue guardada. Revisá tu conexión y probá de nuevo.',
++                textAlign: TextAlign.center,
++                style: TextStyle(color: AppColors.muted),
++              ),
++              const SizedBox(height: 28),
++              SizedBox(
++                width: double.infinity,
++                height: 52,
++                child: ElevatedButton(
++                  onPressed: onRetry,
++                  child: const Text('REINTENTAR'),
++                ),
++              ),
++              const SizedBox(height: 8),
++              TextButton(
++                onPressed: onUseAnotherAccount,
++                child: const Text('Ingresar con otra cuenta'),
++              ),
++            ],
++          ),
++        ),
++      ),
++    );
++  }
++}
++
++class _Logo extends StatelessWidget {
++  const _Logo();
++
++  @override
++  Widget build(BuildContext context) {
++    return Container(
++      width: 68,
++      height: 68,
++      decoration: BoxDecoration(
++        color: AppColors.accentSubtle,
++        borderRadius: BorderRadius.circular(20),
++      ),
++      child: const Icon(
++        Icons.directions_car_outlined,
++        size: 36,
++        color: AppColors.accent,
++      ),
++    );
++  }
++}
+diff --git a/app/obd_app/pubspec.yaml b/app/obd_app/pubspec.yaml
+index c53a5b4..69b181d 100644
+--- a/app/obd_app/pubspec.yaml
++++ b/app/obd_app/pubspec.yaml
+@@ -37,6 +37,7 @@ dependencies:
+   flutter_blue_plus: ^2.3.12
+   permission_handler: ^13.0.1
+   http: ^1.6.0
++  flutter_secure_storage: ^10.0.0 # refresh token en Keychain / Android Keystore
+   google_fonts: ^8.2.1
+   pigeon: ^27.3.0
+   geolocator: ^14.0.3
+diff --git a/app/obd_app/test/data/api/session_persistence_test.dart b/app/obd_app/test/data/api/session_persistence_test.dart
+new file mode 100644
+index 0000000..6fcae12
+--- /dev/null
++++ b/app/obd_app/test/data/api/session_persistence_test.dart
+@@ -0,0 +1,230 @@
++import 'dart:convert';
++
++import 'package:flutter_test/flutter_test.dart';
++import 'package:http/http.dart' as http;
++import 'package:http/testing.dart';
++import 'package:obd_app/data/api/obd_api.dart';
++
++/// Pruebas de que el refresh token sobrevive al cierre de la app. El keystore
++/// real se reemplaza por un [_MemoryStore]: lo que se verifica es cuándo el
++/// código escribe, borra o conserva el token, no el plugin.
++
++const _config = ApiConfig(baseUrl: 'http://test.local');
++
++String _authBody({String token = 'access-1'}) => jsonEncode({
++  'accessToken': token,
++  'tokenType': 'Bearer',
++  'expireInSeconds': 900,
++  'userId': '8f14e45f-ceea-467a-9f8e-1f1a1c1a1c1a',
++  'email': 'ada@example.com',
++});
++
++Map<String, String> _cookie(String value) => {
++  'set-cookie': 'refreshToken=$value; Path=/api/v1/auth; HttpOnly; SameSite=Strict',
++};
++
++/// Un "disco" en memoria.
++class _MemoryStore implements SessionStore {
++  _MemoryStore([this.token]);
++
++  String? token;
++  bool failReads = false;
++
++  @override
++  Future<String?> readRefreshToken() async {
++    if (failReads) throw StateError('keystore ilegible');
++    return token;
++  }
++
++  @override
++  Future<void> writeRefreshToken(String value) async {
++    token = value;
++  }
++
++  @override
++  Future<void> deleteRefreshToken() async {
++    token = null;
++  }
++}
++
++ObdApi _apiWith(ObdSession session, MockClient client) => ObdApi(config: _config, httpClient: client, session: session);
++
++/// Simula abrir la app de nuevo con [store] tal como quedó en el disco.
++Future<ObdSession> _relaunch(_MemoryStore store) async {
++  final session = ObdSession(store: store);
++  await session.restore();
++  return session;
++}
++
++void main() {
++  group('persistencia del refresh token', () {
++    test('el login guarda el refresh token', () async {
++      final store = _MemoryStore();
++      final session = ObdSession(store: store);
++      final api = _apiWith(
++        session,
++        MockClient((_) async => http.Response(_authBody(), 200, headers: _cookie('refresh-1'))),
++      );
++
++      await api.auth.login(userEmail: 'ada@example.com', userPassword: 'supersecret123');
++      await session.pendingWrites;
++
++      expect(store.token, 'refresh-1');
++    });
++
++    test('solo se guarda el refresh token, no el access token', () async {
++      // Lo que cambia entre corridas es el access token (15 min); el que dura
++      // es el refresh. El store ni siquiera tiene un lugar para el primero.
++      final store = _MemoryStore();
++      final session = ObdSession(store: store);
++      final api = _apiWith(
++        session,
++        MockClient((_) async => http.Response(_authBody(token: 'jwt-secreto'), 200, headers: _cookie('refresh-1'))),
++      );
++
++      await api.auth.login(userEmail: 'ada@example.com', userPassword: 'supersecret123');
++      await session.pendingWrites;
++
++      expect(store.token, isNot(contains('jwt-secreto')));
++    });
++
++    test('cada rotación pisa el token guardado', () async {
++      final store = _MemoryStore();
++      final session = ObdSession(store: store);
++      final api = _apiWith(
++        session,
++        MockClient((request) async {
++          if (request.url.path.endsWith('/auth/refresh')) {
++            return http.Response(_authBody(token: 'access-2'), 200, headers: _cookie('refresh-2'));
++          }
++          return http.Response(_authBody(), 200, headers: _cookie('refresh-1'));
++        }),
++      );
++
++      await api.auth.login(userEmail: 'ada@example.com', userPassword: 'supersecret123');
++      await api.client.refreshSession();
++      await session.pendingWrites;
++
++      // Si quedara refresh-1 en disco, el próximo arranque presentaría un
++      // token ya usado y el servidor revocaría toda la familia.
++      expect(store.token, 'refresh-2');
++    });
++
++    test('un arranque nuevo recupera la sesión con el token guardado', () async {
++      final session = await _relaunch(_MemoryStore('refresh-1'));
++
++      // Recién restaurado: hay token, pero todavía no hay access token.
++      expect(session.refreshToken, 'refresh-1');
++      expect(session.isAuthenticated, isFalse);
++
++      String? cookieEnviada;
++      final api = _apiWith(
++        session,
++        MockClient((request) async {
++          cookieEnviada = request.headers['Cookie'];
++          return http.Response(_authBody(token: 'access-2'), 200, headers: _cookie('refresh-2'));
++        }),
++      );
++
++      final restored = await api.client.refreshSession();
++
++      expect(restored, isTrue);
++      expect(cookieEnviada, 'refreshToken=refresh-1');
++      expect(session.isAuthenticated, isTrue);
++      expect(session.accessToken, 'access-2');
++      expect(session.email, 'ada@example.com');
++    });
++
++    test('el logout borra el token guardado', () async {
++      final store = _MemoryStore();
++      final session = ObdSession(store: store);
++      final api = _apiWith(
++        session,
++        MockClient((request) async {
++          if (request.url.path.endsWith('/auth/logout')) {
++            return http.Response(
++              '',
++              204,
++              headers: {'set-cookie': 'refreshToken=; Path=/api/v1/auth; Max-Age=0; HttpOnly'},
++            );
++          }
++          return http.Response(_authBody(), 200, headers: _cookie('refresh-1'));
++        }),
++      );
++
++      await api.auth.login(userEmail: 'ada@example.com', userPassword: 'supersecret123');
++      await session.pendingWrites;
++      expect(store.token, 'refresh-1');
++
++      await api.auth.logout();
++      await session.pendingWrites;
++
++      expect(store.token, isNull);
++      expect(session.refreshToken, isNull);
++    });
++
++    test('un refresh rechazado borra el token guardado', () async {
++      final store = _MemoryStore('refresh-1');
++      final session = await _relaunch(store);
++      final api = _apiWith(session, MockClient((_) async => http.Response('{"status":401}', 401)));
++
++      final restored = await api.client.refreshSession();
++      await session.pendingWrites;
++
++      expect(restored, isFalse);
++      expect(session.refreshToken, isNull);
++      expect(store.token, isNull);
++    });
++
++    test('un error 5xx en el refresh conserva el token guardado', () async {
++      // Un 503 del proxy no es un veredicto sobre el token: si lo borráramos,
++      // un tropiezo del servidor sería un logout permanente.
++      final store = _MemoryStore('refresh-1');
++      final session = await _relaunch(store);
++      final api = _apiWith(session, MockClient((_) async => http.Response('bad gateway', 503)));
++
++      final restored = await api.client.refreshSession();
++      await session.pendingWrites;
++
++      expect(restored, isFalse);
++      expect(session.refreshToken, 'refresh-1');
++      expect(store.token, 'refresh-1');
++    });
++
++    test('sin red el refresh conserva el token guardado', () async {
++      final store = _MemoryStore('refresh-1');
++      final session = await _relaunch(store);
++      final api = _apiWith(
++        session,
++        MockClient((_) async {
++          throw http.ClientException('sin señal');
++        }),
++      );
++
++      final restored = await api.client.refreshSession();
++      await session.pendingWrites;
++
++      expect(restored, isFalse);
++      expect(session.refreshToken, 'refresh-1');
++      expect(store.token, 'refresh-1');
++    });
++
++    test('un keystore ilegible se trata como sesión cerrada, sin excepción', () async {
++      final store = _MemoryStore('refresh-1')..failReads = true;
++
++      final session = await _relaunch(store);
++      await session.pendingWrites;
++
++      expect(session.refreshToken, isNull);
++      // Y se limpia, para no volver a tropezar con lo mismo en cada arranque.
++      expect(store.token, isNull);
++    });
++
++    test('sin store la sesión no persiste nada', () async {
++      final session = ObdSession();
++      await session.restore();
++
++      expect(session.refreshToken, isNull);
++    });
++  });
++}
+diff --git a/app/obd_app/test/ui/auth_gate_test.dart b/app/obd_app/test/ui/auth_gate_test.dart
+new file mode 100644
+index 0000000..5c4fbd0
+--- /dev/null
++++ b/app/obd_app/test/ui/auth_gate_test.dart
+@@ -0,0 +1,77 @@
++import 'package:flutter/material.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:http/http.dart' as http;
++import 'package:http/testing.dart';
++import 'package:obd_app/data/api/obd_api.dart';
++import 'package:obd_app/ui/screens/auth/auth_gate.dart';
++import 'package:obd_app/ui/screens/auth/login_screen.dart';
++
++/// Qué pantalla elige `AuthGate` al arrancar según lo que haya guardado y lo
++/// que conteste el servidor. El camino feliz (refresh OK → MainScreen) no se
++/// prueba acá porque MainScreen arrastra BLE y permisos nativos; el transporte
++/// de ese refresh ya está cubierto en `session_persistence_test.dart`.
++
++const _config = ApiConfig(baseUrl: 'http://test.local');
++
++/// Una API cuya sesión ya "recuperó" un refresh token del disco.
++ObdApi _apiWithSavedToken(MockClient client) {
++  final session = ObdSession()..rememberRefreshToken('refresh-1');
++  return ObdApi(config: _config, httpClient: client, session: session);
++}
++
++void main() {
++  testWidgets('sin sesión guardada el login aparece en el primer frame', (tester) async {
++    final api = ObdApi(config: _config, httpClient: MockClient((_) async => http.Response('', 500)));
++
++    await tester.pumpWidget(MaterialApp(home: AuthGate(api: api)));
++
++    expect(find.byType(LoginScreen), findsOneWidget);
++    expect(find.text('Retomando tu sesión…'), findsNothing);
++  });
++
++  testWidgets('con un token guardado espera al refresh antes de decidir', (tester) async {
++    final api = _apiWithSavedToken(MockClient((_) async => http.Response('{"status":401}', 401)));
++
++    await tester.pumpWidget(MaterialApp(home: AuthGate(api: api)));
++
++    expect(find.text('Retomando tu sesión…'), findsOneWidget);
++    expect(find.byType(LoginScreen), findsNothing);
++
++    await tester.pumpAndSettle();
++  });
++
++  testWidgets('si el servidor rechaza el token va al login', (tester) async {
++    final api = _apiWithSavedToken(MockClient((_) async => http.Response('{"status":401}', 401)));
++
++    await tester.pumpWidget(MaterialApp(home: AuthGate(api: api)));
++    await tester.pumpAndSettle();
++
++    expect(find.byType(LoginScreen), findsOneWidget);
++    expect(api.session.refreshToken, isNull);
++  });
++
++  testWidgets('si el servidor falla ofrece reintentar y conserva el token', (tester) async {
++    final api = _apiWithSavedToken(MockClient((_) async => http.Response('bad gateway', 503)));
++
++    await tester.pumpWidget(MaterialApp(home: AuthGate(api: api)));
++    await tester.pumpAndSettle();
++
++    expect(find.text('No pudimos conectar con el servidor'), findsOneWidget);
++    expect(find.widgetWithText(ElevatedButton, 'REINTENTAR'), findsOneWidget);
++    expect(find.byType(LoginScreen), findsNothing);
++    expect(api.session.refreshToken, 'refresh-1');
++  });
++
++  testWidgets('desde el aviso de conexión se puede entrar con otra cuenta', (tester) async {
++    final api = _apiWithSavedToken(MockClient((_) async => http.Response('bad gateway', 503)));
++
++    await tester.pumpWidget(MaterialApp(home: AuthGate(api: api)));
++    await tester.pumpAndSettle();
++
++    await tester.tap(find.text('Ingresar con otra cuenta'));
++    await tester.pumpAndSettle();
++
++    expect(find.byType(LoginScreen), findsOneWidget);
++    expect(api.session.refreshToken, isNull);
++  });
++}

@@ -1,0 +1,8 @@
+// Copy this file to "Local.xcconfig" (same folder) and fill in your own
+// Apple Development Team ID. Local.xcconfig is gitignored on purpose:
+// each developer signs with their own Apple ID/team, so this value must
+// never be committed or it will overwrite everyone else's signing setup.
+//
+// Find your Team ID in Xcode: Runner target > Signing & Capabilities > Team,
+// or at https://developer.apple.com/account/#/membership
+DEVELOPMENT_TEAM = YOUR_TEAM_ID_HERE
