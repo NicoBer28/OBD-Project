@@ -22,6 +22,8 @@ import androidx.work.Constraints
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 
 //Foreground Service que se ejecuta en segundo plano cuando el auto está encendido y conectado al ESP32
 class ObdCompanionService : CompanionDeviceService() {
@@ -44,6 +46,9 @@ class ObdCompanionService : CompanionDeviceService() {
     private val NOTIFY_CHARACTERISTIC_UUID = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
     private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     private var bluetoothGatt: BluetoothGatt? = null
+
+    private var disconnectJob: Job? = null
+    private val TIEMPO_DE_GRACIA_MS = 3 * 60 * 1000L // 3 minutos
 
     // --- BASE DE DATOS Y BUFFER LOCAL ---
     private lateinit var db: AppDatabase
@@ -77,6 +82,10 @@ class ObdCompanionService : CompanionDeviceService() {
         val macAddress = associationInfo.deviceMacAddress.toString()
         Log.i("OBD-C", "Auto detectado ($macAddress). Iniciando Viaje...")
 
+        //si habia un contarizador, lo cancelamos
+        disconnectJob?.cancel()
+        disconnectJob = null
+
         // iniciamos el Foreground Service con una notificación fija
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("OBD")
@@ -95,18 +104,26 @@ class ObdCompanionService : CompanionDeviceService() {
     // se desconectó del ESP32 (auto apagado o fuera de rango)
     override fun onDeviceDisappeared(associationInfo: AssociationInfo) {
         Log.i("OBD-C", "Auto apagado. Finalizando Viaje...")
-        
-        if (isTripActive) {
-            finalizarViajeLocal(lastFuel)
-            isTripActive = false
-        }
+
+        val tiempoExactoDesconexion = System.currentTimeMillis()
         
         fusedLocationClient.removeLocationUpdates(locationCallback)
 
         desconectarBLE()
 
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        disconnectJob = serviceScope.launch {
+            delay(TIEMPO_DE_GRACIA_MS)
+            
+            Log.i("OBD-C", "⏳ Tiempo de gracia expirado. Finalizando Viaje definitivamente...")
+
+            if (isTripActive) {
+                finalizarViajeLocal(lastFuel, tiempoExactoDesconexion)
+                isTripActive = false
+            }
+
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf() // Apagamos el servicio de Android
+        }
     }
 
     private fun iniciarTrackingGPS() {
@@ -383,14 +400,14 @@ private fun conectarBLE(macAddress: String) {
         }
     }
 
-    private fun finalizarViajeLocal(nivelNaftaFinal: Int) {
+    private fun finalizarViajeLocal(nivelNaftaFinal: Int, tiempoFin: Long = System.currentTimeMillis()) {
         serviceScope.launch {
             val (tokenFlutter, carIdFlutter) = obtenerCredencialesFlutter(applicationContext)
 
             val activeTrip = dao.getActiveTrip()
             if (activeTrip != null) {
                 val viajeCerrado = activeTrip.copy(
-                    endedAt = System.currentTimeMillis(),
+                    endedAt = tiempoFin,
                     finalFuel = nivelNaftaFinal,
                     status = "FINISHED",
                     syncStatus = "PENDING_FINISH"
