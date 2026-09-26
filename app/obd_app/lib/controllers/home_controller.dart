@@ -434,6 +434,51 @@ class HomeController extends ChangeNotifier {
     _notify();
   }
 
+  /// Los miembros del grupo del auto que todavía no están en [participants]
+  /// de un viaje, ni son su conductor — a quién le ofrece elegir "Del grupo".
+  List<GroupMember> selectableMembers({
+    required String driverId,
+    required List<TripParticipant> participants,
+  }) {
+    final already = {driverId, ...participants.map((p) => p.userId).whereType<String>()};
+    return members.where((m) => !already.contains(m.userId)).toList(growable: false);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Acompañantes y costo del viaje
+  // ---------------------------------------------------------------------------
+  //
+  // A diferencia del resto de este controller, estas no guardan nada en
+  // campos propios: se piden por viaje, desde una sheet que se abre y se
+  // cierra, no desde una pestaña que vive todo el tiempo. `setTripCost` es la
+  // excepción — el costo es un campo del viaje, así que si ese viaje ya está
+  // en `carTrips` o es el `activeTrip`, se actualiza ahí también.
+
+  Future<List<TripParticipant>> tripParticipants(String tripId) => _api.trips.participants(tripId);
+
+  Future<TripParticipant> addParticipantFromGroup(String tripId, String userId) =>
+      _api.trips.addParticipant(tripId: tripId, userId: userId);
+
+  Future<TripParticipant> inviteParticipant(String tripId, {required String email, required String name}) =>
+      _api.trips.inviteParticipant(tripId: tripId, email: email, name: name);
+
+  Future<TripParticipant> addGuestParticipant(String tripId, String name) =>
+      _api.trips.addGuest(tripId: tripId, name: name);
+
+  Future<void> removeParticipant(String tripId, String participantId) =>
+      _api.trips.removeParticipant(tripId: tripId, participantId: participantId);
+
+  Future<TripSplit> tripSplit(String tripId, {bool includeDriver = true}) =>
+      _api.trips.split(tripId, includeDriver: includeDriver);
+
+  Future<Trip> setTripCost(String tripId, int? cost) async {
+    final updated = await _api.trips.setCost(tripId, cost);
+    carTrips = [for (final t in carTrips) t.id == updated.id ? updated : t];
+    if (activeTrip?.id == updated.id) activeTrip = updated;
+    _notify();
+    return updated;
+  }
+
   /// Vuelve a preguntar quién tiene el auto — otro miembro pudo haber
   /// arrancado o terminado un viaje desde su teléfono.
   Future<void> refreshActiveTrip() async {
