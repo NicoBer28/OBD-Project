@@ -107,4 +107,112 @@ class TripsApi {
   /// Throws `ApiException`: `isNotFound` for an unknown trip or someone
   /// else's, `isConflict` for one that has already ended.
   Future<void> cancel(String tripId) => _client.delete('/trips/$tripId');
+
+  /// `PUT /api/v1/trips/{tripId}/cost` — sets, replaces or clears what the
+  /// trip cost. A single slot, like `CarsApi.share`: `null` clears it.
+  ///
+  /// The **driver** only, but unlike [finish] this works after the trip has
+  /// already ended — the real cost (a fuel receipt, a toll) is often only
+  /// known afterwards.
+  ///
+  /// Throws `ApiException`: `isNotFound` for an unknown trip or someone
+  /// else's.
+  Future<Trip> setCost(String tripId, int? cost) async {
+    final response = await _client.put('/trips/$tripId/cost', body: {'cost': cost});
+    return Trip.fromJson(response.asMap);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Acompañantes ("who this trip's cost is split with")
+  // ---------------------------------------------------------------------------
+
+  /// `GET /api/v1/trips/{tripId}/participants` — everyone the trip's cost is
+  /// split with, besides the driver, oldest first.
+  ///
+  /// Readable by anyone who may read the trip's car — the rest of the family,
+  /// typically, same as [forCar].
+  Future<List<TripParticipant>> participants(String tripId) async {
+    final response = await _client.get('/trips/$tripId/participants');
+    return parseList(response.body, TripParticipant.fromJson);
+  }
+
+  /// `POST /api/v1/trips/{tripId}/participants` — "select a user already on
+  /// the group".
+  ///
+  /// | Parameter | Required | Notes |
+  /// |---|---|---|
+  /// | [tripId] | yes | the caller's own trip |
+  /// | [userId] | yes | must be able to read the trip's car — the same people `GroupsApi.members` offers |
+  ///
+  /// The **driver** only. Throws `ApiException`: `isNotFound` for an unknown
+  /// trip or someone else's, `isConflict` if [userId] does not share the car,
+  /// or is already a participant.
+  Future<TripParticipant> addParticipant({required String tripId, required String userId}) async {
+    final response = await _client.post('/trips/$tripId/participants', body: {'userId': userId});
+    return TripParticipant.fromJson(response.asMap);
+  }
+
+  /// `POST /api/v1/trips/{tripId}/participants/by-email` — "invite them via
+  /// their user/QR ... in case they are not part of the group".
+  ///
+  /// Looked up by email — exactly what scanning someone's "Mi código QR"
+  /// already yields. Added either way, unlike [addParticipant] with **no**
+  /// check that they share the car: that is the point of this path.
+  ///
+  /// | Parameter | Required | Notes |
+  /// |---|---|---|
+  /// | [email] | yes | looked up against existing accounts |
+  /// | [name] | yes | used only when no account matches — there is no cheap way to know that in advance |
+  ///
+  /// The **driver** only. Throws `ApiException`: `isNotFound` for an unknown
+  /// trip or someone else's, `isConflict` if that email is already a
+  /// participant.
+  Future<TripParticipant> inviteParticipant({
+    required String tripId,
+    required String email,
+    required String name,
+  }) async {
+    final response = await _client.post(
+      '/trips/$tripId/participants/by-email',
+      body: {'email': email, 'name': name},
+    );
+    return TripParticipant.fromJson(response.asMap);
+  }
+
+  /// `POST /api/v1/trips/{tripId}/participants/guests` — "let the owner count
+  /// the persons": a participant with no account and no email, just a name.
+  ///
+  /// [name] may be a generated label ("Acompañante 2") for a quick headcount,
+  /// or a real one when the driver has it.
+  ///
+  /// The **driver** only.
+  Future<TripParticipant> addGuest({required String tripId, required String name}) async {
+    final response = await _client.post('/trips/$tripId/participants/guests', body: {'name': name});
+    return TripParticipant.fromJson(response.asMap);
+  }
+
+  /// `DELETE /api/v1/trips/{tripId}/participants/{participantId}`. `204`.
+  ///
+  /// The **driver** only. Throws `ApiException` `isNotFound` for an unknown
+  /// participant, an unknown trip, or someone else's trip.
+  Future<void> removeParticipant({required String tripId, required String participantId}) =>
+      _client.delete('/trips/$tripId/participants/$participantId');
+
+  /// `GET /api/v1/trips/{tripId}/split` — `cost` divided evenly across the
+  /// driver (when [includeDriver]) and every participant.
+  ///
+  /// [includeDriver] defaults to `true`: the common case is the driver
+  /// fronted the money and wants their own share back too, not just to
+  /// recoup everyone else's. With no participants at all it is included
+  /// regardless — there is nobody else the cost could belong to.
+  ///
+  /// Readable by anyone who may read the trip's car — a participant checking
+  /// what they owe is exactly what this is for.
+  ///
+  /// Throws `ApiException` `isConflict` if [setCost] was never called for
+  /// this trip.
+  Future<TripSplit> split(String tripId, {bool includeDriver = true}) async {
+    final response = await _client.get('/trips/$tripId/split', query: {'includeDriver': includeDriver});
+    return TripSplit.fromJson(response.asMap);
+  }
 }

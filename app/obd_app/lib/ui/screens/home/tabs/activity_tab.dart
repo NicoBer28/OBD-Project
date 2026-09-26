@@ -210,7 +210,7 @@ class _ActivityTabState extends State<ActivityTab> {
                 SummaryContent(data: summary),
               ] else ...[
                 const SizedBox(height: 18),
-                TripsContent(trips: trips),
+                TripsContent(trips: trips, controller: c),
               ],
             ],
           ),

@@ -107,6 +107,9 @@ abstract final class TripFormat {
   /// '12.400 km'
   static String km(num n) => '${thousands(n)} km';
 
+  /// '\$12.400' — no currency code: the app has never needed one so far.
+  static String money(num n) => '\$${thousands(n)}';
+
   /// '-34,6037, -58,3816'
   static String coordinates(double lat, double lng) =>
       '${lat.toStringAsFixed(4).replaceAll('.', ',')}, '
