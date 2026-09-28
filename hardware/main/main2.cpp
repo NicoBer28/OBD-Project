@@ -22,7 +22,6 @@ static const char *TAG_BLE = "BLE_TASK";
 static const char *TAG_OBD = "OBD_TASK";
 static const char *TAG_SYS = "MAIN2";
 
-// PINES SPI & MCP
 #define MCP2515_MISO_PIN GPIO_NUM_19
 #define MCP2515_MOSI_PIN GPIO_NUM_23
 #define MCP2515_CLK_PIN  GPIO_NUM_18
@@ -72,16 +71,16 @@ class MyRxCallbacks: public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
         std::string rxValue = pCharacteristic->getValue();
         if (rxValue.length() > 0) {
-            ESP_LOGI(TAG_BLE, "========= NUEVO CONTRATO DE PIDs RECIBIDO =========");
+            ESP_LOGI(TAG_BLE, "========= CONTRATO DE PIDs RECIBIDO =========");
             std::vector<uint8_t> pids;
             for (int i = 0; i < rxValue.length(); i++) {
                 pids.push_back(static_cast<uint8_t>(rxValue[i]));
-                ESP_LOGI(TAG_BLE, "PID agregado para polling: 0x%02X", pids.back());
+                ESP_LOGI(TAG_BLE, "PID 0x%02X", pids.back());
             }
             if (obd_interface != nullptr) {
                 obd_interface->set_polling_pids(pids);
             }
-            ESP_LOGI(TAG_BLE, "===================================================");
+            ESP_LOGI(TAG_BLE, "=============================================");
         }
     }
 };
@@ -93,7 +92,7 @@ static MyRxCallbacks rxCallbacks;
 // INITS
 // ============================================================================
 void init_spi_and_can() {
-    // 1. Inicializar bus SPI
+    // SPI init
     spi_bus_config_t buscfg = {};
     buscfg.miso_io_num = MCP2515_MISO_PIN;
     buscfg.mosi_io_num = MCP2515_MOSI_PIN;
@@ -102,7 +101,6 @@ void init_spi_and_can() {
     buscfg.quadhd_io_num = -1;
     ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO));
 
-    // 2. Agregar dispositivo SPI
     spi_device_interface_config_t devcfg = {};
     devcfg.clock_speed_hz = 10000000;
     devcfg.mode = 0;
@@ -110,7 +108,7 @@ void init_spi_and_can() {
     devcfg.queue_size = 1;
     ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &devcfg, &spi_handle));
 
-    // 3. Configurar ISR
+    // INT init
     gpio_install_isr_service(0);
     gpio_config_t io_conf = {};
     io_conf.intr_type = GPIO_INTR_NEGEDGE;
@@ -121,12 +119,12 @@ void init_spi_and_can() {
     gpio_config(&io_conf);
     gpio_isr_handler_add(MCP2515_INT_PIN, gpioInterruptCan, NULL);
 
-    // 4. Inyectar dependencias y levantar interfaz OBD (Dumb Gateway)
+    
     obd_interface = new OBD_MCP2515(&spi_handle, MCP2515_INT_PIN, can_rx_semaphore);
-    obd_interface->set_tx_queue(ble_tx_queue); // Inyectamos la cola para TX transparente
+    obd_interface->set_tx_queue(ble_tx_queue);
     
     if (obd_interface->init()) {
-        ESP_LOGI(TAG_SYS, "Interfaz OBD (MCP2515) inicializada correctamente en modo Gateway.");
+        ESP_LOGI(TAG_SYS, "Interfaz OBD (MCP2515) inicializada");
     } else {
         ESP_LOGE(TAG_SYS, "Error al inicializar la interfaz OBD.");
     }
@@ -167,16 +165,13 @@ void init_ble() {
 void vOBDTask(void *pvParameters) {
     ESP_LOGI(TAG_OBD, "Tarea OBD Iniciada en core %d", xPortGetCoreID());
     
-    // Limpiar cualquier token residual en el semáforo antes de arrancar (Mitigación desincronización de boot)
     xSemaphoreTake(can_rx_semaphore, 0);
 
     while(1) {
-        // Bloqueamos hasta que haya una interrupción del bus CAN, o pase un timeout corto 
-        // para asegurarnos de llamar a process() y mantener vivo el polling
+        // espero int del can o timeout
         xSemaphoreTake(can_rx_semaphore, pdMS_TO_TICKS(20));
 
-        // process() lee tramas del hardware CAN y las encola directamente en ble_tx_queue,
-        // además envía el siguiente PID a encuestar según la lista inyectada por BLE RX.
+        // lee la interrupt o pide el siguiente dato, segun si hizo timeout o no
         obd_interface->process();
     }
 }
@@ -193,20 +188,21 @@ void vBLETask(void *pvParameters) {
     while(1) {
         BleCanPacket rx_packet;
         
-        // Esperamos paquetes de CAN. El timeout (ej. 100ms) previene que los paquetes se
-        // queden atascados en el buffer local si el auto dejó de enviar datos y el buffer no llegó a 5.
+        // espero y voy contando los paquetes
         if (xQueueReceive(ble_tx_queue, &rx_packet, pdMS_TO_TICKS(100)) == pdTRUE) {
             tx_buffer[packet_count++] = rx_packet;
             
+            // cuando llegan a 5, los mando juntos
             if (packet_count >= 5) {
                 if (deviceConnected && pTxCharacteristic != nullptr) {
                     pTxCharacteristic->setValue((uint8_t*)tx_buffer, sizeof(tx_buffer));
                     pTxCharacteristic->notify();
                 }
-                packet_count = 0; // Reiniciar buffer
+                packet_count = 0;
             }
-        } else {
-            // Timeout: Si tenemos paquetes acumulados y no llegan más, los despachamos
+        }
+        // si hizo timeout, mando lo que hay
+        else {
             if (packet_count > 0) {
                 if (deviceConnected && pTxCharacteristic != nullptr) {
                     pTxCharacteristic->setValue((uint8_t*)tx_buffer, packet_count * sizeof(BleCanPacket));
@@ -222,10 +218,10 @@ void vBLETask(void *pvParameters) {
 // START
 // ============================================================================
 extern "C" void app_main(void) {
-    ESP_LOGI(TAG_SYS, "Arrancando sistema OBD2 V2 (Dumb Gateway OOP)...");
+    ESP_LOGI(TAG_SYS, "Arrancando...");
 
     can_rx_semaphore = xSemaphoreCreateBinary(); 
-    // Usamos tamaño 20 para almacenar de forma segura paquetes BleCanPacket individuales (13 bytes c/u)
+
     ble_tx_queue = xQueueCreate(20, sizeof(BleCanPacket)); 
 
     if (can_rx_semaphore == NULL || ble_tx_queue == NULL) {

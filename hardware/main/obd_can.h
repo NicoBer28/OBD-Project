@@ -11,27 +11,27 @@
 
 struct __attribute__((packed)) BleCanPacket {
     uint32_t can_id;   // ID del mensaje (Soporta UDS Modo 22 y CAN Sniffing)
-    uint8_t dlc;       // Data Length Code (0-8)
-    uint8_t data[8];   // Payload del bus CAN puro
+    uint8_t dlc;       // DLC (0-8)
+    uint8_t data[8];
 };
 
 /**
- * @brief Abstract Base Class for OBD CAN interfaces.
- * Provides a common interface for different CAN hardware implementations (e.g., MCP2515, TWAI).
+ * @brief Clase abstracta para interfaces CAN OBD.
+ * Interfaz común para diferentes implementaciones de hardware CAN.
  */
 class OBD_CAN_Interface {
 public:
     virtual ~OBD_CAN_Interface() = default;
 
     /**
-     * @brief Initialize the CAN interface hardware.
-     * @return true if initialization is successful.
+     * @brief Inicializa el hardware de la interfaz CAN.
+     * @return true si la inicialización es exitosa.
      */
     virtual bool init() = 0;
 
     /**
-     * @brief Set the list of PIDs to be periodically polled.
-     * @param pids Vector of PID bytes (e.g., {0x0C, 0x0D}).
+     * @brief Establece la lista de PIDs que serán consultados periódicamente.
+     * @param pids Vector de PIDs
      */
     void set_polling_pids(const std::vector<uint8_t>& pids) {
         polling_pids = pids;
@@ -39,14 +39,14 @@ public:
     }
 
     /**
-     * @brief Process incoming CAN messages and handle periodic PID requests.
-     * This method must be called repeatedly in the main loop or task.
+     * @brief Procesa los mensajes CAN entrantes y maneja las peticiones periódicas de PIDs.
+     * Este método debe llamarse repetidamente en el bucle principal o en una tarea.
      */
     virtual void process() = 0;
 
     /**
-     * @brief Inyectar la cola TX para transmisión asíncrona hacia BLE.
-     * @param queue Cola configurada para elementos del tipo BleCanPacket.
+     * @brief Inyecta la cola de TX para transmisión asíncrona por BLE.
+     * @param queue Cola configurada para elementos BleCanPacket.
      */
     void set_tx_queue(QueueHandle_t queue) {
         this->tx_queue = queue;
@@ -59,19 +59,19 @@ protected:
     QueueHandle_t tx_queue = NULL;
 };
 
-class MCP2515; // Forward declaration
+class MCP2515;
 
 /**
- * @brief OBD Interface implementation using the MCP2515 CAN controller via SPI.
+ * @brief Implementación de la interfaz OBD usando el MCP2515 vía SPI.
  */
 class OBD_MCP2515 : public OBD_CAN_Interface {
 public:
     /**
-     * @brief Construct a new OBD_MCP2515 object.
+     * @brief Construye un nuevo objeto OBD_MCP2515.
      * 
-     * @param spi_handle Pointer to a configured and initialized SPI device handle.
-     * @param int_pin GPIO pin connected to the MCP2515 INT pin. 
-     * @param rx_sem Optional semaphore to wait for interrupts efficiently during init().
+     * @param spi_handle Puntero a handler de dispositivo SPI configurado e inicializado.
+     * @param int_pin Pin GPIO conectado al pin INT del MCP2515. 
+     * @param rx_sem Semáforo opcional para esperar interrupciones durante el init().
      */
     OBD_MCP2515(spi_device_handle_t* spi_handle, gpio_num_t int_pin, SemaphoreHandle_t rx_sem = NULL);
     ~OBD_MCP2515();
@@ -80,8 +80,8 @@ public:
     void process() override;
 
     /**
-     * @brief Set the interval between PID requests.
-     * @param ms Interval in milliseconds.
+     * @brief Establece el intervalo entre peticiones de PIDs.
+     * @param ms Intervalo en milisegundos.
      */
     void set_request_interval(uint32_t ms) { request_interval_ms = ms; }
 
@@ -98,8 +98,7 @@ private:
 };
 
 /**
- * @brief OBD Interface implementation using the ESP32 built-in TWAI controller.
- * (Declaration only, implementation reserved for future use).
+ * @brief Implementación de la interfaz OBD usando el controlador TWAI integrado en el ESP32.
  */
 class OBD_TWAI : public OBD_CAN_Interface {
 public:
