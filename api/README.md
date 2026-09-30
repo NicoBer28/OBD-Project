@@ -343,6 +343,100 @@ longer exists; `401 Unauthorized` without a token.
 
 ---
 
+### `PUT /api/v1/users/me`
+
+Edits the caller's own profile. Requires `Authorization: Bearer <accessToken>`.
+
+**Body** (`application/json`):
+
+```json
+{ "userName": "Augusta", "userLastName": "Byron", "userPhone": "+39 06 999999" }
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `userName` | yes | non-blank; the first name, not a username |
+| `userLastName` | yes | non-blank |
+| `userPhone` | no | same pattern as registration |
+
+**`PUT`, not `PATCH` - this replaces the editable profile.** A field left out
+is *cleared*, not kept: sending no `userPhone` sets it to `null`. The client
+has the whole object from `GET /users/me`, so a replace costs it nothing, and
+"absent" and "explicitly null" stay the same thing rather than becoming two
+cases to handle.
+
+**Only three fields are editable here.** The email is the login identifier and
+what `invitations` are keyed by; the password needs the current one and takes
+every other session down with it. Neither belongs in a form that otherwise
+cannot fail, so the password gets its own endpoint below (and changing the
+email is not implemented yet - see Known limitations).
+
+**Response** `200 OK` - the updated profile, same shape as `GET /users/me`.
+
+**Errors:** `400 Bad Request` with a per-field map, `404 Not Found` if the
+account behind a still-valid token is gone, `401` without a token.
+
+---
+
+### `POST /api/v1/users/me/password`
+
+Changes the caller's password and signs every **other** device out.
+
+**Body** (`application/json`):
+
+```json
+{ "currentPassword": "supersecret123", "newPassword": "evenbetter456" }
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `currentPassword` | yes | the password in force right now |
+| `newPassword` | yes | 8-72 characters, and different from the current one |
+
+**The current password is required even though the caller already holds a
+valid access token.** A token proves the session, not the person - a borrowed
+unlocked phone carries one.
+
+**Response** `200 OK` - the same envelope `login` returns, plus a rotated
+`refreshToken` cookie:
+
+```json
+{
+  "accessToken": "eyJhbGciOi...",
+  "tokenType": "Bearer",
+  "expireInSeconds": 900,
+  "userId": "8f14e...",
+  "userEmail": "ada@example.com"
+}
+```
+
+The change revokes **every** refresh family, including the caller's own, and
+then issues a fresh one - in that order, or the new family would be revoked
+along with the rest. That is why a new token pair comes back: without it the
+user would be signed out of the very device they just changed the password on.
+
+**Other devices stop working immediately, not eventually.** Revoking refresh
+tokens cannot reach the access tokens already issued - they are self-contained
+and valid until they expire, so another phone would otherwise keep working for
+up to `app.jwt.access-ttl-minutes`. The change stamps
+`users.password_changed_at`, and `JwtAuthFilter` rejects any token minted
+before it. This costs nothing: the filter already loads the user from the
+database on every request.
+
+Both sides of that comparison are at **second precision** - a JWT's `iat` is
+epoch seconds, so the stamp is truncated to match. Without that, the token
+minted by the change itself would look older than the change and be rejected
+on its first request. Pinned by
+`JwtAuthFilterTest.theTokenMintedByTheChangeItselfSurvives`.
+
+**Errors:** `401 Unauthorized` if `currentPassword` is wrong (a credential
+failure, not a validation one - and nothing is changed, no session ends),
+`400 Bad Request` if the new password is too short or equal to the current one
+(refused rather than accepted as a no-op: it would sign every other device out
+for nothing), `401` without a token.
+
+---
+
 ### `POST /api/v1/cars`
 
 Registers a car owned by the caller. Requires
@@ -1496,6 +1590,9 @@ or is not the caller's. `401 Unauthorized` without a token.
 3. When the access token expires, call `refresh` (cookie sent automatically)
    to get a new access token and a rotated refresh token.
 4. `logout` revokes the whole refresh-token family server-side.
+5. `POST /users/me/password` revokes **every** family, issues a fresh one for
+   the caller, and stamps `password_changed_at` - which invalidates every
+   access token minted before it, on the next request, everywhere.
 
 ## Testing
 
@@ -1556,3 +1653,16 @@ What is missing, in what order to build it, and the endpoint roadmap live in
 - No admin account is seeded, so the smoke script only covers the `403` side
   of `POST /models`; the `201` path is pinned by `ModelControllerTest`.
 - Updating and deleting a car are not implemented.
+- There is no **forgot-password** flow: a user who cannot remember their
+  password has no way back in, because recovering an account means proving you
+  own the email address, and this API sends no mail at all. It is the natural
+  next step, and the token half is the same shape as `group_invite_codes`.
+- **Changing the email address** is not implemented either. It needs the same
+  mail infrastructure (the new address must be proven), and it has knock-on
+  effects worth thinking through first: the email is the login identifier, it
+  is a claim inside the access token, and `invitations` are keyed by it, so a
+  pending invitation sent to the old address would not follow the user.
+- `password_changed_at` gives revocation a one-second granularity, because a
+  JWT's `iat` is expressed in whole seconds. A token minted in the same second
+  as a password change survives it. Harmless in practice, and the alternative
+  (a per-token blacklist) costs far more than it is worth here.

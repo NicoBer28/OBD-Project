@@ -7,6 +7,7 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -20,17 +21,28 @@ public class UserPrincipal implements UserDetails {
     private final List<GrantedAuthority> authorities;
     private final boolean enabled;
 
+    @Getter
+    private final Instant passwordChangedAt;
+
+    /** Kept for callers that have no opinion on password changes - tests, mostly. */
     public UserPrincipal(UUID id, String email, String passwordHash, List<GrantedAuthority> authorities, boolean enable){
+        this(id, email, passwordHash, authorities, enable, null);
+    }
+
+    public UserPrincipal(UUID id, String email, String passwordHash, List<GrantedAuthority> authorities,
+                         boolean enable, Instant passwordChangedAt){
         this.id = id;
         this.email = email;
         this.passwordHash = passwordHash;
         this.authorities = authorities;
         this.enabled = enable;
+        this.passwordChangedAt = passwordChangedAt;
     }
 
     public static UserPrincipal from(User user){
         return new UserPrincipal(user.getUserId(), user.getUserEmail(), user.getUserPasswordHash(),
-                List.of(new SimpleGrantedAuthority("ROLE_" + user.getRole().name())), user.isEnabled());
+                List.of(new SimpleGrantedAuthority("ROLE_" + user.getRole().name())), user.isEnabled(),
+                user.getUserPasswordChangedAt());
     }
 
     @NotNull

@@ -5,6 +5,8 @@ import com.obd.api.invitecode.exception.InviteCodeNoLongerValidException;
 import com.obd.api.invitecode.exception.InviteCodeNotFoundException;
 import com.obd.api.trip.exception.TripAlreadyEndedException;
 import com.obd.api.trip.exception.TripNotFoundException;
+import com.obd.api.user.exception.IncorrectPasswordException;
+import com.obd.api.user.exception.PasswordUnchangedException;
 import com.obd.api.user.exception.UserNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -103,6 +105,23 @@ public class GlobalExceptionHandler {
         var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
         p.setTitle("Conflict");
         p.setDetail("That trip has already ended");
+        return p;
+    }
+
+    @ExceptionHandler(IncorrectPasswordException.class)
+    public ProblemDetail incorrectPassword(IncorrectPasswordException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
+        p.setTitle("Unauthorized");
+        // A credential failure, like a failed login - not a validation error.
+        p.setDetail("The current password is incorrect");
+        return p;
+    }
+
+    @ExceptionHandler(PasswordUnchangedException.class)
+    public ProblemDetail passwordUnchanged(PasswordUnchangedException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
+        p.setTitle("Bad Request");
+        p.setDetail("The new password must be different from the current one");
         return p;
     }
 

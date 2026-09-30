@@ -4,8 +4,8 @@ What is missing, what to build next, and in what order. Companion to
 `README.md`, which documents what already **exists**; this file is about what
 does not.
 
-Last updated: 2026-09-24. Schema is at `V11__group_invite_codes.sql`. 334
-tests, 79 smoke checks.
+Last updated: 2026-09-30. Schema is at `V12__users_password_changed_at.sql`.
+363 tests, 84 smoke checks.
 
 ---
 
@@ -13,7 +13,7 @@ tests, 79 smoke checks.
 
 | Area | Schema | Endpoints |
 |---|---|---|
-| Auth / users | `users`, `refresh_tokens` | register, login, refresh, logout, `GET /users/me` |
+| Auth / users | `users`, `refresh_tokens` | register, login, refresh, logout, `GET`/`PUT /users/me`, `POST /users/me/password` |
 | Cars | `cars` (with `group_id`, `snapshot_at`), `models` | `POST /cars`, `GET /cars`, `GET /cars/{id}`, `PUT`/`DELETE /cars/{id}/group`, `GET /groups/{id}/cars`, `GET /models`, `POST /models` (admin) |
 | Groups | `groups`, `group_members` | `POST /groups`, `GET /groups`, `GET /groups/{id}/members` |
 | Invitations | `invitations` | `POST /invitations/invite/{groupId}`, `GET /invitations/pending`, `POST /invitations/{id}/accept` |
@@ -251,6 +251,10 @@ Traps:
 | **`PATCH /cars/{id}`** | Rename, plate, mileage correction. `CarAccess.ownedBy`. |
 | **`DELETE /cars/{id}`** | **Cascades to trips and telemetry.** Consider a soft delete first — a shared car's history belongs to the group, not only the owner. |
 | **`PATCH /users/me`** | The `UserDTO.Update` record already exists, unused. |
+| ~~`PUT /users/me`~~ | Name, lastname, phone. A replace, not a merge. |
+| ~~`POST /users/me/password`~~ | Current password required; revokes every other session immediately, via `password_changed_at` + `JwtAuthFilter`. |
+| **`POST /auth/forgot-password` + `/auth/reset-password`** | The way back in for someone who forgot their password. **Blocked on mail**: proving you own an address is the whole mechanism. The token half is a copy of `group_invite_codes`; the work is the provider, the secret, and a `Mailer` seam so tests stay hermetic. |
+| **`PUT /users/me/email`** | Also blocked on mail. Watch the knock-ons: the email is the login identifier, a JWT claim, and the key `invitations` uses. |
 | **`DELETE /users/me`** | Cars orphan (`owner_id` → null), trips keep the car, memberships cascade, invitations keep `invited_by` → null. Verify that is the intent before shipping it. |
 | **`PATCH /groups/{id}`** | Rename. Admin-only. |
 
@@ -376,8 +380,12 @@ In this order, each small:
 
 1. **`GET /users/me/expenses`** (Phase 6). Trips can end now, so there is
    finally something to sum — one SQL aggregate.
-2. **`FailedInvitationException` handler** (Phase 5). One `@ExceptionHandler`
+2. **Mail, then forgot-password.** The only missing piece of the profile story,
+   and the one thing that cannot be built without an outbound mail dependency.
+   Put it behind a `Mailer` interface with a logging implementation first, so
+   the endpoints and their tests never wait on a provider account.
+3. **`FailedInvitationException` handler** (Phase 5). One `@ExceptionHandler`
    turns a duplicate live invitation from a `500` into a `409`.
-3. **`GET /trips/{id}/route`** (Phase 3). The last piece of the trip
+4. **`GET /trips/{id}/route`** (Phase 3). The last piece of the trip
    lifecycle; the repository query already exists.
 

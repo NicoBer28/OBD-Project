@@ -4,6 +4,7 @@ package com.obd.api.user;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -36,6 +37,9 @@ public class User {
 
     @Column(name = "phone_number")
     private String userPhone;
+
+    @Column(name = "password_changed_at")
+    private Instant userPasswordChangedAt;
 
     // @Builder ignores plain field initialisers - without @Builder.Default a
     // builder that skips role() would write null into a NOT NULL column.

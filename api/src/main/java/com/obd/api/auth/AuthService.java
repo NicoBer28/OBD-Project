@@ -10,7 +10,6 @@ import com.obd.api.user.UserRepository;
 import com.obd.api.user.dto.UserDTO;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
-import org.antlr.v4.runtime.Token;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -60,6 +59,11 @@ public class AuthService {
         var rotation = refreshTokenService.rotate(rawRefreshToken);
         UserPrincipal principal = userDetailsService.loadById(rotation.userId());
         return new TokenPair(accessResponse(principal), rotation.newRawToken());
+    }
+
+
+    public TokenPair reissue(UUID userId) {
+        return pairFor(userDetailsService.loadById(userId), true);
     }
 
     private AuthResponseDTO issue(UserPrincipal principal){

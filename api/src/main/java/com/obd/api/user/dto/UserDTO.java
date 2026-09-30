@@ -22,6 +22,11 @@ public class UserDTO {
             @Pattern(regexp = PHONE, message = "Invalid Phone Number") String userPhone
     ) {}
 
+    public record ChangePassword(
+            @NotBlank String currentPassword,
+            @NotBlank @Size(min = 8, max = 72) String newPassword
+    ){}
+
     public record Login(
             @NotBlank @Email String userEmail,
             @NotBlank @Size(min = 8, max = 72) String userPassword

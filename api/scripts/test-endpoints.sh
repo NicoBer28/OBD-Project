@@ -939,4 +939,98 @@ echo "revoke: $REV   again: $REV2   join revoked: $DEAD   unknown: $UNKNOWN   me
 STILL_IN=$(curl -sS "$GROUPS_URL" -H "Authorization: Bearer $OTHER_TOKEN")
 echo "$STILL_IN" | grep -q "\"id\":\"$GROUP_ID\"" || fail "revoking a code must not remove the members it let in"
 
+# ---------------------------------------------------------------------------
+# Profile: edit and change password
+# ---------------------------------------------------------------------------
+# A user of its own, so signing its sessions out cannot disturb the checks above.
+USERS_ME="$BASE_URL/api/v1/users/me"
+PROF_EMAIL="prof+$(date +%s)@example.com"
+PROF_REG=$(curl -sS -X POST "$BASE/register" -H "Content-Type: application/json" \
+  -d "{\"userName\":\"Pro\",\"userLastName\":\"File\",\"userEmail\":\"$PROF_EMAIL\",\"userPassword\":\"$PASSWORD\",\"userPhone\":\"+39 320 1234567\"}")
+PROF_TOKEN=$(extract_field "$PROF_REG" accessToken)
+[ -n "$PROF_TOKEN" ] || fail "could not register a user for the profile checks"
+
+line "80. GET then PUT /users/me (expect 200, the new values come back)"
+ME=$(curl -sS "$USERS_ME" -H "Authorization: Bearer $PROF_TOKEN")
+print_json "$ME"
+expect_json "$ME" userName "\"Pro\""
+UPDATED=$(curl -sS -w '\n%{http_code}' -X PUT "$USERS_ME" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d '{"userName":"Augusta","userLastName":"Byron","userPhone":"+39 06 999999"}')
+UPD_STATUS=$(echo "$UPDATED" | tail -1); UPD_BODY=$(echo "$UPDATED" | sed '$d')
+print_json "$UPD_BODY"
+[ "$UPD_STATUS" = "200" ] || fail "expected 200 from PUT /users/me, got $UPD_STATUS"
+expect_json "$UPD_BODY" userName "\"Augusta\""
+expect_json "$UPD_BODY" userPhone "\"+39 06 999999\""
+# The email is not editable here, whatever the body says.
+expect_json "$UPD_BODY" userEmail "\"$PROF_EMAIL\""
+
+line "81. PUT is a replace: an absent phone clears it (expect 200, null)"
+CLEARED=$(curl -sS -X PUT "$USERS_ME" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d '{"userName":"Augusta","userLastName":"Byron"}')
+print_json "$CLEARED"
+expect_json "$CLEARED" userPhone null
+
+line "82. Invalid profile edits (expect 400, 400, 401)"
+P_BLANK=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$USERS_ME" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d '{"userName":"  ","userLastName":""}')
+P_PHONE=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$USERS_ME" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d '{"userName":"Augusta","userLastName":"Byron","userPhone":"not a phone"}')
+P_NOAUTH=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$USERS_ME" \
+  -H "Content-Type: application/json" -d '{"userName":"A","userLastName":"B"}')
+echo "blank: $P_BLANK   bad phone: $P_PHONE   no token: $P_NOAUTH"
+[ "$P_BLANK" = "400" ]  || fail "expected 400 for blank names, got $P_BLANK"
+[ "$P_PHONE" = "400" ]  || fail "expected 400 for a malformed phone, got $P_PHONE"
+[ "$P_NOAUTH" = "401" ] || fail "expected 401 without a token, got $P_NOAUTH"
+
+line "83. Wrong current password, and reusing the same one (expect 401, 400 - nothing changes)"
+PW_WRONG=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$USERS_ME/password" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"currentPassword\":\"not-my-password\",\"newPassword\":\"evenbetter456\"}")
+PW_SAME=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$USERS_ME/password" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"currentPassword\":\"$PASSWORD\",\"newPassword\":\"$PASSWORD\"}")
+PW_SHORT=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$USERS_ME/password" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"currentPassword\":\"$PASSWORD\",\"newPassword\":\"short\"}")
+echo "wrong: $PW_WRONG   same: $PW_SAME   too short: $PW_SHORT"
+[ "$PW_WRONG" = "401" ] || fail "expected 401 for a wrong current password, got $PW_WRONG"
+[ "$PW_SAME" = "400" ]  || fail "expected 400 for reusing the password, got $PW_SAME"
+[ "$PW_SHORT" = "400" ] || fail "expected 400 for a short new password, got $PW_SHORT"
+# A failed attempt must not have signed this session out.
+STILL_OK=$(curl -sS -o /dev/null -w '%{http_code}' "$USERS_ME" -H "Authorization: Bearer $PROF_TOKEN")
+[ "$STILL_OK" = "200" ] || fail "a failed password change must not end the session, got $STILL_OK"
+
+line "84. Change the password (expect 200 + fresh tokens); the old token dies, the new one works"
+OLD_TOKEN="$PROF_TOKEN"
+PW_HEADERS=$(mktemp)
+sleep 1   # so the new token's iat is strictly after the previous one's
+CHANGED=$(curl -sS -D "$PW_HEADERS" -X POST "$USERS_ME/password" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"currentPassword\":\"$PASSWORD\",\"newPassword\":\"evenbetter456\"}")
+print_json "$CHANGED"
+NEW_TOKEN=$(extract_field "$CHANGED" accessToken)
+[ -n "$NEW_TOKEN" ] || fail "no access token in the change-password response"
+grep -qi "^set-cookie:.*refreshToken=" "$PW_HEADERS" || fail "expected a rotated refresh cookie"
+echo "$CHANGED" | grep -q '"refreshToken"' && fail "the raw refresh token must stay in the cookie, not the body"
+rm -f "$PW_HEADERS"
+# The other devices: tokens minted before the change stop working at once,
+# without waiting for them to expire.
+OLD_USE=$(curl -sS -o /dev/null -w '%{http_code}' "$USERS_ME" -H "Authorization: Bearer $OLD_TOKEN")
+NEW_USE=$(curl -sS -o /dev/null -w '%{http_code}' "$USERS_ME" -H "Authorization: Bearer $NEW_TOKEN")
+echo "old token: $OLD_USE   new token: $NEW_USE"
+[ "$OLD_USE" = "401" ] || fail "a token minted before the change must be rejected, got $OLD_USE"
+[ "$NEW_USE" = "200" ] || fail "the token issued by the change must work, got $NEW_USE"
+# ...and the new password is the one that logs in now.
+OLD_LOGIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/login" -H "Content-Type: application/json" \
+  -d "{\"userEmail\":\"$PROF_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
+NEW_LOGIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/login" -H "Content-Type: application/json" \
+  -d "{\"userEmail\":\"$PROF_EMAIL\",\"userPassword\":\"evenbetter456\"}")
+echo "old password: $OLD_LOGIN   new password: $NEW_LOGIN"
+[ "$OLD_LOGIN" = "401" ] || fail "the old password must stop working, got $OLD_LOGIN"
+[ "$NEW_LOGIN" = "200" ] || fail "the new password must log in, got $NEW_LOGIN"
+
 line "All checks passed"

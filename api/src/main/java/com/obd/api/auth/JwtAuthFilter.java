@@ -18,6 +18,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.Set;
+import java.time.Instant;
 import java.util.UUID;
 
 @Component
@@ -50,6 +51,10 @@ public class  JwtAuthFilter extends OncePerRequestFilter {
             if(SecurityContextHolder.getContext().getAuthentication() == null){
                 UserPrincipal principal = userDetailsService.loadById(UUID.fromString(claims.getSubject()));
 
+                if (mintedBeforeAPasswordChange(claims, principal)) {
+                    throw new JwtException("Token predates a password change");
+                }
+
                 var auth = new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities());
                 auth.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
 
@@ -64,5 +69,13 @@ public class  JwtAuthFilter extends OncePerRequestFilter {
         }
 
         chain.doFilter(request, response);
+    }
+
+    private static boolean mintedBeforeAPasswordChange(Claims claims, UserPrincipal principal) {
+        Instant changedAt = principal.getPasswordChangedAt();
+        // Null means the password has never changed, so nothing is stale.
+        return changedAt != null
+                && claims.getIssuedAt() != null
+                && claims.getIssuedAt().toInstant().isBefore(changedAt);
     }
 }
