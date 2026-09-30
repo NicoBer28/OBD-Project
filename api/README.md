@@ -85,6 +85,21 @@ String characteristic (`0x2A25`), derived from the ESP32's factory MAC
 person types — the API works either way, but the "no user prompt" benefit
 needs the firmware half.
 
+### Invite codes
+
+`group_invite_codes` is the QR half of joining a group, next to `invitations`
+(the email half). A bearer capability: whoever scans it may join.
+
+| Decision | Because |
+|---|---|
+| a separate table, not a nullable `invitations.email` | An invitation is only acceptable by the account holding that address — the one condition that makes accepting safe. A bearer code has no email to check, so sharing the table would have made that condition optional. |
+| only the SHA-256 is stored, as `refresh_tokens` does | A database leak yields nothing joinable. The cost is that a QR cannot be re-displayed: showing it again means minting a new one — which is also what kills the printed poster. |
+| 32 random bytes | Guessing is not a threat model, so nothing here needs rate limiting or lockout. |
+| one live code per group (partial unique on `revoked_at is null`) | Minting revokes the previous row in the same transaction, so there is never a second QR in circulation. An **expired** row still holds the slot until it is revoked — `now()` cannot appear in an index predicate, and "the group's last code" is still a fact worth keeping. |
+| `uses` counter, incremented only by joining | Previewing must not consume a code: someone who scans, reads the group's name and backs out has taken nothing. Who actually joined is already in `group_members`. |
+| revoking sets `revoked_at`, never deletes | The row is the record that a code existed and how often it was used. |
+| `ON DELETE CASCADE` from `groups` | A code for a group that is gone is nothing. |
+
 ## Running
 
 The app reads all of its configuration from environment variables and does
@@ -180,8 +195,8 @@ the default profile and the production database.
 
 ## Endpoints
 
-Base path: `/api/v1`. Everything except `auth/*` requires
-`Authorization: Bearer <accessToken>`.
+Base path: `/api/v1`. Everything except `auth/*` and `GET /invite-codes/{code}`
+requires `Authorization: Bearer <accessToken>`.
 
 ### From dongle to database — how a reading finds its car
 
@@ -923,6 +938,207 @@ service reads the row back to say which:
 | Expired | `409 Conflict` |
 
 `401 Unauthorized` without a token.
+
+---
+
+---
+
+### QR invites — the five endpoints, and what each is for
+
+Two ways into a group, for two different situations:
+
+| | `invitations` (by email) | `group_invite_codes` (by QR) |
+|---|---|---|
+| Names | one email address, before they have an account | nobody — whoever scans |
+| Reaches them | waiting in `GET /invitations/pending` when they register | in person, on a screen or a printed poster |
+| Acceptable by | only the account holding that address | anyone holding the code |
+| Lives | 7 days | 24 hours by default |
+
+They are separate tables on purpose. An invitation's safety is the condition
+`and i.invitationEmail = :email` in `InvitationRepository.accept`; a bearer
+code has no email to check, so making that column nullable would have turned
+the one condition that matters into an optional one.
+
+**The code is a secret, and only its SHA-256 is stored** — the same
+construction as `refresh_tokens.token_hash`. Two consequences worth knowing
+before you build a screen on it: a database leak yields no joinable codes, and
+**the server cannot show a QR twice**. Re-opening the admin screen shows
+metadata, not the code; showing the QR again means minting a new one, which is
+also what kills the printed poster.
+
+The API returns the *payload*, never a PNG. Rendering is the client's job
+(`qr_flutter`), which keeps image sizes, error-correction levels and logos out
+of the backend entirely.
+
+---
+
+### `POST /api/v1/groups/{groupId}/invite-code`
+
+Mints the group's QR code, replacing whatever it had. **Admin-only** — a
+member may drive the cars, but deciding who else gets in is the admin's call,
+the same split as pairing a dongle.
+
+**Body** (`application/json`), or none at all for the defaults:
+
+```json
+{ "ttlHours": 24, "maxUses": null }
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `ttlHours` | no | 1–168. Defaults to `app.invite.code-ttl-hours` (24) |
+| `maxUses` | no | ≥ 1, or omitted for unlimited until it expires or is revoked |
+
+**Response** `201 Created` — the one and only time the code leaves the server:
+
+```json
+{
+  "code": "kJ8xQv7sT2nR4mW9pL1yB6zC3dF5gH0jK8nM2qS4tV6",
+  "joinUrl": "https://obd-c.app/join/kJ8xQv7sT2nR4mW9pL1yB6zC3dF5gH0jK8nM2qS4tV6",
+  "expiresAt": "2026-09-25T18:00:00Z",
+  "maxUses": null,
+  "replacedPrevious": true
+}
+```
+
+Put `joinUrl` in the QR; its base is `app.invite.join-url-base`
+(`INVITE_JOIN_URL_BASE`), which in production should be a universal link that
+opens the app — and offers the store to someone who has not installed it.
+
+`replacedPrevious` says a previous code was killed to make room for this one:
+the cue for *"the QR you printed no longer works"*. No `Location` header —
+the `GET` below returns metadata, never the code, so no URL serves this
+resource again.
+
+**One live code per group**, enforced by `ux_gic_one_live_per_group` (partial
+on `revoked_at is null`). Minting revokes the old row first, in the same
+transaction. The revoke is deliberately *not* filtered on expiry: an expired
+row is still unrevoked, so it still occupies the index.
+
+**Errors:** `404 Not Found` if the caller is not a member (the group is not
+confirmed to exist), `403 Forbidden` if they are a member but not `ADMIN`,
+`400 Bad Request` for an out-of-range `ttlHours`/`maxUses`, `401` without a
+token.
+
+---
+
+### `GET /api/v1/groups/{groupId}/invite-code`
+
+The admin screen re-opened later: is a code live, and how is it doing.
+Admin-only.
+
+**Response** `200 OK`, or **`204 No Content`** when the group has no usable
+code — the normal state, so not an error, and `404` here keeps its one meaning
+of "no such group" (the same reasoning as `GET /cars/{id}/trips/active`). A
+code that has expired or run out of uses reads as `204` too.
+
+```json
+{
+  "id": "…",
+  "createdAt": "2026-09-24T18:00:00Z",
+  "expiresAt": "2026-09-25T18:00:00Z",
+  "uses": 3,
+  "maxUses": 5,
+  "remainingUses": 2
+}
+```
+
+No `code`, ever. `remainingUses` is `null` when `maxUses` is.
+
+**Errors:** `404` non-member, `403` non-admin, `401` without a token.
+
+---
+
+### `DELETE /api/v1/groups/{groupId}/invite-code`
+
+Kills the group's code — the "someone photographed the poster" button.
+Admin-only, idempotent.
+
+**Response** `204 No Content`, whether or not there was anything to revoke.
+
+The row is not deleted: it stays as the record that a code existed and how
+often it was used, and revoking frees the unique index for the next one.
+**Revoking never removes anyone.** A code is how someone got in, not what
+keeps them in.
+
+**Errors:** `404` non-member, `403` non-admin, `401` without a token.
+
+---
+
+### `GET /api/v1/invite-codes/{code}`
+
+**"What am I about to join?"** — what the phone asks the moment it scans, to
+show *"Join Familia Lazzari · 3 members?"* before the user commits.
+
+**No token required.** Someone scanning a QR before they have an account sees
+the group's name rather than a bare login wall; the code is the capability,
+and holding it is the authorisation. It is the only `GET` outside `auth/*`
+that is public — joining still needs a token.
+
+**Response** `200 OK`:
+
+```json
+{
+  "groupId": "fa3b6130-bee8-4523-a450-75147ef7fb19",
+  "groupName": "Familia Lazzari",
+  "memberCount": 3,
+  "expiresAt": "2026-09-25T18:00:00Z"
+}
+```
+
+`groupId` is included so the app can spot a group the user is already in
+without a second request; on its own it grants nothing, since every group
+endpoint checks membership.
+
+**Read-only — previewing never spends a use.** Someone who scans, reads the
+name and taps Cancel has consumed nothing.
+
+**Errors:** `404 Not Found` (`"No such invite code"`) for an unknown code;
+`409 Conflict` for one that is revoked, expired or out of uses. The two are
+told apart on purpose — only someone holding the real code gets that far, and
+the app says different things ("that link is wrong" against "ask them for a
+new QR").
+
+---
+
+### `POST /api/v1/invite-codes/{code}/join`
+
+Joins the caller to the group the code belongs to, as `MEMBER`. No body — the
+code is in the path, the user is in the token.
+
+**Response** `200 OK` — the group as the caller now sees it, so the app can
+navigate straight in:
+
+```json
+{
+  "id": "fa3b6130-bee8-4523-a450-75147ef7fb19",
+  "name": "Familia Lazzari",
+  "createdAt": "2026-09-08T16:45:39.848482Z",
+  "memberCount": 4,
+  "callerRole": "MEMBER"
+}
+```
+
+**Already a member? `200`, and nothing happens** — no use spent, no write.
+Scanning the same poster twice is ordinary behaviour, not a conflict (this is
+a deliberate divergence from the email flow's `409 AlreadyAMember`). The
+membership check runs *before* the code is claimed for a second reason as
+well: `GroupMemberRepository.save` is an upsert on an assigned composite key,
+so writing `MEMBER` over the row of an admin testing their own QR would
+silently demote them — and a group whose last admin was demoted cannot be
+administered by anyone. Pinned by
+`InviteCodeServiceTest.anAdminScanningTheirOwnCodeIsNotDemoted` and smoke 77.
+
+**One conditional `UPDATE`** (`InviteCodeRepository.claim`): the use is spent
+only if the code is unrevoked, unexpired and under its limit — all in the
+`WHERE`, so two people scanning a single-use QR at the same moment cannot both
+get in. Spending the use and inserting the membership are one transaction: a
+crash between them would burn a use without letting anybody in.
+
+**A code never confers `ADMIN`**, and never changes an existing member's role.
+
+**Errors:** `404` unknown code, `409` revoked/expired/exhausted, `401` without
+a token.
 
 ---
 

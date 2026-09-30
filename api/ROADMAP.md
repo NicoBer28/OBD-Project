@@ -4,8 +4,8 @@ What is missing, what to build next, and in what order. Companion to
 `README.md`, which documents what already **exists**; this file is about what
 does not.
 
-Last updated: 2026-09-16. Schema is at `V9__devices.sql`. 288 tests, 72 smoke
-checks.
+Last updated: 2026-09-24. Schema is at `V11__group_invite_codes.sql`. 334
+tests, 79 smoke checks.
 
 ---
 
@@ -17,6 +17,7 @@ checks.
 | Cars | `cars` (with `group_id`, `snapshot_at`), `models` | `POST /cars`, `GET /cars`, `GET /cars/{id}`, `PUT`/`DELETE /cars/{id}/group`, `GET /groups/{id}/cars`, `GET /models`, `POST /models` (admin) |
 | Groups | `groups`, `group_members` | `POST /groups`, `GET /groups`, `GET /groups/{id}/members` |
 | Invitations | `invitations` | `POST /invitations/invite/{groupId}`, `GET /invitations/pending`, `POST /invitations/{id}/accept` |
+| QR invites | `group_invite_codes` | `POST`/`GET`/`DELETE /groups/{id}/invite-code`, `GET /invite-codes/{code}` (public), `POST /invite-codes/{code}/join` |
 | Trips | `trips` | start, finish, cancel, `GET /trips`, `GET /cars/{id}/trips`, `GET /cars/{id}/trips/active` |
 | Telemetry | `telemetry` | `POST /telemetry` (batch ingest, by `carId` or by dongle `serial`), `GET /telemetry` (cursor sync) |
 | Devices | `devices` | `PUT`/`GET`/`DELETE /cars/{id}/device`, `GET /devices/{serial}` |
@@ -216,6 +217,7 @@ open trip survives un-sharing (`sharingLeavesAnOpenTripAlone`).
 | ~~`POST /invitations/{id}/accept`~~ | Atomic accept + `group_members` insert in one transaction. Pinned by `acceptingJoinsTheGroupAsAMember` and smoke 50. No membership guard before the insert — unreachable today (invite already refuses members), reachable once add-member exists. |
 | **`FailedInvitationException` handler** | A duplicate pending invitation is a `500` today. One `@ExceptionHandler` → `409`. |
 | ~~Reclaim expired rows on invite~~ | `deleteExpiredPending` before the insert; accepted rows untouched. |
+| ~~QR invite codes~~ | `group_invite_codes`: mint (admin, one live code per group), preview (public — a scanner with no account still sees the group's name), join. Hashed like a refresh token, so a code is displayable once; re-showing means rotating, which kills the old poster. Only joining spends a use. |
 | **`GET /groups/{id}/invitations`** | Admin's view: who was invited, status. |
 | **`DELETE /groups/{id}/invitations/{invId}`** | Revoke. Today the only way out of a pending invitation is expiry. |
 | **`PATCH /groups/{id}/members/{userId}`** | Change role. Admin-only. |
@@ -224,7 +226,11 @@ open trip survives un-sharing (`sharingLeavesAnOpenTripAlone`).
 
 Traps:
 - **Never allow the last ADMIN to leave or be demoted** — the group becomes
-  unadministrable and no endpoint can recover it.
+  unadministrable and no endpoint can recover it. `POST /invite-codes/{code}/join`
+  is the first endpoint that could have: `GroupMemberRepository.save` is an
+  upsert, so an admin scanning their own QR would have been written back as
+  `MEMBER`. It checks membership before writing; anything else that enrols a
+  user must do the same.
 - `GroupAccess` now exists (`requireMember` / `requireAdmin`). `InvitationService`
   still does the admin check inline; worth routing through it when next touched.
 - Removing a member who is mid-trip in a group car: same question as

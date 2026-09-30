@@ -1,6 +1,8 @@
 package com.obd.api.excpetion;
 
 import com.obd.api.invitation.exception.*;
+import com.obd.api.invitecode.exception.InviteCodeNoLongerValidException;
+import com.obd.api.invitecode.exception.InviteCodeNotFoundException;
 import com.obd.api.trip.exception.TripAlreadyEndedException;
 import com.obd.api.trip.exception.TripNotFoundException;
 import com.obd.api.user.exception.UserNotFoundException;
@@ -101,6 +103,24 @@ public class GlobalExceptionHandler {
         var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
         p.setTitle("Conflict");
         p.setDetail("That trip has already ended");
+        return p;
+    }
+
+    @ExceptionHandler(InviteCodeNotFoundException.class)
+    public ProblemDetail inviteCodeNotFound(InviteCodeNotFoundException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        p.setTitle("Not Found");
+        p.setDetail("No such invite code");
+        return p;
+    }
+
+    @ExceptionHandler(InviteCodeNoLongerValidException.class)
+    public ProblemDetail inviteCodeNoLongerValid(InviteCodeNoLongerValidException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        p.setTitle("Conflict");
+        // Revoked, expired or out of uses - one answer for all three, since
+        // the app says the same thing to the scanner either way.
+        p.setDetail("That invite code is no longer valid");
         return p;
     }
 

@@ -843,4 +843,100 @@ echo "non-member: $MEMBERS_FOREIGN   unknown group: $MEMBERS_UNKNOWN"
 [ "$MEMBERS_FOREIGN" = "404" ] || fail "expected 404 for a non-member listing members, got $MEMBERS_FOREIGN"
 [ "$MEMBERS_UNKNOWN" = "404" ] || fail "expected 404 for an unknown group, got $MEMBERS_UNKNOWN"
 
+# ---------------------------------------------------------------------------
+# QR invite codes
+# ---------------------------------------------------------------------------
+# Carl (CAR_TOKEN) is ADMIN of GROUP_ID; the invitee (INV_TOKEN) is a MEMBER
+# of it from step 49; Grace (OTHER_TOKEN) is in no group.
+INVITE_CODES="$BASE_URL/api/v1/invite-codes"
+
+line "73. Admin mints a QR code (expect 201, code + joinUrl, no Location)"
+QR_HEADERS=$(mktemp)
+QR=$(curl -sS -D "$QR_HEADERS" -X POST "$GROUPS_URL/$GROUP_ID/invite-code" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" -d '{}')
+print_json "$QR"
+grep -qi "^HTTP/1.1 201" "$QR_HEADERS" || fail "expected 201 from mint invite code"
+grep -qi "^location:" "$QR_HEADERS" && fail "mint must not send a Location - the code is never served again"
+QR_CODE=$(extract_field "$QR" code)
+[ -n "$QR_CODE" ] || fail "no code in the mint response"
+echo "$QR" | grep -q "\"joinUrl\":\"[^\"]*$QR_CODE\"" || fail "joinUrl must end with the code"
+expect_json "$QR" replacedPrevious false
+rm -f "$QR_HEADERS"
+
+line "74. A member cannot mint (expect 403); a stranger is not told the group exists (expect 404)"
+QR_MEMBER=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$GROUPS_URL/$GROUP_ID/invite-code" \
+  -H "Authorization: Bearer $INV_TOKEN")
+QR_STRANGER=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$GROUPS_URL/$GROUP_ID/invite-code" \
+  -H "Authorization: Bearer $OTHER_TOKEN")
+echo "member: $QR_MEMBER   stranger: $QR_STRANGER"
+[ "$QR_MEMBER" = "403" ]   || fail "expected 403 for a member minting a code, got $QR_MEMBER"
+[ "$QR_STRANGER" = "404" ] || fail "expected 404 for a non-member minting a code, got $QR_STRANGER"
+
+line "75. Previewing the code needs no token and spends no use (expect 200, group name)"
+PREVIEW=$(curl -sS "$INVITE_CODES/$QR_CODE")
+print_json "$PREVIEW"
+expect_json "$PREVIEW" groupId "\"$GROUP_ID\""
+echo "$PREVIEW" | grep -q '"groupName":"Familia Lazzari"' || fail "expected the group's name in the preview"
+# Scanned twice and backed out both times: still unused.
+curl -sS -o /dev/null "$INVITE_CODES/$QR_CODE"
+QR_META=$(curl -sS "$GROUPS_URL/$GROUP_ID/invite-code" -H "Authorization: Bearer $CAR_TOKEN")
+print_json "$QR_META"
+expect_json "$QR_META" uses 0
+echo "$QR_META" | grep -q '"code"' && fail "the admin's view must never carry the code"
+
+line "76. Grace scans and joins (expect 200, MEMBER); scanning again is a no-op"
+JOINED=$(curl -sS -X POST "$INVITE_CODES/$QR_CODE/join" -H "Authorization: Bearer $OTHER_TOKEN")
+print_json "$JOINED"
+expect_json "$JOINED" id "\"$GROUP_ID\""
+expect_json "$JOINED" callerRole "\"MEMBER\""
+AGAIN=$(curl -sS -X POST "$INVITE_CODES/$QR_CODE/join" -H "Authorization: Bearer $OTHER_TOKEN")
+expect_json "$AGAIN" callerRole "\"MEMBER\""
+# One use for the join, none for the second scan or the previews.
+QR_META2=$(curl -sS "$GROUPS_URL/$GROUP_ID/invite-code" -H "Authorization: Bearer $CAR_TOKEN")
+expect_json "$QR_META2" uses 1
+# ...and Grace is really in: the group's cars are now hers to read.
+G_MEMBERS=$(curl -sS "$GROUPS_URL/$GROUP_ID/members" -H "Authorization: Bearer $OTHER_TOKEN")
+print_json "$G_MEMBERS"
+echo "$G_MEMBERS" | grep -q "\"email\":\"$OTHER_EMAIL\",\"role\":\"MEMBER\"" \
+  || fail "the scanner is missing from the member list"
+
+line "77. The admin scanning their own QR is not demoted (expect 200, still ADMIN)"
+SELF=$(curl -sS -X POST "$INVITE_CODES/$QR_CODE/join" -H "Authorization: Bearer $CAR_TOKEN")
+print_json "$SELF"
+expect_json "$SELF" callerRole "\"ADMIN\""
+QR_META3=$(curl -sS "$GROUPS_URL/$GROUP_ID/invite-code" -H "Authorization: Bearer $CAR_TOKEN")
+expect_json "$QR_META3" uses 1
+
+line "78. Minting again kills the old code (expect 409 on the old one, 200 on the new)"
+QR2=$(curl -sS -X POST "$GROUPS_URL/$GROUP_ID/invite-code" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d '{"ttlHours": 1, "maxUses": 1}')
+print_json "$QR2"
+expect_json "$QR2" replacedPrevious true
+expect_json "$QR2" maxUses 1
+QR_CODE2=$(extract_field "$QR2" code)
+OLD_PREVIEW=$(curl -sS -o /dev/null -w '%{http_code}' "$INVITE_CODES/$QR_CODE")
+NEW_PREVIEW=$(curl -sS -o /dev/null -w '%{http_code}' "$INVITE_CODES/$QR_CODE2")
+echo "old: $OLD_PREVIEW   new: $NEW_PREVIEW"
+[ "$OLD_PREVIEW" = "409" ] || fail "expected 409 for the replaced code, got $OLD_PREVIEW"
+[ "$NEW_PREVIEW" = "200" ] || fail "expected 200 for the new code, got $NEW_PREVIEW"
+
+line "79. Revoke (expect 204, then 204 again); the code and an unknown one are dead (expect 409, 404)"
+REV=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$GROUPS_URL/$GROUP_ID/invite-code" -H "Authorization: Bearer $CAR_TOKEN")
+REV2=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$GROUPS_URL/$GROUP_ID/invite-code" -H "Authorization: Bearer $CAR_TOKEN")
+DEAD=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITE_CODES/$QR_CODE2/join" -H "Authorization: Bearer $INV_TOKEN")
+UNKNOWN=$(curl -sS -o /dev/null -w '%{http_code}' "$INVITE_CODES/not-a-real-code")
+NO_CODE=$(curl -sS -o /dev/null -w '%{http_code}' "$GROUPS_URL/$GROUP_ID/invite-code" -H "Authorization: Bearer $CAR_TOKEN")
+NO_TOKEN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITE_CODES/$QR_CODE2/join")
+echo "revoke: $REV   again: $REV2   join revoked: $DEAD   unknown: $UNKNOWN   metadata: $NO_CODE   join without a token: $NO_TOKEN"
+[ "$REV" = "204" ]      || fail "expected 204 revoking, got $REV"
+[ "$REV2" = "204" ]     || fail "revoking twice must still be 204, got $REV2"
+[ "$DEAD" = "409" ]     || fail "expected 409 joining with a revoked code, got $DEAD"
+[ "$UNKNOWN" = "404" ]  || fail "expected 404 for an unknown code, got $UNKNOWN"
+[ "$NO_CODE" = "204" ]  || fail "expected 204 from the admin view with no live code, got $NO_CODE"
+[ "$NO_TOKEN" = "401" ] || fail "expected 401 joining without a token, got $NO_TOKEN"
+# Revoking never removes anyone who already joined.
+STILL_IN=$(curl -sS "$GROUPS_URL" -H "Authorization: Bearer $OTHER_TOKEN")
+echo "$STILL_IN" | grep -q "\"id\":\"$GROUP_ID\"" || fail "revoking a code must not remove the members it let in"
+
 line "All checks passed"
