@@ -1,6 +1,7 @@
 #include "obd_can.h"
-#include "mcp2515.h"
 
+#if CONFIG_OBD_USE_MCP2515
+#include "mcp2515.h"
 OBD_MCP2515::OBD_MCP2515(spi_device_handle_t* spi_handle, gpio_num_t int_pin, SemaphoreHandle_t rx_sem)
     : spi_handle(spi_handle), int_pin(int_pin), rx_sem(rx_sem) {
     mcp = new MCP2515(spi_handle);
@@ -81,7 +82,10 @@ void OBD_MCP2515::request_pid(BleCanPacket packet) {
     }
     mcp->sendMessage(&tx_frame);
 }
+#endif // CONFIG_OBD_USE_MCP2515
 
+
+#if CONFIG_OBD_USE_TWAI
 typedef struct
 {
     uint32_t id;
@@ -229,4 +233,5 @@ void OBD_TWAI::request_pid(BleCanPacket packet) {
         }
     }
 }
+#endif // CONFIG_OBD_USE_TWAI
 

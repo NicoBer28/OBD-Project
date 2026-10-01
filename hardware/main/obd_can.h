@@ -9,8 +9,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 
-#include "esp_twai.h"
-#include "esp_twai_onchip.h"
+
 
 
 struct __attribute__((packed)) BleCanPacket {
@@ -63,6 +62,7 @@ protected:
     QueueHandle_t tx_queue = NULL;
 };
 
+#if CONFIG_OBD_USE_MCP2515
 class MCP2515;
 
 /**
@@ -100,7 +100,11 @@ private:
 
     void request_pid(BleCanPacket packet);
 };
+#endif // CONFIG_OBD_USE_MCP2515
 
+#if CONFIG_OBD_USE_TWAI
+#include "esp_twai.h"
+#include "esp_twai_onchip.h"
 
 /**
  * @brief Implementación de la interfaz OBD usando el controlador TWAI integrado en el ESP32.
@@ -128,3 +132,4 @@ private:
 
     void request_pid(BleCanPacket packet);
 };
+#endif // CONFIG_OBD_USE_TWAI

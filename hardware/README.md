@@ -56,12 +56,19 @@ code .
 ### 1. Con el contenedor ya cargado, abrir una nueva terminal integrada en VS Code
 - Se va a abrir una terminal dentro del contenedor
 
-### 2. Para compilar el firmware:
+### 2. Seleccionar modelo de ESP y transceptor:
+```bash
+./set_driver.sh <transceptor> <modelo>
+```
+- Modelo puede ser `esp32`, `esp32-c3` o cualquier modelo compatible con las funcionalidades
+- transceptor puede ser `twai` o `mcp`
+### 3. Para compilar:
 ```bash
 idf.py build
 ```
 - Se van a descargar todas las dependencias del proyecto
-### 3. La libreria del mcp2515 utilizada tiene un error de dependencias en su `CMakeLists.txt`. Para corregirlo ejecutar, desde el directorio actual:
+- Como alternativa, se puede setear como target `esp32-c3` y tomar consideraciones para un nucleo solo
+### 4. La libreria del mcp2515 utilizada tiene un error de dependencias en su `CMakeLists.txt`. Para corregirlo ejecutar, desde el directorio actual:
 
 ```bash
 echo "idf_component_register(SRCS "mcp2515.cpp"
@@ -69,7 +76,7 @@ echo "idf_component_register(SRCS "mcp2515.cpp"
                     REQUIRES esp_driver_spi)" > ./managed_components/mcp2515/CMakeLists.txt
 ```
 - Tambien se puede editar directamente el archivo
-### 4. Flashear la ESP32 y abrir el monitor serial simultáneamente:
+### 5. Flashear la ESP32 y abrir el monitor serial simultáneamente:
 
 ```bash
 idf.py flash monitor
