@@ -79,13 +79,43 @@ class MainActivity: FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
-            if (call.method == "iniciarVinculacion") {
-                iniciarVinculacionOBD()
-                result.success("Ventana nativa abierta")
-            } else {
-                result.notImplemented()
+            when (call.method) {
+                "iniciarVinculacion" -> {
+                    iniciarVinculacionOBD()
+                    result.success("Ventana nativa abierta")
+                }
+
+                // Flutter entrega la sesión para que el SyncWorker pueda subir con la app cerrada.
+                // Se llama al entrar, al renovarse el token y al cambiar de auto.
+                "setSession" -> {
+                    val baseUrl = call.argument<String>("baseUrl")
+                    if (baseUrl.isNullOrBlank()) {
+                        result.error("ARGUMENTO", "Falta baseUrl", null)
+                        return@setMethodCallHandler
+                    }
+                    NativeSession.save(
+                        context = this,
+                        baseUrl = baseUrl,
+                        accessToken = call.argument<String>("accessToken"),
+                        carId = call.argument<String>("carId"),
+                        userId = call.argument<String>("userId"),
+                    )
+                    // Token nuevo: subir ya lo que haya quedado en cola (aunque hubiera un backoff largo).
+                    SyncScheduler.requestSync(this, replace = true)
+                    result.success(null)
+                }
+
+                // Logout: el nativo deja de poder subir (los datos ya guardados no se borran).
+                "clearSession" -> {
+                    NativeSession.clearCredentials(this)
+                    result.success(null)
+                }
+
+                else -> result.notImplemented()
             }
         }
+
+        SyncScheduler.schedulePeriodic(this)
 
         ObdEventBridge.flutterApi = ObdFlutterApi(flutterEngine.dartExecutor.binaryMessenger)
     }

@@ -14,7 +14,7 @@ data class Trip(
     val startedAt: Long,
     val endedAt: Long? = null,
     val status: String,              // "ACTIVE" o "FINISHED"
-    val syncStatus: String           // "PENDING_START", "SYNCED_START", "PENDING_FINISH", "COMPLETED"
+    val syncStatus: String           // "PENDING_START", "SYNCED_START", "PENDING_FINISH", "COMPLETED", "FAILED"
 )
 
 @Entity(tableName = "telemetry_chunks")
@@ -23,6 +23,6 @@ data class TelemetryChunk(
     val carId: String,
     val startTime: Long,             // Marca de tiempo del primer dato del chunk
     val payload: String,             // JSON Array crudo para guardar localmente
-    val syncStatus: String,          // "PENDING", "SYNCED"
+    val syncStatus: String,          // "PENDING", "SYNCED", "FAILED"
     val retryCount: Int = 0
 )

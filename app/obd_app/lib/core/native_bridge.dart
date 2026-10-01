@@ -16,4 +16,40 @@ class NativeBleBridge {
       debugPrint('Fallo al llamar al código nativo: ${e.message}');
     }
   }
+
+  /// Le entrega al código nativo lo que necesita para subir datos con la app cerrada.
+  ///
+  /// TEMPORAL (Fase 1): [accessToken] es el JWT de 15 minutos de la sesión. El nativo
+  /// nunca lo renueva; si vence, guarda los datos y los sube cuando se le mande uno nuevo.
+  /// En la Fase 2 se reemplaza por el token de dispositivo.
+  static Future<void> enviarSesion({
+    required String baseUrl,
+    required String? accessToken,
+    required String? carId,
+    required String? userId,
+  }) async {
+    try {
+      await platform.invokeMethod('setSession', {
+        'baseUrl': baseUrl,
+        'accessToken': accessToken,
+        'carId': carId,
+        'userId': userId,
+      });
+    } on PlatformException catch (e) {
+      debugPrint('No se pudo entregar la sesión al nativo: ${e.message}');
+    } on MissingPluginException {
+      // iOS todavía no implementa el canal.
+    }
+  }
+
+  /// Logout: el nativo deja de subir. Lo ya guardado localmente no se borra.
+  static Future<void> borrarSesion() async {
+    try {
+      await platform.invokeMethod('clearSession');
+    } on PlatformException catch (e) {
+      debugPrint('No se pudo borrar la sesión nativa: ${e.message}');
+    } on MissingPluginException {
+      // iOS todavía no implementa el canal.
+    }
+  }
 }

@@ -10,7 +10,7 @@ import 'package:obd_app/core/utils/api_messages.dart';
 import 'package:obd_app/data/api/obd_api.dart';
 import 'package:obd_app/data/in_memory_reservation_repository.dart';
 import 'package:obd_app/data/reservation_repository.dart';
-import 'package:obd_app/data/telemetry_uploader.dart';
+import 'package:obd_app/core/native_bridge.dart';
 import 'package:obd_app/src/generated/obd_api.g.dart';
 import 'package:obd_app/ui/screens/auth/login_screen.dart';
 import 'package:obd_app/ui/screens/home/tabs/activity_tab.dart';
@@ -51,13 +51,19 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
   late final HomeController _home;
   late final bool _ownsHome;
-  late final TelemetryUploader _uploader;
   final ObdSession _session = ObdApi.instance.session;
 
   // Mientras la app está al frente, un ping liviano cada dos minutos evita
   // que Vercel duerma el contenedor entre un toque y el siguiente (se duerme
   // en ~3 min y tarda 20 s en despertar). Al volver del fondo, uno de una.
   static const _keepWarmEvery = Duration(minutes: 2);
+
+  /// Lo último que se le mandó al nativo, para no repetir el envío si nada cambió.
+  String? _lastNativeSessionKey;
+
+  /// La subida la hace el nativo; acá solo se refresca el snapshot del auto cada tanto.
+  static const _carRefreshEvery = Duration(seconds: 30);
+  DateTime? _lastCarRefresh;
   Timer? _keepWarm;
   late final AppLifecycleListener _lifecycle;
 
@@ -90,8 +96,6 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
     _ownsHome = widget.controller == null;
     _home.addListener(_onHomeChanged);
 
-    _uploader = TelemetryUploader(onUploaded: _onTelemetryUploaded);
-
     // Si la sesión se cae (logout, o un refresh token vencido que el cliente
     // no pudo renovar) volvemos al login desde un solo lugar.
     _session.addListener(_onSessionChanged);
@@ -105,12 +109,49 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
     ObdFlutterApi.setUp(this);
     _solicitarPermisos();
     _home.load();
+    _enviarSesionAlNativo();
   }
 
   void _startKeepWarm() {
     ObdApi.instance.warmUp();
+    _renovarTokenSiVence();
     _keepWarm?.cancel();
-    _keepWarm = Timer.periodic(_keepWarmEvery, (_) => ObdApi.instance.warmUp());
+    _keepWarm = Timer.periodic(_keepWarmEvery, (_) {
+      ObdApi.instance.warmUp();
+      _renovarTokenSiVence();
+    });
+  }
+
+  /// Con la app abierta, renueva el access token antes de que venza para que el nativo
+  /// siempre tenga uno válido. Pasa por `refreshSession` (single-flight), así que nunca
+  /// hay dos refresh en paralelo. Al renovarse, la sesión notifica y se reenvía al nativo.
+  Future<void> _renovarTokenSiVence() async {
+    final expiresAt = _session.expiresAt;
+    if (expiresAt == null || _session.refreshToken == null) return;
+    if (expiresAt.difference(DateTime.now()) > const Duration(minutes: 3)) return;
+    try {
+      await ObdApi.instance.auth.refresh();
+    } catch (error) {
+      debugPrint('No se pudo renovar el token: $error');
+    }
+  }
+
+  /// TEMPORAL (Fase 1): le pasa al nativo token, auto y usuario actuales.
+  void _enviarSesionAlNativo() {
+    final token = _session.accessToken;
+    final carId = _home.car?.id;
+    final userId = _session.userId;
+
+    final key = '$token|$carId|$userId';
+    if (key == _lastNativeSessionKey) return;
+    _lastNativeSessionKey = key;
+
+    NativeBleBridge.enviarSesion(
+      baseUrl: ObdApi.instance.client.config.baseUrl,
+      accessToken: token,
+      carId: carId,
+      userId: userId,
+    );
   }
 
   void _stopKeepWarm() {
@@ -139,25 +180,32 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
     _lifecycle.dispose();
     _session.removeListener(_onSessionChanged);
     _home.removeListener(_onHomeChanged);
-    _uploader.flush();
-    _uploader.dispose();
     _reservations?.dispose();
     if (_ownsHome) _home.dispose();
     super.dispose();
   }
 
   void _onSessionChanged() {
-    if (_session.isAuthenticated || !mounted) return;
+    if (_session.isAuthenticated) {
+      // Token renovado (o recién logueado): el nativo necesita el nuevo.
+      _enviarSesionAlNativo();
+      return;
+    }
+
+    // Logout o sesión vencida: el nativo deja de subir.
+    _lastNativeSessionKey = null;
+    NativeBleBridge.borrarSesion();
+
+    if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
       (route) => false,
     );
   }
 
-  /// Mantiene el uploader y las reservas apuntando al auto elegido.
+  /// Mantiene al nativo y a las reservas apuntando al auto elegido.
   void _onHomeChanged() {
-    final car = _home.car;
-    _uploader.carId = car?.id;
+    _enviarSesionAlNativo();
     _syncReservations();
   }
 
@@ -209,15 +257,13 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
       }
     });
 
-    // El teléfono es el relay: lo que llega por BLE se sube a la API.
-    _uploader.add(event);
-  }
-
-  void _onTelemetryUploaded(TelemetryIngestResult result) {
-    if (!mounted) return;
-    if (result.snapshotUpdated) _home.refreshCar();
-    if (mounted) {
-      setState(() => _connectionStatus = 'Conectado · sincronizado');
+    // La subida al servidor la hace el servicio nativo (también con la app cerrada).
+    // Acá solo se trae cada tanto el snapshot actualizado del auto.
+    final now = DateTime.now();
+    final last = _lastCarRefresh;
+    if (last == null || now.difference(last) > _carRefreshEvery) {
+      _lastCarRefresh = now;
+      _home.refreshCar();
     }
   }
 
