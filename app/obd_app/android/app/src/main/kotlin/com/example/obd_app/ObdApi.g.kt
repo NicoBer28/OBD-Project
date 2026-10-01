@@ -181,6 +181,27 @@ class FlutterError (
   val details: Any? = null
 ) : RuntimeException()
 
+/** En qué está la conexión entre este celular y el ESP32 de un auto. */
+enum class EstadoConexion(val raw: Int) {
+  /** El ESP32 no está al alcance (auto apagado o lejos) y no hay ningún viaje abierto. */
+  DESCONECTADO(0),
+  /** Android detectó el ESP32, pero todavía no llegó ningún dato. */
+  CONECTANDO(1),
+  /** Están llegando datos. */
+  CONECTADO(2),
+  /**
+   * Se cortó la conexión con un viaje abierto y todavía corre el tiempo de gracia: si
+   * vuelve a tiempo el viaje sigue; si no, se cierra.
+   */
+  RECONECTANDO(3);
+
+  companion object {
+    fun ofRaw(raw: Int): EstadoConexion? {
+      return values().firstOrNull { it.raw == raw }
+    }
+  }
+}
+
 /** Generated class from Pigeon that represents data sent in messages. */
 data class TelemetryEvent (
   val speed: Long? = null,
@@ -241,12 +262,71 @@ data class TelemetryEvent (
     return "TelemetryEvent(speed=$speed, rpm=$rpm, fuel=$fuel, lat=$lat, lng=$lng, carId=$carId)"
   }
 }
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class ConnectionEvent (
+  val carId: String,
+  val estado: EstadoConexion,
+  /**
+   * Solo con [EstadoConexion.reconectando]: momento (epoch en ms) en que vence el tiempo
+   * de gracia y el viaje se da por terminado si no volvió la conexión.
+   */
+  val finGraciaMs: Long? = null
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): ConnectionEvent {
+      val carId = pigeonVar_list[0] as String
+      val estado = pigeonVar_list[1] as EstadoConexion
+      val finGraciaMs = pigeonVar_list[2] as Long?
+      return ConnectionEvent(carId, estado, finGraciaMs)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      carId,
+      estado,
+      finGraciaMs,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as ConnectionEvent
+    return ObdApiPigeonUtils.deepEquals(this.carId, other.carId) && ObdApiPigeonUtils.deepEquals(this.estado, other.estado) && ObdApiPigeonUtils.deepEquals(this.finGraciaMs, other.finGraciaMs)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + ObdApiPigeonUtils.deepHash(this.carId)
+    result = 31 * result + ObdApiPigeonUtils.deepHash(this.estado)
+    result = 31 * result + ObdApiPigeonUtils.deepHash(this.finGraciaMs)
+    return result
+  }
+  override fun toString(): String {
+    return "ConnectionEvent(carId=$carId, estado=$estado, finGraciaMs=$finGraciaMs)"
+  }
+}
 private open class ObdApiPigeonCodec : StandardMessageCodec() {
   override fun readValueOfType(type: Byte, buffer: ByteBuffer): Any? {
     return when (type) {
       129.toByte() -> {
+        return (readValue(buffer) as Long?)?.let {
+          EstadoConexion.ofRaw(it.toInt())
+        }
+      }
+      130.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
           TelemetryEvent.fromList(it)
+        }
+      }
+      131.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          ConnectionEvent.fromList(it)
         }
       }
       else -> super.readValueOfType(type, buffer)
@@ -254,8 +334,16 @@ private open class ObdApiPigeonCodec : StandardMessageCodec() {
   }
   override fun writeValue(stream: ByteArrayOutputStream, value: Any?)   {
     when (value) {
-      is TelemetryEvent -> {
+      is EstadoConexion -> {
         stream.write(129)
+        writeValue(stream, value.raw.toLong())
+      }
+      is TelemetryEvent -> {
+        stream.write(130)
+        writeValue(stream, value.toList())
+      }
+      is ConnectionEvent -> {
+        stream.write(131)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -276,6 +364,26 @@ class ObdFlutterApi(private val binaryMessenger: BinaryMessenger, private val me
     val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
     return suspendCancellableCoroutine { continuation ->
       val channelName = "dev.flutter.pigeon.obd_app.ObdFlutterApi.onTelemetryUpdated$separatedMessageChannelSuffix"
+      val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
+      channel.send(listOf(eventArg)) {
+        if (it is List<*>) {
+          if (it.size > 1) {
+            continuation.resumeWithException(FlutterError(it[0] as String, it[1] as String, it[2] as String?))
+          } else {
+            continuation.resume(Unit)
+          }
+        } else {
+          continuation.resumeWithException(ObdApiPigeonUtils.createConnectionError(channelName))
+        } 
+      }
+    }
+  }
+  /** Cambió el estado de la conexión con el ESP32 de un auto. */
+  suspend fun onConnectionChanged(eventArg: ConnectionEvent)
+{
+    val separatedMessageChannelSuffix = if (messageChannelSuffix.isNotEmpty()) ".$messageChannelSuffix" else ""
+    return suspendCancellableCoroutine { continuation ->
+      val channelName = "dev.flutter.pigeon.obd_app.ObdFlutterApi.onConnectionChanged$separatedMessageChannelSuffix"
       val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
       channel.send(listOf(eventArg)) {
         if (it is List<*>) {

@@ -3,6 +3,7 @@ import 'package:obd_app/controllers/home_controller.dart';
 import 'package:obd_app/controllers/reservations_controller.dart';
 import 'package:obd_app/core/constants/app_icons.dart';
 import 'package:obd_app/core/theme/app_theme.dart';
+import 'package:obd_app/core/utils/connection_format.dart';
 import 'package:obd_app/data/api/obd_api.dart';
 import 'package:obd_app/ui/screens/cars/create_car_screen.dart';
 import 'package:obd_app/ui/screens/cars/my_cars_screen.dart';
@@ -10,6 +11,7 @@ import 'package:obd_app/ui/screens/home/widgets/car_widgets.dart';
 import 'package:obd_app/ui/screens/home/widgets/home_state_widgets.dart';
 import 'package:obd_app/ui/screens/home/widgets/trip_sheets.dart';
 import 'package:obd_app/ui/widgets/widgets.dart';
+import 'package:obd_app/src/generated/obd_api.g.dart';
 
 /// ---------------------------------------------------------------------------
 /// Auto
@@ -24,7 +26,10 @@ class CarTab extends StatelessWidget {
   final double? liveFuel;
   final int speed;
   final int rpm;
-  final String connectionStatus;
+  final EstadoConexion conexion;
+
+  /// Con la conexión perdida: cuándo se da por terminado el viaje si no vuelve.
+  final DateTime? finGracia;
   final ValueChanged<double> onFuelChanged;
   final VoidCallback onNavigateToShared;
   final VoidCallback onNavigateToActivity;
@@ -38,7 +43,8 @@ class CarTab extends StatelessWidget {
     required this.liveFuel,
     required this.speed,
     required this.rpm,
-    required this.connectionStatus,
+    required this.conexion,
+    this.finGracia,
     required this.onFuelChanged,
     required this.onNavigateToShared,
     required this.onNavigateToActivity,
@@ -189,7 +195,8 @@ class CarTab extends StatelessWidget {
                 speed: speed,
                 rpm: rpm,
                 fuel: liveFuel ?? 0,
-                status: connectionStatus,
+                conexion: conexion,
+                finGracia: finGracia,
                 onFuelChanged: onFuelChanged,
               ),
             ],
@@ -199,6 +206,9 @@ class CarTab extends StatelessWidget {
         final fuel = _fuelFor(car);
         final active = controller.activeTrip;
         final device = controller.device;
+        // Se cortó la conexión con el auto y todavía corre el tiempo de gracia. Si el viaje
+        // en curso es de otro conductor, lo que le pase a este celular no cuenta.
+        final sinConexion = conexion == EstadoConexion.reconectando && (active == null || controller.activeTripIsMine);
 
         return RefreshIndicator(
           onRefresh: controller.refresh,
@@ -245,15 +255,27 @@ class CarTab extends StatelessWidget {
                     value: car.batteryLevel == null ? '—' : '${car.batteryLevel}%',
                     icon: AppIcons.battery,
                   ),
+                  // La conexión de este celular con el auto pisa al estado del viaje mientras
+                  // está a medias: recién detectado, o cortado con el viaje todavía abierto.
                   VitalData(
                     label: 'Estado',
-                    value: active == null
-                        ? 'Libre'
+                    value: sinConexion
+                        ? ConexionTextos.estadoSinConexion
+                        : active == null
+                        ? (conexion == EstadoConexion.conectando ? ConexionTextos.estadoConectando : 'Libre')
                         : controller.activeTripIsMine
                         ? 'Con vos'
                         : 'En viaje',
-                    icon: active == null ? Icons.check_circle_outline_rounded : AppIcons.trip,
-                    valueColor: active == null ? AppColors.success : AppColors.warning,
+                    icon: sinConexion
+                        ? Icons.bluetooth_disabled
+                        : active == null
+                        ? Icons.check_circle_outline_rounded
+                        : AppIcons.trip,
+                    valueColor: sinConexion
+                        ? AppColors.danger
+                        : active == null && conexion != EstadoConexion.conectando
+                        ? AppColors.success
+                        : AppColors.warning,
                   ),
                   VitalData(
                     label: 'Dongle',
@@ -272,6 +294,8 @@ class CarTab extends StatelessWidget {
                     trip: active,
                     driverName: controller.driverName(active.driverId),
                     isMine: controller.activeTripIsMine,
+                    connectionLost: sinConexion,
+                    graceEndsAt: finGracia,
                     onFinish: () => _finishTrip(context, car),
                   ),
                 ),
@@ -330,7 +354,8 @@ class CarTab extends StatelessWidget {
                 speed: speed,
                 rpm: rpm,
                 fuel: liveFuel ?? (car.fuelLevel ?? 0).toDouble(),
-                status: connectionStatus,
+                conexion: conexion,
+                finGracia: finGracia,
                 onFuelChanged: onFuelChanged,
               ),
               if (controller.detailsLoading)

@@ -298,6 +298,16 @@ class MainActivity: FlutterActivity() {
                     }
                 }
 
+                // En qué está la conexión con el ESP32 de cada auto vinculado (por carId).
+                // Los cambios posteriores llegan solos por onConnectionChanged.
+                "obtenerEstadosConexion" -> responderEnIO(result) {
+                    TripGrace.cerrarViajesVencidos(this, dao)
+                    dao.getAssociations().associate {
+                        val conexion = ConnectionStatus.conexionDe(this, it.carId)
+                        it.carId to mapOf("estado" to conexion.estado.raw, "finGraciaMs" to conexion.finGraciaMs)
+                    }
+                }
+
                 "estadoSincronizacion" -> responderEnIO(result) {
                     mapOf(
                         "pendingChunks" to dao.countPendingChunks(),

@@ -22,7 +22,37 @@ class TelemetryEvent {
   String? carId;
 }
 
+/// En qué está la conexión entre este celular y el ESP32 de un auto.
+enum EstadoConexion {
+  /// El ESP32 no está al alcance (auto apagado o lejos) y no hay ningún viaje abierto.
+  desconectado,
+
+  /// Android detectó el ESP32, pero todavía no llegó ningún dato.
+  conectando,
+
+  /// Están llegando datos.
+  conectado,
+
+  /// Se cortó la conexión con un viaje abierto y todavía corre el tiempo de gracia: si
+  /// vuelve a tiempo el viaje sigue; si no, se cierra.
+  reconectando,
+}
+
+class ConnectionEvent {
+  ConnectionEvent({required this.carId, required this.estado, this.finGraciaMs});
+
+  String carId;
+  EstadoConexion estado;
+
+  /// Solo con [EstadoConexion.reconectando]: momento (epoch en ms) en que vence el tiempo
+  /// de gracia y el viaje se da por terminado si no volvió la conexión.
+  int? finGraciaMs;
+}
+
 @FlutterApi()
 abstract class ObdFlutterApi {
   void onTelemetryUpdated(TelemetryEvent event);
+
+  /// Cambió el estado de la conexión con el ESP32 de un auto.
+  void onConnectionChanged(ConnectionEvent event);
 }

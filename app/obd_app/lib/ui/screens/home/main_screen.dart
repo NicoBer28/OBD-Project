@@ -10,6 +10,7 @@ import 'package:obd_app/core/utils/api_messages.dart';
 import 'package:obd_app/data/api/obd_api.dart';
 import 'package:obd_app/data/in_memory_reservation_repository.dart';
 import 'package:obd_app/data/reservation_repository.dart';
+import 'package:obd_app/core/native_bridge.dart';
 import 'package:obd_app/data/device_link_service.dart';
 import 'package:obd_app/src/generated/obd_api.g.dart';
 import 'package:obd_app/ui/screens/auth/cerrar_sesion.dart';
@@ -81,7 +82,6 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
   double? _fuel;
   int _speed = 0;
   int _rpm = 0;
-  String _connectionStatus = 'Desconectado';
 
   /// Auto al que corresponden los valores en vivo de arriba.
   String? _liveCarId;
@@ -102,7 +102,11 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
     _session.addListener(_onSessionChanged);
 
     _lifecycle = AppLifecycleListener(
-      onResume: _startKeepWarm,
+      onResume: () {
+        _startKeepWarm();
+        // Lo que pasó con la app en segundo plano (auto encendido, apagado…) pudo no llegar.
+        DeviceLinkService.instance.cargar();
+      },
       onPause: _stopKeepWarm,
     );
     _startKeepWarm();
@@ -193,7 +197,6 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
       _fuel = null;
       _speed = 0;
       _rpm = 0;
-      _connectionStatus = 'Desconectado';
     }
     _syncReservations();
   }
@@ -244,10 +247,6 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
         _currentLat = event.lat;
         _currentLng = event.lng;
       }
-
-      if (_speed > 0 || _rpm > 0) {
-        _connectionStatus = 'Conectado';
-      }
     });
 
     // La subida al servidor la hace el servicio nativo (también con la app cerrada).
@@ -260,6 +259,29 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
     }
   }
 
+  // el servicio nativo avisa cuando detecta el ESP32 de un auto, cuando empiezan a llegar
+  // datos, cuando se corta y cuando el corte ya es definitivo
+  @override
+  void onConnectionChanged(ConnectionEvent event) {
+    DeviceLinkService.instance.actualizarConexion(
+      event.carId,
+      ConexionAuto.fromMs(event.estado, event.finGraciaMs),
+    );
+
+    // Sin conexión, la velocidad y las RPM que quedaron en pantalla ya no son reales.
+    if (!mounted || event.carId != _home.car?.id || event.estado == EstadoConexion.conectado) return;
+    setState(() {
+      _speed = 0;
+      _rpm = 0;
+    });
+  }
+
+  /// Conexión con el ESP32 del auto elegido.
+  ConexionAuto get _conexion {
+    final carId = _home.car?.id;
+    return carId == null ? ConexionAuto.desconectado : DeviceLinkService.instance.conexionDe(carId);
+  }
+
   /// -------------------------------------------------------------------------
   /// Navigation / pages
   /// -------------------------------------------------------------------------
@@ -267,7 +289,8 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: _home,
+      // También se redibuja cuando cambia la conexión con el ESP32 de algún auto.
+      listenable: Listenable.merge([_home, DeviceLinkService.instance]),
       builder: (context, _) {
         return switch (_home.status) {
           HomeStatus.loading => const _LoadingScaffold(),
@@ -286,12 +309,13 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
     final pages = [
       CarTab(
         controller: _home,
+        finGracia: _conexion.finGracia,
         reservations: _reservations,
         initials: _initials,
         liveFuel: _fuel,
         speed: _speed,
         rpm: _rpm,
-        connectionStatus: _connectionStatus,
+        conexion: _conexion.estado,
         onFuelChanged: (value) => setState(() => _fuel = value),
         onNavigateToShared: () => setState(() => _tab = 1),
         onNavigateToActivity: () => setState(() => _tab = 2),
@@ -312,7 +336,7 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
         controller: _home,
         nombreUsuario: widget.nombreUsuario,
         initials: _initials,
-        connectionStatus: _connectionStatus,
+        conexion: _conexion.estado,
         maintenanceAlerts: _maintenanceAlerts,
         tripAlerts: _tripAlerts,
         onMaintenanceAlertsChanged: (value) => setState(() => _maintenanceAlerts = value),

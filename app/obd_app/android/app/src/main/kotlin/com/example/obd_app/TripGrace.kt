@@ -75,12 +75,23 @@ object TripGrace {
         for (viaje in dao.getActiveTrips()) cerrarSiVencio(context, dao, viaje)
     }
 
+    /**
+     * Momento en que [viaje] se da por terminado si no vuelven a llegar datos: su último
+     * dato más el tiempo de gracia. Solo tiene sentido mientras no hay conexión.
+     */
+    fun vencimientoDe(context: Context, viaje: Trip): Long =
+        ultimoDatoDe(context, viaje) + TIEMPO_DE_GRACIA_MS
+
+    private fun ultimoDatoDe(context: Context, viaje: Trip): Long {
+        val marca = prefs(context).getLong(KEY_ULTIMO_DATO + viaje.carId, 0L)
+        // Una marca anterior al inicio es de un viaje previo: no dice nada de este.
+        return if (marca >= viaje.startedAt) marca else viaje.startedAt
+    }
+
     private suspend fun cerrarSiVencio(context: Context, dao: ObdDao, viaje: Trip): Boolean {
         val p = prefs(context)
-        val marca = p.getLong(KEY_ULTIMO_DATO + viaje.carId, 0L)
-        // Una marca anterior al inicio es de un viaje previo: no dice nada de este.
-        val marcaEsDeEsteViaje = marca >= viaje.startedAt
-        val ultimoDato = if (marcaEsDeEsteViaje) marca else viaje.startedAt
+        val ultimoDato = ultimoDatoDe(context, viaje)
+        val marcaEsDeEsteViaje = p.getLong(KEY_ULTIMO_DATO + viaje.carId, 0L) >= viaje.startedAt
 
         if (System.currentTimeMillis() - ultimoDato < TIEMPO_DE_GRACIA_MS) return false
 
@@ -90,6 +101,7 @@ object TripGrace {
 
         Log.i(TAG, "Viaje del auto ${viaje.carId} cerrado en SQLite local (sin datos desde hace más del tiempo de gracia).")
         SyncScheduler.requestSync(context)
+        ConnectionStatus.avisar(context, viaje.carId)
         return true
     }
 }

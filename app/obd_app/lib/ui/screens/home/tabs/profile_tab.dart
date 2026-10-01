@@ -7,6 +7,8 @@ import 'package:obd_app/ui/screens/auth/cerrar_sesion.dart';
 import 'package:obd_app/ui/screens/cars/my_cars_screen.dart';
 import 'package:obd_app/ui/screens/groups/group_sheets.dart';
 import 'package:obd_app/ui/widgets/widgets.dart';
+import 'package:obd_app/src/generated/obd_api.g.dart';
+import 'package:obd_app/core/utils/connection_format.dart';
 
 /// ---------------------------------------------------------------------------
 /// Profile
@@ -18,7 +20,7 @@ class ProfileTab extends StatelessWidget {
   /// Nombre a mostrar mientras `GET /users/me` no respondió.
   final String nombreUsuario;
   final String initials;
-  final String connectionStatus;
+  final EstadoConexion conexion;
   final bool maintenanceAlerts;
   final bool tripAlerts;
   final ValueChanged<bool> onMaintenanceAlertsChanged;
@@ -29,7 +31,7 @@ class ProfileTab extends StatelessWidget {
     required this.controller,
     required this.nombreUsuario,
     required this.initials,
-    required this.connectionStatus,
+    required this.conexion,
     required this.maintenanceAlerts,
     required this.tripAlerts,
     required this.onMaintenanceAlertsChanged,
@@ -110,9 +112,11 @@ class ProfileTab extends StatelessWidget {
                         title: 'Conexión OBD',
                         subtitle: vinculando
                             ? 'Vinculando…'
-                            : asociacion != null
+                            : asociacion == null
+                            ? 'Sin vincular'
+                            : conexion == EstadoConexion.desconectado
                             ? 'Vinculado · ${asociacion.mac}'
-                            : connectionStatus,
+                            : conexion.etiqueta,
                         onTap: car == null || vinculando || asociacion != null
                             ? null
                             : () => _vincular(context, car.id, car.name),

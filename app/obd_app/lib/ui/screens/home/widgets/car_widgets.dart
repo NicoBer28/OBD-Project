@@ -6,6 +6,8 @@ import 'package:obd_app/data/api/obd_api.dart';
 import 'package:obd_app/models/models.dart';
 import 'package:obd_app/ui/screens/home/widgets/link_device_button.dart';
 import 'package:obd_app/ui/widgets/widgets.dart';
+import 'package:obd_app/src/generated/obd_api.g.dart';
+import 'package:obd_app/core/utils/connection_format.dart';
 
 class VitalData {
   final String label;
@@ -273,7 +275,12 @@ class TelemetryCard extends StatelessWidget {
   final int speed;
   final int rpm;
   final double fuel;
-  final String status;
+
+  /// Conexión de este celular con el ESP32 de [car].
+  final EstadoConexion conexion;
+
+  /// Con la conexión perdida: cuándo se da por terminado el viaje si no vuelve.
+  final DateTime? finGracia;
   final ValueChanged<double> onFuelChanged;
 
   const TelemetryCard({
@@ -282,14 +289,14 @@ class TelemetryCard extends StatelessWidget {
     required this.speed,
     required this.rpm,
     required this.fuel,
-    required this.status,
+    required this.conexion,
+    this.finGracia,
     required this.onFuelChanged,
   });
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final hasData = speed > 0 || rpm > 0;
 
     return SectionCard(
       child: Column(
@@ -297,18 +304,26 @@ class TelemetryCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Container(
-                width: 9,
-                height: 9,
-                decoration: BoxDecoration(
-                  color: hasData ? t.success : t.warning,
-                  shape: BoxShape.circle,
+              // Detectado pero sin datos, o cortado con el viaje abierto: está en eso.
+              if (conexion.enEspera)
+                SizedBox(
+                  width: 9,
+                  height: 9,
+                  child: CircularProgressIndicator(strokeWidth: 1.5, color: t.warning),
+                )
+              else
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration: BoxDecoration(
+                    color: conexion == EstadoConexion.conectado ? t.success : t.muted,
+                    shape: BoxShape.circle,
+                  ),
                 ),
-              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  status,
+                  conexion.etiqueta,
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
@@ -316,6 +331,23 @@ class TelemetryCard extends StatelessWidget {
                   ),
                 ),
               ),
+              // Cuánto falta para que el viaje se dé por terminado si la conexión no vuelve.
+              if (conexion == EstadoConexion.reconectando && finGracia != null)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: CuentaRegresiva(
+                    hasta: finGracia!,
+                    builder: (_, restante) => Text(
+                      restante,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: t.warning,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ),
+                ),
               Icon(AppIcons.bluetooth, size: 18, color: t.muted),
             ],
           ),

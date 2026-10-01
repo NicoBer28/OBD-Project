@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:obd_app/core/constants/app_icons.dart';
 import 'package:obd_app/core/theme/app_theme.dart';
+import 'package:obd_app/core/utils/connection_format.dart';
 import 'package:obd_app/core/utils/trip_format.dart';
 import 'package:obd_app/data/api/obd_api.dart';
 import 'package:obd_app/ui/widgets/widgets.dart';
@@ -175,6 +176,13 @@ class ActiveTripCard extends StatelessWidget {
   final Trip trip;
   final String driverName;
   final bool isMine;
+
+  /// Este celular perdió la conexión con el auto y el viaje sigue abierto solo porque
+  /// todavía corre el tiempo de gracia.
+  final bool connectionLost;
+
+  /// Con [connectionLost]: cuándo vence el tiempo de gracia (para la cuenta regresiva).
+  final DateTime? graceEndsAt;
   final VoidCallback? onFinish;
 
   const ActiveTripCard({
@@ -182,6 +190,8 @@ class ActiveTripCard extends StatelessWidget {
     required this.trip,
     required this.driverName,
     required this.isMine,
+    this.connectionLost = false,
+    this.graceEndsAt,
     this.onFinish,
   });
 
@@ -189,29 +199,48 @@ class ActiveTripCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.tokens;
     final started = trip.startedAt;
+    final graceEndsAt = connectionLost ? this.graceEndsAt : null;
+
+    Widget textos(String? restante) => TextStack(
+      title: connectionLost
+          ? ConexionTextos.viajeSinConexion
+          : isMine
+          ? 'Estás en viaje'
+          : '$driverName tiene el auto',
+      subtitle: connectionLost
+          ? ConexionTextos.viajeSeTerminaEn(restante)
+          : started == null
+          ? 'En curso'
+          : 'Desde las ${TripFormat.clock(started)} · ${TripFormat.duration(trip.elapsed ?? Duration.zero)}',
+      titleStyle: TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w800,
+        color: t.text,
+      ),
+      subtitleStyle: TextStyle(fontSize: 11, color: t.muted),
+    );
 
     return Material(
-      color: isMine ? t.accent.withValues(alpha: .10) : t.surface2,
+      color: connectionLost
+          ? t.warning.withValues(alpha: .12)
+          : isMine
+          ? t.accent.withValues(alpha: .10)
+          : t.surface2,
       borderRadius: BorderRadius.circular(14),
       child: Padding(
         padding: const EdgeInsets.all(13),
         child: Row(
           children: [
-            Icon(AppIcons.trip, size: 19, color: isMine ? t.accent : t.warning),
+            Icon(
+              connectionLost ? Icons.bluetooth_disabled : AppIcons.trip,
+              size: 19,
+              color: isMine && !connectionLost ? t.accent : t.warning,
+            ),
             const SizedBox(width: 10),
             Expanded(
-              child: TextStack(
-                title: isMine ? 'Estás en viaje' : '$driverName tiene el auto',
-                subtitle: started == null
-                    ? 'En curso'
-                    : 'Desde las ${TripFormat.clock(started)} · ${TripFormat.duration(trip.elapsed ?? Duration.zero)}',
-                titleStyle: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
-                  color: t.text,
-                ),
-                subtitleStyle: TextStyle(fontSize: 11, color: t.muted),
-              ),
+              child: graceEndsAt == null
+                  ? textos(null)
+                  : CuentaRegresiva(hasta: graceEndsAt, builder: (_, restante) => textos(restante)),
             ),
             if (isMine && onFinish != null)
               FilledButton.tonal(

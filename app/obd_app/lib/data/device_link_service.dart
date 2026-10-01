@@ -19,6 +19,7 @@ class DeviceLinkService extends ChangeNotifier {
 
   Map<String, AsociacionLocal> _asociaciones = const {};
   final Set<String> _vinculando = {};
+  Map<String, ConexionAuto> _conexiones = const {};
 
   /// Lo último que se le mandó al nativo, para no repetir el envío si nada cambió.
   String? _lastSessionKey;
@@ -30,9 +31,20 @@ class DeviceLinkService extends ChangeNotifier {
 
   AsociacionLocal? asociacionDe(String carId) => _asociaciones[carId];
 
+  /// En qué está la conexión con el ESP32 de ese auto ahora mismo.
+  ConexionAuto conexionDe(String carId) => _conexiones[carId] ?? ConexionAuto.desconectado;
+
   Future<void> cargar() async {
     final lista = await NativeBleBridge.obtenerAsociaciones();
+    final conexiones = await NativeBleBridge.obtenerEstadosConexion();
     _asociaciones = {for (final a in lista) a.carId: a};
+    _conexiones = conexiones;
+    notifyListeners();
+  }
+
+  /// El nativo avisó que cambió la conexión de [carId].
+  void actualizarConexion(String carId, ConexionAuto conexion) {
+    _conexiones = {..._conexiones, carId: conexion};
     notifyListeners();
   }
 
@@ -97,6 +109,7 @@ class DeviceLinkService extends ChangeNotifier {
     await NativeBleBridge.cerrarSesion(descartarPendientes: descartarPendientes);
     _lastSessionKey = null;
     _asociaciones = const {};
+    _conexiones = const {};
     _vinculando.clear();
     notifyListeners();
     await ObdApi.instance.auth.logout();

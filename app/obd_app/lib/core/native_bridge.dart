@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:obd_app/src/generated/obd_api.g.dart';
 
 /// Lo que devuelve el nativo cuando se vinculó un ESP32 con un auto.
 class VinculacionResultado {
@@ -58,6 +59,34 @@ class EstadoSincronizacion {
     pendingTrips: map['pendingTrips'] as int? ?? 0,
     failedChunks: map['failedChunks'] as int? ?? 0,
   );
+}
+
+/// En qué está la conexión con el ESP32 de un auto.
+class ConexionAuto {
+  final EstadoConexion estado;
+
+  /// Solo con [EstadoConexion.reconectando]: cuándo vence el tiempo de gracia y el viaje se
+  /// da por terminado si no volvió la conexión.
+  final DateTime? finGracia;
+
+  const ConexionAuto(this.estado, {this.finGracia});
+
+  static const desconectado = ConexionAuto(EstadoConexion.desconectado);
+
+  factory ConexionAuto.fromMs(EstadoConexion estado, int? finGraciaMs) => ConexionAuto(
+    estado,
+    finGracia: finGraciaMs == null ? null : DateTime.fromMillisecondsSinceEpoch(finGraciaMs),
+  );
+
+  factory ConexionAuto.fromMap(Map<Object?, Object?> map) {
+    final estado = map['estado'];
+    return ConexionAuto.fromMs(
+      estado is int && estado >= 0 && estado < EstadoConexion.values.length
+          ? EstadoConexion.values[estado]
+          : EstadoConexion.desconectado,
+      map['finGraciaMs'] as int?,
+    );
+  }
 }
 
 /// La vinculación falló por algo que no fue una cancelación del usuario.
@@ -129,6 +158,23 @@ class NativeBleBridge {
       return const [];
     } on MissingPluginException {
       return const [];
+    }
+  }
+
+  /// En qué está la conexión con el ESP32 de cada auto vinculado, por `carId`. Es la foto
+  /// del momento; los cambios posteriores llegan por `ObdFlutterApi.onConnectionChanged`.
+  static Future<Map<String, ConexionAuto>> obtenerEstadosConexion() async {
+    try {
+      final result = await platform.invokeMapMethod<String, Object?>('obtenerEstadosConexion');
+      return {
+        for (final MapEntry(:key, :value) in (result ?? const <String, Object?>{}).entries)
+          if (value is Map<Object?, Object?>) key: ConexionAuto.fromMap(value),
+      };
+    } on PlatformException catch (e) {
+      debugPrint('No se pudo leer el estado de las conexiones: ${e.message}');
+      return const {};
+    } on MissingPluginException {
+      return const {};
     }
   }
 

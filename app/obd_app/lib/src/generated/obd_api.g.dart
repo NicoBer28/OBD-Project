@@ -79,6 +79,22 @@ int _deepHash(Object? value) {
   return value.hashCode;
 }
 
+/// En qué está la conexión entre este celular y el ESP32 de un auto.
+enum EstadoConexion {
+  /// El ESP32 no está al alcance (auto apagado o lejos) y no hay ningún viaje abierto.
+  desconectado,
+
+  /// Android detectó el ESP32, pero todavía no llegó ningún dato.
+  conectando,
+
+  /// Están llegando datos.
+  conectado,
+
+  /// Se cortó la conexión con un viaje abierto y todavía corre el tiempo de gracia: si
+  /// vuelve a tiempo el viaje sigue; si no, se cierra.
+  reconectando,
+}
+
 class TelemetryEvent {
   TelemetryEvent({
     this.speed,
@@ -157,6 +173,66 @@ class TelemetryEvent {
   }
 }
 
+class ConnectionEvent {
+  ConnectionEvent({
+    required this.carId,
+    required this.estado,
+    this.finGraciaMs,
+  });
+
+  String carId;
+
+  EstadoConexion estado;
+
+  /// Solo con [EstadoConexion.reconectando]: momento (epoch en ms) en que vence el tiempo
+  /// de gracia y el viaje se da por terminado si no volvió la conexión.
+  int? finGraciaMs;
+
+  List<Object?> _toList() {
+    return <Object?>[
+      carId,
+      estado,
+      finGraciaMs,
+    ];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static ConnectionEvent decode(Object result) {
+    result as List<Object?>;
+    return ConnectionEvent(
+      carId: result[0]! as String,
+      estado: result[1]! as EstadoConexion,
+      finGraciaMs: result[2] as int?,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! ConnectionEvent || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(carId, other.carId) &&
+        _deepEquals(estado, other.estado) &&
+        _deepEquals(finGraciaMs, other.finGraciaMs);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'ConnectionEvent(carId: $carId, estado: $estado, finGraciaMs: $finGraciaMs)';
+  }
+}
+
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
   @override
@@ -164,8 +240,14 @@ class _PigeonCodec extends StandardMessageCodec {
     if (value is int) {
       buffer.putUint8(4);
       buffer.putInt64(value);
-    } else if (value is TelemetryEvent) {
+    } else if (value is EstadoConexion) {
       buffer.putUint8(129);
+      writeValue(buffer, value.index);
+    } else if (value is TelemetryEvent) {
+      buffer.putUint8(130);
+      writeValue(buffer, value.encode());
+    } else if (value is ConnectionEvent) {
+      buffer.putUint8(131);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -176,7 +258,12 @@ class _PigeonCodec extends StandardMessageCodec {
   Object? readValueOfType(int type, ReadBuffer buffer) {
     switch (type) {
       case 129:
+        final value = readValue(buffer) as int?;
+        return value == null ? null : EstadoConexion.values[value];
+      case 130:
         return TelemetryEvent.decode(readValue(buffer)!);
+      case 131:
+        return ConnectionEvent.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
@@ -187,6 +274,9 @@ abstract class ObdFlutterApi {
   static const MessageCodec<Object?> pigeonChannelCodec = _PigeonCodec();
 
   void onTelemetryUpdated(TelemetryEvent event);
+
+  /// Cambió el estado de la conexión con el ESP32 de un auto.
+  void onConnectionChanged(ConnectionEvent event);
 
   static void setUp(
     ObdFlutterApi? api, {
@@ -208,6 +298,31 @@ abstract class ObdFlutterApi {
           final TelemetryEvent arg_event = args[0]! as TelemetryEvent;
           try {
             api.onTelemetryUpdated(arg_event);
+            return wrapResponse(empty: true);
+          } on PlatformException catch (e) {
+            return wrapResponse(error: e);
+          } catch (e) {
+            return wrapResponse(
+              error: PlatformException(code: 'error', message: e.toString()),
+            );
+          }
+        });
+      }
+    }
+    {
+      final pigeonVar_channel = BasicMessageChannel<Object?>(
+        'dev.flutter.pigeon.obd_app.ObdFlutterApi.onConnectionChanged$messageChannelSuffix',
+        pigeonChannelCodec,
+        binaryMessenger: binaryMessenger,
+      );
+      if (api == null) {
+        pigeonVar_channel.setMessageHandler(null);
+      } else {
+        pigeonVar_channel.setMessageHandler((Object? message) async {
+          final List<Object?> args = message! as List<Object?>;
+          final ConnectionEvent arg_event = args[0]! as ConnectionEvent;
+          try {
+            api.onConnectionChanged(arg_event);
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);

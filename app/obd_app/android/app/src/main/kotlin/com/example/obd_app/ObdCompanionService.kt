@@ -73,6 +73,14 @@ class ObdCompanionService : CompanionDeviceService() {
         fun asociacionesCambiaron() {
             instancia?.refrescarAsociaciones()
         }
+
+        /** Están llegando datos del ESP32 de ese auto. */
+        fun recibeDatosDe(carId: String): Boolean =
+            instancia?.sesiones?.values?.any { it.carId == carId && !it.enlaceCaido } == true
+
+        /** Android ve al ESP32 de ese auto (aunque todavía no haya conexión ni datos). */
+        fun vePresenteA(carId: String): Boolean =
+            instancia?.sesiones?.values?.any { it.carId == carId && it.presente } == true
     }
 
     override fun onCreate() {
@@ -116,6 +124,7 @@ class ObdCompanionService : CompanionDeviceService() {
             val carId = dao.getAssociationByMac(mac)?.carId
             withContext(Dispatchers.Main) {
                 sesion.asignarAuto(carId)
+                sesion.avisarEstado() // detectado: todavía conectando
                 if (carId == null) {
                     Log.w("OBD-C", "El ESP32 $mac no está vinculado a ningún auto. Se muestran datos en vivo pero no se guardan.")
                 }
@@ -143,7 +152,6 @@ class ObdCompanionService : CompanionDeviceService() {
         sesion.presente = false
         mainHandler.removeCallbacks(sesion.conectarRunnable)
         sesion.alCaerEnlace()
-        actualizarCompartidos()
     }
 
     override fun onDestroy() {
@@ -164,7 +172,10 @@ class ObdCompanionService : CompanionDeviceService() {
                 for ((sesion, chunk) in pendientes) sesion.persistirChunk(chunk)
             }
         }
+        val autos = sesiones.values.mapNotNull { it.carId }
         sesiones.clear()
+        // Sin servicio ya no hay conexión; los que tengan un viaje abierto quedan "en gracia".
+        for (carId in autos) ConnectionStatus.avisar(applicationContext, carId)
         super.onDestroy()
     }
 
@@ -179,28 +190,30 @@ class ObdCompanionService : CompanionDeviceService() {
 
     // --- LO COMPARTIDO ENTRE SESIONES: GPS, NOTIFICACIÓN Y VIDA DEL SERVICIO ---
 
-    // El GPS corre mientras haya algún auto presente; la notificación dice cuántos.
+    // El GPS corre mientras haya algún auto presente; la notificación dice en qué están.
     private fun actualizarCompartidos() {
         val presentes = sesiones.values.count { it.presente }
         if (presentes > 0) {
             // iniciamos (o actualizamos) el Foreground Service con una notificación fija
-            startForeground(NOTIFICATION_ID, crearNotificacion(presentes))
+            startForeground(NOTIFICATION_ID, crearNotificacion())
             enPrimerPlano = true
             iniciarTrackingGPS()
         } else {
             detenerTrackingGPS()
             if (enPrimerPlano) {
                 val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                manager.notify(NOTIFICATION_ID, crearNotificacion(presentes))
+                manager.notify(NOTIFICATION_ID, crearNotificacion())
             }
         }
     }
 
-    private fun crearNotificacion(presentes: Int): Notification {
-        val texto = when (presentes) {
-            0 -> "Auto desconectado. Esperando que vuelva..."
-            1 -> "Conectado al auto."
-            else -> "Conectado a $presentes autos."
+    private fun crearNotificacion(): Notification {
+        val conectados = sesiones.values.count { !it.enlaceCaido }
+        val texto = when {
+            conectados == 1 -> "Conectado al auto."
+            conectados > 1 -> "Conectado a $conectados autos."
+            sesiones.values.any { it.presente } -> "Auto detectado. Conectando..."
+            else -> "Auto desconectado. Esperando que vuelva..."
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("OBD")
@@ -283,7 +296,7 @@ class ObdCompanionService : CompanionDeviceService() {
         var bluetoothGatt: BluetoothGatt? = null
         val conectarRunnable = Runnable { conectarBLE() }
         // true mientras Android ve al ESP32; false si el auto desapareció.
-        var presente = false
+        @Volatile var presente = false
         var intentosReconexion = 0
         var disconnectJob: Job? = null
         // true mientras no llegan datos (todavía no conectó, o se cayó el enlace).
@@ -306,6 +319,7 @@ class ObdCompanionService : CompanionDeviceService() {
         // auto anterior, y su viaje se cierra solo al vencer el tiempo de gracia.
         fun asignarAuto(nuevo: String?) {
             if (nuevo == carId) return
+            val anterior = carId
 
             registrarCorte()
             val pendiente = synchronized(bufferLock) {
@@ -315,6 +329,14 @@ class ObdCompanionService : CompanionDeviceService() {
             }
             pendiente?.let { serviceScope.launch { persistirChunk(it) } }
             isTripActive = false
+
+            ConnectionStatus.avisar(applicationContext, anterior)
+            avisarEstado()
+        }
+
+        // La app muestra en qué está la conexión de cada auto: hay que avisarle cada vez que cambia.
+        fun avisarEstado() {
+            ConnectionStatus.avisar(applicationContext, carId)
         }
 
         // Se perdió la conexión con el ESP32: error de GATT, desconexión o auto fuera de rango.
@@ -326,6 +348,9 @@ class ObdCompanionService : CompanionDeviceService() {
             guardarBufferEnDb()
 
             iniciarTiempoDeGracia()
+
+            avisarEstado()
+            actualizarCompartidos()
         }
 
         // Volvieron a llegar datos antes de que venza el tiempo de gracia: el viaje sigue.
@@ -338,6 +363,9 @@ class ObdCompanionService : CompanionDeviceService() {
             disconnectJob?.cancel()
             disconnectJob = null
             guardarUltimoDato()
+
+            avisarEstado()
+            actualizarCompartidos()
         }
 
         private fun iniciarTiempoDeGracia() {
@@ -365,6 +393,7 @@ class ObdCompanionService : CompanionDeviceService() {
                     carId?.let { TripGrace.cerrarViajeVencido(applicationContext, dao, it) }
                     isTripActive = false
                     ultimoDatoMs = 0L
+                    avisarEstado()
                 }
 
                 withContext(Dispatchers.Main) {
