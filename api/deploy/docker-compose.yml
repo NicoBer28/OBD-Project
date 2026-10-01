@@ -1,9 +1,13 @@
 # Production stack for the Oracle Cloud VM: the API plus Caddy in front of it
-# for HTTPS. The deploy workflow (.github/workflows/deploy-api.yml) syncs api/
-# to ~/obd-api on the server and runs `docker compose up -d --build` here.
+# for HTTPS. The deploy workflow (.github/workflows/deploy-api.yml) updates the
+# server's clone at ~/OBD-Project and runs `docker compose up -d --build` from
+# ~/OBD-Project/api/deploy.
 #
-# Secrets never live in this directory: the env file is created once by hand
-# on the server at /etc/obd/api.env (see README.md in this folder).
+# Configuration comes from `.env` in this directory - secrets for the API via
+# env_file, and the two domain names via compose substitution. It is
+# git-ignored and created once by hand on the server (see README.md here).
+# `git reset --hard` in the deploy workflow leaves it alone because it is
+# untracked.
 
 services:
   api:
@@ -26,9 +30,16 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in ~/obd-api/deploy/.env}
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN in deploy/.env}
+      # The host serving the pages that the emailed verification and reset
+      # links open - a different hostname from API_DOMAIN, e.g.
+      # www.obidi.com.ar alongside api.obidi.com.ar.
+      WEB_DOMAIN: ${WEB_DOMAIN:?set WEB_DOMAIN in deploy/.env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Static only, and read-only: these pages handle a live token, so
+      # nothing in here should be writable from the container.
+      - ./web:/srv/web:ro
       - caddy_data:/data
       - caddy_config:/config
 

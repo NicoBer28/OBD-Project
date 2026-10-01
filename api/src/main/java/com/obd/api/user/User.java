@@ -8,8 +8,6 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-// "user" is a reserved word in Postgres (it resolves to the session user), so
-// the table is "users".
 @Table(name = "users")
 @AllArgsConstructor
 @NoArgsConstructor
@@ -17,8 +15,6 @@ import java.util.UUID;
 @Builder
 public class User {
 
-    // IDENTITY needs a numeric column; UUID lets Hibernate generate the value
-    // itself and write it to a real Postgres `uuid` column.
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID userId;
@@ -40,6 +36,9 @@ public class User {
 
     @Column(name = "password_changed_at")
     private Instant userPasswordChangedAt;
+
+    @Column(name = "email_verified_at")
+    private Instant userEmailVerifiedAt;
 
     // @Builder ignores plain field initialisers - without @Builder.Default a
     // builder that skips role() would write null into a NOT NULL column.

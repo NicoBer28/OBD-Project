@@ -54,6 +54,16 @@ class InviteCodeServiceTest {
     private UUID familiaId;
 
     private UUID newUser(String email) {
+        // Verified: joining a group requires it, and these tests are about
+        // the code, not the gate. The two tests at the end cover the gate.
+        return userRepository.saveAndFlush(User.builder()
+                .userName("Test").userLastName("User").userEmail(email)
+                .userPasswordHash("$2a$12$notarealhash")
+                .userEmailVerifiedAt(Instant.now())
+                .role(Role.USER).enabled(true).build()).getUserId();
+    }
+
+    private UUID newUnverifiedUser(String email) {
         return userRepository.saveAndFlush(User.builder()
                 .userName("Test").userLastName("User").userEmail(email)
                 .userPasswordHash("$2a$12$notarealhash")
@@ -294,6 +304,21 @@ class InviteCodeServiceTest {
         assertThatThrownBy(() -> inviteCodeService.join(strangerId, minted.code()))
                 .isInstanceOf(InviteCodeNoLongerValidException.class);
         assertThat(roleOf(strangerId, familiaId)).isNull();
+    }
+
+    @Test
+    void anUnverifiedAccountMayStillJoinByCode() {
+        UUID unverified = newUnverifiedUser("unverified@example.com");
+        InviteCodeDTO.Minted minted = inviteCodeService.mint(adaId, familiaId, defaults());
+
+        // Unlike accepting an invitation, which is addressed to an email and
+        // so could be claimed by an account that never proved it owns one, a
+        // code is a bearer secret handed over in person. Nobody is
+        // impersonated, so requiring verification would only stop a guest
+        // joining at the dinner table.
+        assertThat(inviteCodeService.join(unverified, minted.code()).callerRole())
+                .isEqualTo(GroupRole.MEMBER);
+        assertThat(roleOf(unverified, familiaId)).isEqualTo(GroupRole.MEMBER);
     }
 
     @Test

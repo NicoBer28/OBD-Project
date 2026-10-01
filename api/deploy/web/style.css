@@ -1,0 +1,120 @@
+/* Shared by the two link-landing pages. No external fonts or stylesheets:
+   these pages are the last step of a password reset, so they must render
+   even on a bad connection, and nothing here should be able to leak the
+   token in the URL to a third party. */
+
+:root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --text: #15181d;
+    --muted: #5c6472;
+    --line: #e3e6ea;
+    --accent: #1f6feb;
+    --accent-text: #ffffff;
+    --ok: #1a7f46;
+    --bad: #b3261e;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #0f1216;
+        --card: #171b21;
+        --text: #e8eaed;
+        --muted: #9aa3b2;
+        --line: #272d36;
+        --accent: #4d8dfd;
+        --accent-text: #0f1216;
+        --ok: #4ad07f;
+        --bad: #ff6b60;
+    }
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px 16px;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+main {
+    width: 100%;
+    max-width: 420px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 28px 24px;
+}
+
+h1 {
+    margin: 0 0 6px;
+    font-size: 1.3rem;
+    letter-spacing: -0.01em;
+}
+
+p { margin: 0 0 14px; color: var(--muted); }
+p.lead { color: var(--text); }
+p:last-child { margin-bottom: 0; }
+
+.brand {
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 18px;
+}
+
+label {
+    display: block;
+    margin: 14px 0 6px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+input[type="password"] {
+    width: 100%;
+    padding: 11px 12px;
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+}
+
+input[type="password"]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+button {
+    width: 100%;
+    margin-top: 20px;
+    padding: 12px 16px;
+    font: inherit;
+    font-weight: 600;
+    color: var(--accent-text);
+    background: var(--accent);
+    border: 0;
+    border-radius: 9px;
+    cursor: pointer;
+}
+
+button[disabled] { opacity: 0.55; cursor: progress; }
+
+.hint { font-size: 0.85rem; }
+
+.status { margin-top: 18px; font-weight: 600; }
+.status.ok { color: var(--ok); }
+.status.bad { color: var(--bad); }
+
+/* Toggled from JS with the hidden attribute rather than inline styles, so a
+   half-loaded page never flashes two states at once. */
+[hidden] { display: none !important; }

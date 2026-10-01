@@ -8,8 +8,11 @@ import com.obd.api.auth.dto.AuthResponseDTO;
 import com.obd.api.auth.dto.TokenPair;
 import com.obd.api.auth.refresh.RefreshCookie;
 import com.obd.api.auth.refresh.RefreshTokenService;
+import com.obd.api.auth.token.exception.TokenRequestedTooSoonException;
+import com.obd.api.auth.verification.EmailVerificationService;
 import com.obd.api.support.SliceSecurityConfig;
 import com.obd.api.user.dto.UserDTO;
+import com.obd.api.user.exception.EmailAlreadyVerifiedException;
 import com.obd.api.user.exception.IncorrectPasswordException;
 import com.obd.api.user.exception.PasswordUnchangedException;
 import com.obd.api.user.exception.UserNotFoundException;
@@ -63,6 +66,8 @@ class UserControllerTest {
     private RefreshCookie refreshCookie;
     @MockitoBean
     private RefreshTokenService refreshTokenService;
+    @MockitoBean
+    private EmailVerificationService emailVerificationService;
 
     private static RequestPostProcessor caller() {
         var principal = new UserPrincipal(CALLER_ID, "ada@example.com", "hash",
@@ -72,7 +77,7 @@ class UserControllerTest {
     }
 
     private static UserDTO.Read profile() {
-        return new UserDTO.Read(CALLER_ID, "Augusta", "Byron", "ada@example.com", "+39 06 999999");
+        return new UserDTO.Read(CALLER_ID, "Augusta", "Byron", "ada@example.com", "+39 06 999999", true);
     }
 
     private static final String VALID_PROFILE = """
@@ -170,6 +175,49 @@ class UserControllerTest {
                 .andExpect(jsonPath("$.errors.userPhone").exists());
 
         verifyNoInteractions(userService);
+    }
+
+    // --- POST /users/me/verify-email -----------------------------------------
+
+    @Test
+    void resendVerificationAnswers202ForTheCallersOwnAddress() throws Exception {
+        mockMvc.perform(post("/api/v1/users/me/verify-email").with(caller()))
+                .andExpect(status().isAccepted())
+                .andExpect(content().string(""));
+
+        // No address in the request: the principal's is the only one it can
+        // target, so it cannot be aimed at a stranger's inbox.
+        verify(emailVerificationService).resend(CALLER_ID);
+    }
+
+    @Test
+    void resendVerificationMapsTheThrottleTo429() throws Exception {
+        willThrow(new TokenRequestedTooSoonException(60))
+                .given(emailVerificationService).resend(CALLER_ID);
+
+        mockMvc.perform(post("/api/v1/users/me/verify-email").with(caller()))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.detail")
+                        .value("A link was sent recently - wait a moment before asking for another"));
+    }
+
+    @Test
+    void resendVerificationMapsAnAlreadyVerifiedAccountTo409() throws Exception {
+        willThrow(new EmailAlreadyVerifiedException())
+                .given(emailVerificationService).resend(CALLER_ID);
+
+        mockMvc.perform(post("/api/v1/users/me/verify-email").with(caller()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("That email address is already verified"));
+    }
+
+    @Test
+    void meSaysWhetherTheAddressIsVerified() throws Exception {
+        given(userService.me(CALLER_ID)).willReturn(profile());
+
+        mockMvc.perform(get("/api/v1/users/me").with(caller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.emailVerified").value(true));
     }
 
     // --- POST /users/me/password ---------------------------------------------

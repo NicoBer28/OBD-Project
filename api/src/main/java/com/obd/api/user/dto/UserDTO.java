@@ -27,6 +27,19 @@ public class UserDTO {
             @NotBlank @Size(min = 8, max = 72) String newPassword
     ){}
 
+    public record VerifyEmail(
+            @NotBlank String token
+    ){}
+
+    public record ForgotPassword(
+            @NotBlank @Email String userEmail
+    ){}
+
+    public record ResetPassword(
+            @NotBlank String token,
+            @NotBlank @Size(min = 8, max = 72) String newPassword
+    ){}
+
     public record Login(
             @NotBlank @Email String userEmail,
             @NotBlank @Size(min = 8, max = 72) String userPassword
@@ -37,11 +50,12 @@ public class UserDTO {
             String userName,
             String userLastName,
             String userEmail,
-            String userPhone
+            String userPhone,
+            boolean emailVerified
     ) {
         public static Read from(User u) {
             return new Read(u.getUserId(), u.getUserName(), u.getUserLastName(),
-                    u.getUserEmail(), u.getUserPhone());
+                    u.getUserEmail(), u.getUserPhone(), u.getUserEmailVerifiedAt() != null);
         }
     }
 

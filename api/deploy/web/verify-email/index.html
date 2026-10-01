@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- The URL contains a live token. Tell crawlers and referrer-sniffing
+     third parties nothing about it. -->
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Confirmar correo · OBIDI</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+    <div class="brand">OBIDI</div>
+
+    <div id="working">
+        <h1>Confirmando tu correo…</h1>
+        <p>Un segundo.</p>
+    </div>
+
+    <div id="done" hidden>
+        <h1>¡Listo!</h1>
+        <p class="lead">Tu correo quedó confirmado.</p>
+        <p>Ya podés volver a la app y usar tu cuenta con normalidad.</p>
+    </div>
+
+    <div id="spent" hidden>
+        <h1>Ese enlace ya no sirve</h1>
+        <p class="lead">Puede que ya lo hayas usado, o que haya vencido (duran 24&nbsp;horas).</p>
+        <p>Entrá a la app y pedí un correo nuevo desde tu perfil.</p>
+    </div>
+
+    <div id="unknown" hidden>
+        <h1>Enlace inválido</h1>
+        <p class="lead">No encontramos ese enlace.</p>
+        <p>Revisá que lo hayas copiado completo, o pedí uno nuevo desde la app.</p>
+    </div>
+
+    <div id="offline" hidden>
+        <h1>No pudimos conectarnos</h1>
+        <p class="lead">El enlace sigue siendo válido.</p>
+        <p>Probá de nuevo en un momento.</p>
+        <button type="button" id="retry">Reintentar</button>
+    </div>
+</main>
+
+<script>
+(function () {
+    "use strict";
+
+    // Same origin by default: Caddy proxies /api on this host to the API, so
+    // there is no second hostname to configure here and no CORS to allow.
+    // Set window.OBIDI_API_BASE before this script only if the pages are ever
+    // hosted somewhere other than in front of the API.
+    var base = window.OBIDI_API_BASE || "";
+
+    // The token is the last path segment (/verify-email/<token>). A ?token=
+    // query is accepted too, so a mail client that rewrites the path does not
+    // break the flow.
+    function token() {
+        var fromQuery = new URLSearchParams(location.search).get("token");
+        if (fromQuery) { return fromQuery.trim(); }
+        var parts = location.pathname.split("/").filter(Boolean);
+        var last = parts[parts.length - 1] || "";
+        return last === "verify-email" ? "" : decodeURIComponent(last).trim();
+    }
+
+    function show(id) {
+        ["working", "done", "spent", "unknown", "offline"].forEach(function (name) {
+            document.getElementById(name).hidden = name !== id;
+        });
+    }
+
+    function verify() {
+        var value = token();
+        if (!value) { show("unknown"); return; }
+
+        show("working");
+
+        // A POST, not a GET, because corporate mail filters fetch every URL
+        // they find. Fetching this page is harmless - the token is only spent
+        // by the request below, which a scanner does not make because it does
+        // not run scripts.
+        fetch(base + "/api/v1/auth/verify-email", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: value })
+        }).then(function (response) {
+            if (response.status === 204 || response.ok) { show("done"); }
+            else if (response.status === 409) { show("spent"); }
+            else if (response.status === 404 || response.status === 400) { show("unknown"); }
+            else { show("offline"); }   // 5xx: our problem, the link still works
+        }).catch(function () {
+            show("offline");            // no network, DNS, TLS
+        });
+    }
+
+    document.getElementById("retry").addEventListener("click", verify);
+    verify();
+})();
+</script>
+</body>
+</html>

@@ -5,6 +5,11 @@ import com.obd.api.invitecode.exception.InviteCodeNoLongerValidException;
 import com.obd.api.invitecode.exception.InviteCodeNotFoundException;
 import com.obd.api.trip.exception.TripAlreadyEndedException;
 import com.obd.api.trip.exception.TripNotFoundException;
+import com.obd.api.auth.token.exception.TokenNoLongerValidException;
+import com.obd.api.auth.token.exception.TokenNotFoundException;
+import com.obd.api.auth.token.exception.TokenRequestedTooSoonException;
+import com.obd.api.user.exception.EmailAlreadyVerifiedException;
+import com.obd.api.user.exception.EmailNotVerifiedException;
 import com.obd.api.user.exception.IncorrectPasswordException;
 import com.obd.api.user.exception.PasswordUnchangedException;
 import com.obd.api.user.exception.UserNotFoundException;
@@ -108,6 +113,50 @@ public class GlobalExceptionHandler {
         return p;
     }
 
+    @ExceptionHandler(TokenNotFoundException.class)
+    public ProblemDetail tokenNotFound(TokenNotFoundException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        p.setTitle("Not Found");
+        p.setDetail(e.getKind().notFoundDetail());
+        return p;
+    }
+
+    @ExceptionHandler(TokenNoLongerValidException.class)
+    public ProblemDetail tokenNoLongerValid(TokenNoLongerValidException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        p.setTitle("Conflict");
+        // Used or expired - one answer for both, since the app tells the user
+        // the same thing either way: ask for a new link.
+        p.setDetail(e.getKind().noLongerValidDetail());
+        return p;
+    }
+
+    @ExceptionHandler(TokenRequestedTooSoonException.class)
+    public ProblemDetail tokenRequestedTooSoon(TokenRequestedTooSoonException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.TOO_MANY_REQUESTS);
+        p.setTitle("Too Many Requests");
+        p.setDetail("A link was sent recently - wait a moment before asking for another");
+        return p;
+    }
+
+    @ExceptionHandler(EmailAlreadyVerifiedException.class)
+    public ProblemDetail emailAlreadyVerified(EmailAlreadyVerifiedException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.CONFLICT);
+        p.setTitle("Conflict");
+        p.setDetail("That email address is already verified");
+        return p;
+    }
+
+    @ExceptionHandler(EmailNotVerifiedException.class)
+    public ProblemDetail emailNotVerified(EmailNotVerifiedException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.FORBIDDEN);
+        p.setTitle("Forbidden");
+        // 403, not 404: the caller knows who they are, so there is nothing to
+        // hide by pretending the group does not exist.
+        p.setDetail("Verify your email address before joining a group");
+        return p;
+    }
+
     @ExceptionHandler(IncorrectPasswordException.class)
     public ProblemDetail incorrectPassword(IncorrectPasswordException e) {
         var p = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
@@ -154,8 +203,6 @@ public class GlobalExceptionHandler {
     public ProblemDetail notAMember(NotAMemberException e) {
         var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
         p.setTitle("Not Found");
-        // Also the answer for a group that does not exist - the id is not
-        // confirmed to a non-member.
         p.setDetail("Not a Member of the Group");
         return p;
     }

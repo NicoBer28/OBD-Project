@@ -112,45 +112,81 @@ example `sudo systemctl disable --now <service-name>`, or
 
 ---
 
-### Step 7 — Put the production secrets on the server
+### Step 7 — Clone the repo and add the production secrets
 
-**Where:** your Mac (open a second terminal, from the project folder)
-
-```bash
-scp api/.env.prod ubuntu@<server-ip>:/tmp/api.env
-```
+The deploy workflow does not copy files: it runs `git fetch` and
+`reset --hard` inside a clone at `~/OBD-Project`, so that clone has to exist
+first.
 
 **Where:** server
 
 ```bash
-sudo mkdir -p /etc/obd
-sudo mv /tmp/api.env /etc/obd/api.env
-sudo chmod 600 /etc/obd/api.env
+cd ~
+git clone https://github.com/NicoBer28/OBD-Project.git OBD-Project
+cd OBD-Project && git checkout development
 ```
 
-Open it with `sudo nano /etc/obd/api.env` and make sure:
+If the repository is private, the server needs read access — the simplest
+route is a **read-only deploy key**: `ssh-keygen -t ed25519 -f ~/.ssh/id_repo`
+on the server, then add the `.pub` under the repo's **Settings → Deploy keys**,
+and clone with the SSH URL.
+
+**Check:** `ls ~/OBD-Project/api/deploy/docker-compose.yml` exists.
+
+Now the configuration. Everything the stack needs lives in one file,
+`~/OBD-Project/api/deploy/.env`: the API reads it through `env_file`, and
+Caddy reads the two domain names from it by compose substitution. It is
+git-ignored, so the workflow's `git reset --hard` never touches it.
+
+```bash
+cd ~/OBD-Project/api/deploy
+nano .env
+```
+
+Paste the production values — the same keys as `api/.env.example` — and make
+sure:
 
 - no value is wrapped in quotes (`DB_PASSWORD=abc`, not `DB_PASSWORD="abc"`)
 - there is **no** `SPRING_PROFILES_ACTIVE=dev` line
+- `MAIL_PROVIDER` is **not** `log` (it would write live tokens to the log)
 
-**Check:** `sudo ls -l /etc/obd/api.env` shows `-rw-------`.
+Then lock it down, since it holds the database password and the JWT secret:
+
+```bash
+chmod 600 .env
+```
+
+**Check:** `ls -l ~/OBD-Project/api/deploy/.env` shows `-rw-------`.
 
 ---
 
-### Step 8 — Choose the API's address
+### Step 8 — Choose the two addresses
 
 **Where:** server
 
-If you have a domain, first create a DNS A record pointing it at
-`<server-ip>`. If not, use the free `sslip.io` name: your IP with dashes,
-e.g. `129-151-10-20.sslip.io`.
+Two names are needed, and **both are required** — compose refuses to start
+without them, API container included:
+
+- `API_DOMAIN` — what the Flutter app talks to, e.g. `api.obidi.com.ar`
+- `WEB_DOMAIN` — serves the pages the verification and password-reset emails
+  link to, e.g. `www.obidi.com.ar`
+
+Append them to the same `.env` from step 7:
 
 ```bash
-mkdir -p ~/obd-api/deploy
-echo "API_DOMAIN=129-151-10-20.sslip.io" > ~/obd-api/deploy/.env
+cd ~/OBD-Project/api/deploy
+cat >> .env <<'EOF'
+API_DOMAIN=api.obidi.com.ar
+WEB_DOMAIN=www.obidi.com.ar
+EOF
 ```
 
-**Check:** `cat ~/obd-api/deploy/.env` shows your domain.
+Both DNS records must be **DNS only** (grey cloud in Cloudflare): Caddy needs
+to reach Let's Encrypt directly, and a proxied record breaks the certificate
+challenge. Without a domain, use the free `sslip.io` form — your IP with
+dashes, e.g. `129-151-10-20.sslip.io` — for both.
+
+**Check:** `grep DOMAIN ~/OBD-Project/api/deploy/.env` shows both lines.
 
 You're done on the server. You can `exit`.
 
@@ -192,8 +228,9 @@ Create these four:
 
 **Where:** your Mac
 
-Commit `api/deploy/` and `.github/workflows/deploy-api.yml` on `development`
-and push. The push itself starts the first deploy.
+Commit `api/deploy/` (including `api/deploy/web/`, the pages the emailed links
+open) and `.github/workflows/deploy-api.yml` on `development`, then push. The
+push itself starts the first deploy.
 
 ---
 
@@ -212,12 +249,133 @@ Finally, point the Flutter app's API base URL at `https://<your-domain>`.
 
 ---
 
+## Turning email on
+
+The verification and password-reset flows work today, but the links in those
+emails still point at `localhost`, and nothing is actually sent until a
+provider is configured. These steps are independent of the deploy above and
+can be done in any order.
+
+### Step A — Verify a sending domain in Resend
+
+In Resend: **Domains → Add Domain** → `mail.obidi.com.ar`. A **subdomain**,
+not the apex: sending reputation is tracked per domain, so this keeps the
+app's mail separate from anything else the domain ever sends.
+
+Resend shows the DNS records to publish — copy them, don't invent them. In
+Cloudflare, two traps account for nearly every failed verification:
+
+- **Never proxy them.** DKIM records are often `CNAME`s, and Cloudflare
+  defaults new `CNAME`s to proxied (orange cloud). Click it to **DNS only**
+  (grey). A proxied DKIM record can never verify.
+- **Don't repeat the zone.** Cloudflare appends `obidi.com.ar` to what you
+  type. If Resend says `resend._domainkey.mail.obidi.com.ar`, enter
+  `resend._domainkey.mail`.
+
+Hit **Verify**. Usually green within 15 minutes.
+
+**Check:** the domain shows *Verified* in Resend.
+
+### Step B — Add DMARC
+
+Not required for Resend to verify, but it is the record that actually stops
+someone impersonating the domain. In Cloudflare:
+
+```
+Type: TXT    Name: _dmarc.mail
+Value: v=DMARC1; p=none; rua=mailto:dmarc@obidi.com.ar
+```
+
+`p=none` means "report, change nothing". Read the reports for a week, then
+tighten to `p=quarantine` and later `p=reject`.
+
+### Step C — Point both hostnames at the server
+
+Two `A` records in Cloudflare, both **DNS only** (grey cloud — Caddy needs to
+reach Let's Encrypt directly to issue certificates, and a proxied record
+breaks the challenge):
+
+```
+api      A   <server-ip>     DNS only
+www      A   <server-ip>     DNS only
+```
+
+`api.obidi.com.ar` serves the API; `www.obidi.com.ar` serves the two pages the
+emailed links open.
+
+Nothing is served on the bare apex (`obidi.com.ar`). Leaving it unconfigured
+is fine — just know that someone typing it by hand gets nothing. If you want
+it to land somewhere, the usual move is an apex record plus a Caddy block that
+redirects to `www`, which can be added later without touching anything else.
+
+**Check:** `dig +short api.obidi.com.ar` and `dig +short www.obidi.com.ar`
+both return the server's IP.
+
+### Step D — Set the mail variables on the server
+
+All of it goes in the same `~/OBD-Project/api/deploy/.env` from steps 7 and 8:
+
+```bash
+MAIL_PROVIDER=resend
+RESEND_API_KEY=re_...                                  # Sending access only
+MAIL_FROM=no-reply@mail.obidi.com.ar
+MAIL_FROM_NAME=OBIDI
+MAIL_VERIFY_URL_BASE=https://www.obidi.com.ar/verify-email
+MAIL_RESET_URL_BASE=https://www.obidi.com.ar/reset-password
+```
+
+Three things to get right:
+
+- **Never leave `MAIL_PROVIDER=log` in production.** It writes the live token
+  to the application log, which throws away the point of storing only its
+  hash.
+- **The two `MAIL_*_URL_BASE` values are the step people forget.** Without
+  them the emails arrive with `localhost` links.
+- **`CORS_ORIGINS` needs nothing added for these pages.** Caddy proxies
+  `/api` on `WEB_DOMAIN` to the same API container, so the pages call
+  relative URLs and the requests are same-origin. That is deliberate — it is
+  one less thing to keep in sync.
+
+### Step E — Deploy and check
+
+```bash
+cd ~/OBD-Project/api/deploy
+docker compose up -d --build
+```
+
+**Check,** in order:
+
+```bash
+# 1. The pages are served, and a token in the path resolves to the page
+curl -o /dev/null -w '%{http_code}\n' https://www.obidi.com.ar/verify-email/anything
+
+# 2. /api on the web host reaches the API
+curl -o /dev/null -w '%{http_code}\n' https://www.obidi.com.ar/api/v1/models  # 401
+
+# 3. A real send. Until Step A is green, Resend only accepts
+#    onboarding@resend.dev as the sender and only your own signup address as
+#    the recipient.
+curl -X POST https://api.obidi.com.ar/api/v1/auth/forgot-password \
+  -H 'Content-Type: application/json' -d '{"userEmail":"you@example.com"}'
+```
+
+Then open the link in the real email. It should land on the page, say
+*«Confirmando tu correo…»* and then *«¡Listo!»*.
+
+### Step F — Later: let the app take the links over
+
+The same URLs become universal links once the Flutter app claims them. Drop
+`apple-app-site-association` and `assetlinks.json` into
+`deploy/web/.well-known/` — Caddy serves them from there with no further
+configuration — and the pages stay as the fallback for anyone who opens the
+mail on a laptop.
+
 ## After setup
 
 | I want to… | Do this |
 |---|---|
 | Deploy a change | Push to `development` with changes under `api/`. Nothing else. |
 | Redeploy without a change | Actions → Deploy API → Run workflow |
-| See the logs | On the server: `cd ~/obd-api/deploy && docker compose logs -f api` |
-| Change a secret | Edit `/etc/obd/api.env`, then `cd ~/obd-api/deploy && docker compose up -d --force-recreate api` |
+| See the logs | On the server: `cd ~/OBD-Project/api/deploy && docker compose logs -f api` |
+| Change a secret or a domain | Edit `~/OBD-Project/api/deploy/.env`, then `cd ~/OBD-Project/api/deploy && docker compose up -d --force-recreate` |
 | Roll back | Revert the commit on `development` and push |

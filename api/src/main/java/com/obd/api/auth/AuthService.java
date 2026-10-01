@@ -4,6 +4,7 @@ import com.obd.api.auth.dto.AuthResponseDTO;
 import com.obd.api.auth.dto.TokenPair;
 import com.obd.api.auth.exception.EmailAlreadyInUseException;
 import com.obd.api.auth.refresh.RefreshTokenService;
+import com.obd.api.auth.verification.EmailVerificationService;
 import com.obd.api.user.User;
 import com.obd.api.user.UserMapper;
 import com.obd.api.user.UserRepository;
@@ -30,6 +31,7 @@ public class AuthService {
     private final UserMapper userMapper;
     private final RefreshTokenService refreshTokenService;
     private final AppUserDetailsService userDetailsService;
+    private final EmailVerificationService emailVerificationService;
 
     @Transactional
     public TokenPair register(UserDTO.Create userDto){
@@ -43,6 +45,10 @@ public class AuthService {
         } catch (DataIntegrityViolationException e){
             throw new EmailAlreadyInUseException(user.getUserEmail());
         }
+        // Inside the transaction, so the mail is only sent if the account
+        // really was created; the send itself happens after it commits.
+        emailVerificationService.sendOnRegistration(saved);
+
         return pairFor(UserPrincipal.from(saved), true);
 
     }
