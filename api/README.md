@@ -12,7 +12,6 @@ once; the tables are created for you by Flyway on first startup:
 ```bash
 createdb obd
 ```
-
 Or with Docker:
 
 ```bash
