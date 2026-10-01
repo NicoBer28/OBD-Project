@@ -70,17 +70,23 @@ class MyServerCallbacks: public NimBLEServerCallbacks {
 class MyRxCallbacks: public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
         std::string rxValue = pCharacteristic->getValue();
-        if (rxValue.length() > 0) {
-            ESP_LOGI(TAG_BLE, "========= CONTRATO DE PIDs RECIBIDO =========");
-            std::vector<uint8_t> pids;
-            for (int i = 0; i < rxValue.length(); i++) {
-                pids.push_back(static_cast<uint8_t>(rxValue[i]));
-                ESP_LOGI(TAG_BLE, "PID 0x%02X", pids.back());
+        if (rxValue.length() > 0 && (rxValue.length() % sizeof(BleCanPacket) == 0)) {
+            ESP_LOGI(TAG_BLE, "========= CONTRATO DE PAQUETES RECIBIDO =========");
+            std::vector<BleCanPacket> packets;
+            int count = rxValue.length() / sizeof(BleCanPacket);
+            BleCanPacket* p_packets = (BleCanPacket*)rxValue.data();
+            
+            for (int i = 0; i < count; i++) {
+                packets.push_back(p_packets[i]);
+                ESP_LOGI(TAG_BLE, "Packet Polling -> ID: 0x%03lX, DLC: %d", (unsigned long)p_packets[i].can_id, p_packets[i].dlc);
             }
+            
             if (obd_interface != nullptr) {
-                obd_interface->set_polling_pids(pids);
+                obd_interface->set_polling_pids(packets);
             }
             ESP_LOGI(TAG_BLE, "=============================================");
+        } else if (rxValue.length() > 0) {
+            ESP_LOGW(TAG_BLE, "Payload BLE recibido invalido (longitud %d no es multiplo de 13 bytes)", rxValue.length());
         }
     }
 };
@@ -122,7 +128,27 @@ void init_spi_and_can() {
     
     obd_interface = new OBD_MCP2515(&spi_handle, MCP2515_INT_PIN, can_rx_semaphore);
     obd_interface->set_tx_queue(ble_tx_queue);
-    
+
+    // Paquetes soportados por Audi para testing (default OBD2)
+    std::vector<BleCanPacket> pids;
+    uint8_t default_pids[] = {
+        0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 
+        0x0D, 0x0E, 0x0F, 0x11, 0x13, 0x15, 0x1C, 0x1F, 
+        0x20, 0x21, 0x23, 0x2E, 0x30, 0x31, 0x33, 0x34, 
+        0x3C, 0x40
+    };
+    for(uint8_t pid : default_pids) {
+        BleCanPacket p;
+        p.can_id = 0x7DF; // Standard OBD2 request ID
+        p.dlc = 8;
+        p.data[0] = 0x02; 
+        p.data[1] = 0x01; 
+        p.data[2] = pid;
+        for(int i = 3; i < 8; i++) p.data[i] = 0xCC;
+        pids.push_back(p);
+    }
+    obd_interface->set_polling_pids(pids);
+
     if (obd_interface->init()) {
         ESP_LOGI(TAG_SYS, "Interfaz OBD (MCP2515) inicializada");
     } else {
@@ -188,10 +214,18 @@ void vBLETask(void *pvParameters) {
     while(1) {
         BleCanPacket rx_packet;
         
-        // espero y voy contando los paquetes
+        // espero a que lleguen a la cola y voy tomando y contando los paquetes
         if (xQueueReceive(ble_tx_queue, &rx_packet, pdMS_TO_TICKS(100)) == pdTRUE) {
             tx_buffer[packet_count++] = rx_packet;
             
+            
+            printf("CAN RX | ID: 0x%03lX | DLC: %d | Data: ", (unsigned long)rx_packet.can_id, rx_packet.dlc);
+            for (int i = 0; i < rx_packet.dlc; i++) {
+                printf("%02X ", rx_packet.data[i]);
+            }
+            printf("\n");
+
+
             // cuando llegan a 5, los mando juntos
             if (packet_count >= 5) {
                 if (deviceConnected && pTxCharacteristic != nullptr) {

@@ -9,6 +9,10 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 
+#include "esp_twai.h"
+#include "esp_twai_onchip.h"
+
+
 struct __attribute__((packed)) BleCanPacket {
     uint32_t can_id;   // ID del mensaje (Soporta UDS Modo 22 y CAN Sniffing)
     uint8_t dlc;       // DLC (0-8)
@@ -30,10 +34,10 @@ public:
     virtual bool init() = 0;
 
     /**
-     * @brief Establece la lista de PIDs que serán consultados periódicamente.
-     * @param pids Vector de PIDs
+     * @brief Establece la lista de paquetes que serán consultados periódicamente.
+     * @param pids Vector de BleCanPacket
      */
-    void set_polling_pids(const std::vector<uint8_t>& pids) {
+    void set_polling_pids(const std::vector<BleCanPacket>& pids) {
         polling_pids = pids;
         current_pid_index = 0;
     }
@@ -53,7 +57,7 @@ public:
     }
 
 protected:
-    std::vector<uint8_t> polling_pids;
+    std::vector<BleCanPacket> polling_pids;
     size_t current_pid_index = 0;
     
     QueueHandle_t tx_queue = NULL;
@@ -94,16 +98,33 @@ private:
     uint32_t last_request_time = 0;
     uint32_t request_interval_ms = 50;
 
-    void request_pid(uint8_t pid);
+    void request_pid(BleCanPacket packet);
 };
+
 
 /**
  * @brief Implementación de la interfaz OBD usando el controlador TWAI integrado en el ESP32.
  */
 class OBD_TWAI : public OBD_CAN_Interface {
 public:
-    OBD_TWAI() {}
-    ~OBD_TWAI() {}
-    bool init() override { return false; }
-    void process() override {}
+    OBD_TWAI(gpio_num_t tx_pin, gpio_num_t rx_pin);
+    ~OBD_TWAI();
+
+    bool init() override;
+    void process() override;
+
+    void set_request_interval(uint32_t ms) { request_interval_ms = ms; }
+
+private:
+    gpio_num_t tx_pin;
+    gpio_num_t rx_pin;
+
+    twai_node_handle_t node_hdl = NULL;
+    QueueHandle_t rx_queue = NULL;
+
+    uint32_t last_request_time = 0;
+    uint32_t request_interval_ms = 50;
+    uint8_t tx_fail_count = 0;
+
+    void request_pid(BleCanPacket packet);
 };
