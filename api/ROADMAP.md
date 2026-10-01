@@ -4,8 +4,8 @@ What is missing, what to build next, and in what order. Companion to
 `README.md`, which documents what already **exists**; this file is about what
 does not.
 
-Last updated: 2026-09-24. Schema is at `V11__group_invite_codes.sql`. 334
-tests, 79 smoke checks.
+Last updated: 2026-10-01. Schema is at
+`V13__email_verification_and_password_reset.sql`. 421 tests, 93 smoke checks.
 
 ---
 
@@ -13,7 +13,7 @@ tests, 79 smoke checks.
 
 | Area | Schema | Endpoints |
 |---|---|---|
-| Auth / users | `users`, `refresh_tokens` | register, login, refresh, logout, `GET /users/me` |
+| Auth / users | `users`, `refresh_tokens`, `email_verification_tokens`, `password_reset_tokens` | register, login, refresh, logout, `GET`/`PUT /users/me`, `POST /users/me/password`, `POST /users/me/verify-email`, `POST /auth/verify-email`, `POST /auth/forgot-password`, `POST /auth/reset-password` |
 | Cars | `cars` (with `group_id`, `snapshot_at`), `models` | `POST /cars`, `GET /cars`, `GET /cars/{id}`, `PUT`/`DELETE /cars/{id}/group`, `GET /groups/{id}/cars`, `GET /models`, `POST /models` (admin) |
 | Groups | `groups`, `group_members` | `POST /groups`, `GET /groups`, `GET /groups/{id}/members` |
 | Invitations | `invitations` | `POST /invitations/invite/{groupId}`, `GET /invitations/pending`, `POST /invitations/{id}/accept` |
@@ -251,6 +251,12 @@ Traps:
 | **`PATCH /cars/{id}`** | Rename, plate, mileage correction. `CarAccess.ownedBy`. |
 | **`DELETE /cars/{id}`** | **Cascades to trips and telemetry.** Consider a soft delete first — a shared car's history belongs to the group, not only the owner. |
 | **`PATCH /users/me`** | The `UserDTO.Update` record already exists, unused. |
+| ~~`PUT /users/me`~~ | Name, lastname, phone. A replace, not a merge. |
+| ~~`POST /users/me/password`~~ | Current password required; revokes every other session immediately, via `password_changed_at` + `JwtAuthFilter`. |
+| ~~`POST /auth/forgot-password` + `/auth/reset-password`~~ | Always `202`, so it cannot be used to ask who has an account. The reset revokes every session and marks the address verified. |
+| ~~Email verification~~ | Mailed on registration, redeemable once, resend throttled to 60s. Soft gate on accepting an invitation only — closes the hole where registering as someone else's address claimed their invitation. Joining by QR stays ungated on purpose: a code is a bearer secret, not a claim on an address. |
+| ~~`Mailer` seam~~ | Interface plus `LoggingMailer` (dev and tests, sends nothing) and `ResendMailer` (real sending, refuses to start without an API key). Mutually exclusive, selected by `app.mail.provider`. |
+| **`PUT /users/me/email`** | Also blocked on mail. Watch the knock-ons: the email is the login identifier, a JWT claim, and the key `invitations` uses. |
 | **`DELETE /users/me`** | Cars orphan (`owner_id` → null), trips keep the car, memberships cascade, invitations keep `invited_by` → null. Verify that is the intent before shipping it. |
 | **`PATCH /groups/{id}`** | Rename. Admin-only. |
 
@@ -376,8 +382,15 @@ In this order, each small:
 
 1. **`GET /users/me/expenses`** (Phase 6). Trips can end now, so there is
    finally something to sum — one SQL aggregate.
-2. **`FailedInvitationException` handler** (Phase 5). One `@ExceptionHandler`
+2. **Turn mail on.** `ResendMailer` is written and tested; what is left is
+   outside the code - verify `mail.obidi.com.ar` in Resend (SPF, DKIM, then
+   DMARC), create the API key, and set `MAIL_PROVIDER=resend` plus the two
+   `MAIL_*_URL_BASE` values and `CORS_ORIGINS` on the VM. Also needed: the two
+   static pages at `obidi.com.ar/verify-email/:token` and `/reset-password/:token`
+   that post the token, since the emailed link is a GET on a page and the
+   endpoints are POSTs.
+3. **`FailedInvitationException` handler** (Phase 5). One `@ExceptionHandler`
    turns a duplicate live invitation from a `500` into a `409`.
-3. **`GET /trips/{id}/route`** (Phase 3). The last piece of the trip
+4. **`GET /trips/{id}/route`** (Phase 3). The last piece of the trip
    lifecycle; the repository query already exists.
 

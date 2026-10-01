@@ -56,11 +56,10 @@ public class SecurityConfig {
                 .sessionManagement(s->s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/refresh").permitAll()
+                        .requestMatchers("/api/v1/auth/verify-email",
+                                "/api/v1/auth/forgot-password",
+                                "/api/v1/auth/reset-password").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
-                        // Previewing an invite code: GET only, and only with
-                        // the code in hand. Someone scanning a QR before they
-                        // have an account sees the group's name instead of a
-                        // login wall; joining it still needs a token.
                         .requestMatchers(HttpMethod.GET, "/api/v1/invite-codes/*").permitAll()
                         .anyRequest().authenticated())
                 .exceptionHandling(e -> e.authenticationEntryPoint(jwtAuthEntryPoint))

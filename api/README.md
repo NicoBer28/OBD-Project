@@ -1,8 +1,201 @@
 # OBD API
 
-Spring Boot backend for OBD. Authentication is JWT-based: a short-lived access
-token returned in the response body, and a long-lived refresh token delivered
-as an `httpOnly` cookie.
+Spring Boot backend for OBIDI. Authentication is JWT-based: a short-lived
+access token returned in the response body, and a long-lived refresh token
+delivered as an `httpOnly` cookie.
+
+**Building the client?** Read *[Integrating with this API](#integrating-with-this-api)*
+first — base URLs, the auth contract, the error shape and the conventions that
+hold for every endpoint. Then the endpoint you need under
+*[Endpoints](#endpoints)*. The *Database*, *Running* and *Testing* sections are
+for whoever works on the backend.
+
+No credentials, keys or hostnames of real databases appear in this file. Those
+are shared out of band.
+
+---
+
+## Integrating with this API
+
+### Base URL
+
+| Environment | Base URL |
+|---|---|
+| Production | `https://api.obidi.com.ar` |
+| Local backend | `http://localhost:8080` |
+
+Every path below starts with `/api/v1`, so a full call looks like
+`https://api.obidi.com.ar/api/v1/users/me`. An Android emulator reaches a
+backend on the host machine at `http://10.0.2.2:8080`, not `localhost`.
+
+### Authentication
+
+`register` and `login` return this envelope:
+
+```json
+{
+  "accessToken": "eyJhbGciOi...",
+  "tokenType": "Bearer",
+  "expireInSeconds": 900,
+  "userId": "8f14e...",
+  "email": "ada@example.com"
+}
+```
+
+Send it on every other call:
+
+```
+Authorization: Bearer <accessToken>
+```
+
+The access token lasts **15 minutes**. The refresh token is **not** in the
+body — it is set as a cookie named `refreshToken`
+(`httpOnly`, `SameSite=Strict`, `Secure` in production, **path
+`/api/v1/auth`**) and lasts 14 days.
+
+> **The one thing that catches mobile clients out.** The refresh token travels
+> only as a cookie, and a plain Dart `http` client does not keep cookies. If
+> nothing stores it, `POST /auth/refresh` will always answer `401` and users
+> get logged out every 15 minutes. Use a client with a cookie jar — `dio` plus
+> `cookie_jar`/`PersistCookieJar` — backed by persistent storage so the session
+> survives the app restarting. The cookie's path means it is only ever sent to
+> `/api/v1/auth/*`, which is intended.
+
+### Keeping a session alive
+
+1. `POST /auth/login` → store `accessToken` in memory; the cookie jar keeps the
+   refresh token.
+2. Call endpoints with the bearer token.
+3. On a `401` whose `reason` is `token_expired`, call `POST /auth/refresh`
+   (no body) and retry the original request once with the new token.
+4. On a `401` whose `reason` is anything else, send the user to the login
+   screen — the session is gone and refreshing will not help.
+5. `POST /auth/logout` revokes every refresh token for that account.
+
+Refresh tokens are **single-use**: each `refresh` returns a new one and
+invalidates the old. Replaying an old refresh token revokes the whole family
+and forces a fresh login — so never run two refreshes concurrently. Serialise
+them behind one mutex, or a race will log the user out.
+
+### Error responses
+
+Every error is RFC 9457 `application/problem+json`. Three shapes, and the
+field that tells them apart is `title`:
+
+**Domain errors** — `detail` is a sentence safe to show a user:
+
+```json
+{ "status": 404, "title": "Not Found", "detail": "No such car",
+  "instance": "/api/v1/cars/aaaa..." }
+```
+
+**Validation errors** — `title` is always `"Validation failed"`, there is no
+`detail`, and `errors` maps each rejected field to its reason. Use it to mark
+the offending inputs:
+
+```json
+{ "status": 400, "title": "Validation failed",
+  "instance": "/api/v1/auth/register",
+  "errors": { "userEmail": "must be a well-formed email address",
+              "userPassword": "must not be blank" } }
+```
+
+**Authentication errors** — carry an extra `reason`, which is what step 3
+above switches on:
+
+```json
+{ "status": 401, "title": "Unauthorized", "detail": "Access token expire",
+  "reason": "token_expired" }
+```
+
+| `reason` | Meaning | What the app should do |
+|---|---|---|
+| `token_expired` | the 15 minutes are up | call `refresh`, retry once |
+| `token_invalid` | signature, format, or the account is gone | log out |
+| `missing_token` | no `Authorization` header | log out, or send the user to log in |
+
+A `token_invalid` can also mean the password was changed on another device:
+that invalidates every access token issued earlier, everywhere, immediately.
+
+### Conventions that hold everywhere
+
+| | |
+|---|---|
+| **Timestamps** | ISO-8601 instants in UTC, e.g. `2026-10-01T18:52:04.062Z`. Parse as UTC and render in local time; never send a local time. |
+| **Ids** | UUIDs as strings. A malformed one is `400`, not `404`. |
+| **`404` vs `403`** | A resource that exists but is not yours answers **`404`**, exactly like one that does not exist — so an id is never confirmed to a stranger. `403` appears only where the caller already knows the thing exists and simply lacks the right (not an admin of a group, not an admin account, email not verified). |
+| **`204`** | A successful write with nothing to return, and also "the normal empty answer" — e.g. no active trip on a car. It is **not** an error; `404` there would mean "no such car". |
+| **`409`** | A state conflict: already on a trip, already a member, a link already used or expired. Retrying without changing something will not help. |
+| **`429`** | Throttled. Only `POST /users/me/verify-email` answers it (one link per 60s). |
+| **Empty lists** | `[]` and `200`, never `404`. |
+| **The caller's identity** | Always taken from the token, never from the body. Sending `userId`, `ownerId` or `driverId` in a request body has no effect. |
+| **Unknown JSON fields** | Ignored. |
+
+### Email verification, and the one thing it blocks
+
+A new account can do almost everything immediately: log in, edit its profile,
+create a group, register a car, start trips, upload telemetry.
+
+The exception is **accepting an invitation** — that answers `403` until the
+address is verified, because invitations are addressed to an email and an
+unverified account has not proved that address is its own. `GET /users/me`
+reports `emailVerified`, so the app can show a banner and offer
+`POST /users/me/verify-email`.
+
+**Joining by QR code is not gated** — a code is handed over in person, so
+there is no address being claimed. An unverified user can join that way.
+
+### Endpoint index
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| `POST` | `/auth/register` | — | creates the account, logs it in, mails a verification link |
+| `POST` | `/auth/login` | — | |
+| `POST` | `/auth/refresh` | cookie | no body |
+| `POST` | `/auth/logout` | bearer | `204` |
+| `POST` | `/auth/verify-email` | — | body `{token}`; the link's last path segment |
+| `POST` | `/auth/forgot-password` | — | body `{userEmail}`; **always** `202` |
+| `POST` | `/auth/reset-password` | — | body `{token, newPassword}`; `204`, kills every session |
+| `GET` | `/users/me` | bearer | includes `emailVerified` |
+| `PUT` | `/users/me` | bearer | name, lastname, phone. A replace, not a merge |
+| `POST` | `/users/me/password` | bearer | current + new; returns a fresh token pair |
+| `POST` | `/users/me/verify-email` | bearer | resend the link. `202`, throttled |
+| `POST` | `/cars` | bearer | `201` + `Location` |
+| `GET` | `/cars` | bearer | owned **and** shared with your groups |
+| `GET` | `/cars/{carId}` | bearer | |
+| `PUT` `DELETE` | `/cars/{carId}/group` | bearer | share / un-share. Owner only |
+| `GET` | `/groups/{groupId}/cars` | bearer | members only |
+| `PUT` `GET` `DELETE` | `/cars/{carId}/device` | bearer | pair / read / unpair a dongle. Owner only |
+| `GET` | `/devices/{serial}` | bearer | "which car is this dongle?" |
+| `GET` | `/models` | bearer | the car catalog, ordered by brand |
+| `POST` | `/models` | bearer, **admin** | |
+| `POST` | `/groups` | bearer | `201` + `Location`; creator becomes `ADMIN` |
+| `GET` | `/groups` | bearer | your groups, with your role in each |
+| `GET` | `/groups/{groupId}/members` | bearer | members only |
+| `POST` | `/invitations/invite/{groupId}` | bearer, **admin** | by email |
+| `GET` | `/invitations/pending` | bearer | your own pending invitations |
+| `POST` | `/invitations/{id}/accept` | bearer | **needs a verified email** |
+| `POST` `GET` `DELETE` | `/groups/{groupId}/invite-code` | bearer, **admin** | mint / inspect / revoke the QR code |
+| `GET` | `/invite-codes/{code}` | **none** | preview a scanned code before joining |
+| `POST` | `/invite-codes/{code}/join` | bearer | |
+| `POST` | `/trips` | bearer | start. `201` |
+| `GET` | `/trips` | bearer | trips you drove |
+| `GET` | `/cars/{carId}/trips` | bearer | the car's whole history |
+| `GET` | `/cars/{carId}/trips/active` | bearer | `200` or `204` when idle |
+| `POST` | `/trips/{tripId}/finish` | bearer | driver only |
+| `DELETE` | `/trips/{tripId}` | bearer | cancel an open trip. `204` |
+| `POST` | `/telemetry` | bearer | batch ingest, by `serial` or `carId` |
+| `GET` | `/telemetry` | bearer | cursor sync |
+
+`GET /invite-codes/{code}` is the only endpoint outside `/auth` that needs no
+token: it lets someone who scanned a QR see the group's name before they have
+an account.
+
+### Things the API does not do yet
+
+Worth knowing before you design around them: there is no endpoint to change an
+email address, to delete an account, to remove or re-role a group member, or to
+read a trip's GPS route. Lists are unpaged. See *Known limitations* at the end.
 
 ## Database
 
@@ -98,6 +291,116 @@ needs the firmware half.
 | `uses` counter, incremented only by joining | Previewing must not consume a code: someone who scans, reads the group's name and backs out has taken nothing. Who actually joined is already in `group_members`. |
 | revoking sets `revoked_at`, never deletes | The row is the record that a code existed and how often it was used. |
 | `ON DELETE CASCADE` from `groups` | A code for a group that is gone is nothing. |
+
+### Email verification and password reset
+
+`V13` adds `users.email_verified_at` and two token tables. The mechanism is
+the one already used twice: a random secret, hashed, redeemed once.
+
+| Decision | Because |
+|---|---|
+| `email_verified_at`, not `enabled` | `enabled` already means "not disabled by an admin". Merging them would lose the difference between a brand-new account and a banned one. |
+| **two token tables**, though their columns are identical | A verification token is mailed automatically on every registration and lives for a day; a reset token changes a password. In one table, the only thing stopping the first being redeemed as the second is remembering `and purpose = ?` in every query — one forgotten clause from account takeover. Separate tables make that unrepresentable, the same reasoning that kept `group_invite_codes` out of `invitations`. |
+| only the SHA-256 is stored | A leaked dump contains nothing redeemable. Plain SHA-256, not BCrypt: the input is 32 random bytes, so there is nothing to brute force and no reason to pay for a slow hash on every click. |
+| `consumed_at` stamped, never deleted | A second click can be answered *"already used"* instead of *"invalid link"*. |
+| one live token per user, per table (partial unique index) | Issuing a new link retires the old one, so an older email stops working — and it is what the throttle reads. |
+| mail is sent **after** the transaction commits | A provider call inside a transaction holds a database connection open across the network (five of them, on the dev pooler), and if that transaction then rolls back the mail has already gone out for something that did not happen. `MailRequest` is published inside, `AccountMailListener` sends after. |
+| a failed send never fails the request | The token is already stored, so a lost message costs a resend. Failing registration because SMTP timed out would leave an account that exists behind an error screen. |
+
+**The hole this closes.** Invitations are keyed by email (`V8`), and
+registration never proved ownership of an address. Until `V13` anyone could
+register as `victim@example.com`, read their pending invitations and join the
+family group meant for them.
+
+**The soft gate.** Unverified accounts can do almost everything: register, log
+in, edit their profile, create a group, register a car, drive it, upload
+telemetry. The one thing they cannot do is **accept an invitation**
+(`UserAccess.requireVerifiedEmail`), because that is the action where an
+unproven address reaches other people's cars and trips.
+
+**Joining by QR is deliberately not gated.** An invitation names an address,
+so it can be claimed by an account that never proved it owns one. A code is a
+bearer secret handed over in person — nobody is impersonated, and gating it
+would only stop a guest joining at the dinner table. The asymmetry is
+intentional and pinned by smoke checks 86 and 86b.
+
+### Mail
+
+`Mailer` is an interface with two implementations, chosen by
+**`app.mail.provider`** at startup:
+
+| `app.mail.provider` | Implementation | Behaviour |
+|---|---|---|
+| unset or `log` | `LoggingMailer` | writes the message — **including the link** — to the application log and sends nothing. What development, the test suite and the smoke script run on: no account, no API key, no network. |
+| `resend` | `ResendMailer` | sends through Resend's API (`resend-java`, pinned). Needs `RESEND_API_KEY`. |
+
+The two are mutually exclusive, so exactly one `Mailer` bean exists in either
+configuration — pinned by `MailProviderSelectionTest`, because getting it
+wrong fails at startup rather than in a test.
+
+**Never `log` in production.** It prints a live token to the log, which
+discards the entire point of storing only its hash.
+
+`ResendMailer` details worth knowing:
+
+- **It refuses to start** if the provider is `resend` with no API key. A
+  deployment configured for mail that cannot send is broken, and the only good
+  moment to discover that is before it serves traffic — not on the first
+  password reset somebody needs.
+- `from` is assembled as `OBIDI <no-reply@mail.obidi.com.ar>` from
+  `app.mail.from-name` + `app.mail.from`. Resend rejects any address whose
+  domain is not verified in the account, so a wrong `from` shows up as a `403`
+  on the first send.
+- Every send carries an **`Idempotency-Key`** derived from the message itself,
+  so two attempts at an identical mail collapse into one delivery rather than
+  two copies in somebody's inbox.
+- Timeouts are bounded (`app.mail.resend.timeout-seconds`, 10s). The send
+  happens after the transaction commits, so a hanging provider cannot hold a
+  database connection, but it can still tie up the request thread.
+- Failures throw `MailSendFailedException`, which carries the purpose and the
+  recipient and **not** the provider's response body — that can echo the
+  request, and the request contains the link. `AccountMailListener` catches
+  and logs it; the request that triggered it still succeeds.
+
+Emails are the only user-facing text in the project, and they are in
+**Spanish**. Code, comments, logs and these docs stay English.
+
+**The pages the links open** live in `deploy/web/` and are served by the same
+Caddy that fronts the API — `deploy/web/verify-email/index.html` and
+`deploy/web/reset-password/index.html`, plus a shared `style.css`. No build
+step, no framework, no external requests: a password reset has to work on a
+bad connection, and nothing on the page should be able to leak the token in
+its URL to a third party (hence `referrer: no-referrer` and `robots:
+noindex`).
+
+Caddy also proxies `/api/*` on that hostname to the API container, so the
+pages call **relative** URLs. That means no API hostname baked into the HTML
+and no cross-origin request at all, which is why `CORS_ORIGINS` needs nothing
+added for them. See `deploy/README.md` → *Turning email on*.
+
+The verification page posts the token as soon as it loads; the reset page
+waits for a person to type a password and submit. The difference matters: a
+mail scanner fetching either URL runs no JavaScript, so neither GET can spend
+a token — which is the whole reason the API endpoints are POSTs.
+
+**Before sending real mail** you need a domain and three DNS records, or the
+mail lands in spam (Gmail and Yahoo have required them from bulk senders since
+2024):
+
+- **SPF** — a TXT record listing who may send for your domain. The receiver
+  checks the connecting IP against it. Breaks on forwarding, by design.
+- **DKIM** — the provider signs each message with a private key; you publish
+  the public key in DNS. Survives forwarding, and proves the message was not
+  altered.
+- **DMARC** — ties the two together by requiring the authenticated domain to
+  match the visible `From:`, says what to do when they fail
+  (`none`/`quarantine`/`reject`), and collects reports. This is the part that
+  actually stops impersonation. Start at `p=none`, read the reports, then
+  tighten.
+
+Send from a **subdomain** (`mail.tudominio.com`): reputation is tracked per
+domain, so this keeps the app's mail from dragging down — or being dragged
+down by — anything else on the domain.
 
 ## Running
 
@@ -317,6 +620,74 @@ refresh tokens for the current user and clears the `refreshToken` cookie.
 
 ---
 
+### `POST /api/v1/auth/verify-email`
+
+Redeems the link mailed at registration and marks the address verified.
+
+**Public — no access token.** The mail is often opened on a laptop while only
+the phone is logged in, and the secret in the link is itself the proof.
+
+**Body**: `{ "token": "..." }` — the last path segment of the mailed URL.
+
+A `POST`, even though it arrives from a link, because corporate mail filters
+**fetch every URL they see**. A `GET` that consumed the token would be spent
+before the human ever clicked it, so the link opens a screen and that screen
+posts.
+
+**Response** `204 No Content`.
+
+**Errors:** `404 Not Found` for an unknown token, `409 Conflict` for one
+already used or expired — told apart because the app says different things
+("ese enlace no es válido" against "pedí uno nuevo"). `400` for an empty
+token.
+
+---
+
+### `POST /api/v1/auth/forgot-password`
+
+Starts a password reset. **Public.**
+
+**Body**: `{ "userEmail": "ada@example.com" }`
+
+**Response** `202 Accepted` — **always**, whether or not that address has an
+account, and whether or not it was throttled. Anything else would make this a
+way to ask *"does this person use the app?"*, the same rule already applied to
+`POST /invitations/invite/{groupId}`. The throttle is therefore silent here,
+unlike the resend endpoint, which can answer `429` because the caller is
+already identified.
+
+**Errors:** `400 Bad Request` for a malformed address. That is the only thing
+this endpoint will tell you.
+
+---
+
+### `POST /api/v1/auth/reset-password`
+
+Sets a new password against the mailed link. **Public.**
+
+**Body**: `{ "token": "...", "newPassword": "..." }` (8–72 characters)
+
+No current password: not knowing it is the whole reason for this flow. The
+link is the proof instead.
+
+**Response** `204 No Content`, and the refresh cookie is cleared.
+
+**Every session is revoked, with no exception for the device doing the
+reset** — whoever is here may be recovering an account someone else had
+access to. It also stamps `password_changed_at`, so access tokens already
+issued die on their next request rather than lingering for up to
+`app.jwt.access-ttl-minutes` (see `JwtAuthFilter`). The caller is deliberately
+**not** logged in: logging in with the new password confirms to them that it
+took.
+
+Reaching the mailbox proves ownership of the address just as well as the
+verification flow does, so a reset also marks the address verified.
+
+**Errors:** `404` unknown token, `409` already used or expired, `400` if the
+new password is too short.
+
+---
+
 ### `GET /api/v1/users/me`
 
 The caller's own profile. Requires `Authorization: Bearer <accessToken>`.
@@ -339,6 +710,119 @@ username. No password hash, no role.
 
 **Errors:** `404 Not Found` if the account behind a still-valid token no
 longer exists; `401 Unauthorized` without a token.
+
+---
+
+### `PUT /api/v1/users/me`
+
+Edits the caller's own profile. Requires `Authorization: Bearer <accessToken>`.
+
+**Body** (`application/json`):
+
+```json
+{ "userName": "Augusta", "userLastName": "Byron", "userPhone": "+39 06 999999" }
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `userName` | yes | non-blank; the first name, not a username |
+| `userLastName` | yes | non-blank |
+| `userPhone` | no | same pattern as registration |
+
+**`PUT`, not `PATCH` - this replaces the editable profile.** A field left out
+is *cleared*, not kept: sending no `userPhone` sets it to `null`. The client
+has the whole object from `GET /users/me`, so a replace costs it nothing, and
+"absent" and "explicitly null" stay the same thing rather than becoming two
+cases to handle.
+
+**Only three fields are editable here.** The email is the login identifier and
+what `invitations` are keyed by; the password needs the current one and takes
+every other session down with it. Neither belongs in a form that otherwise
+cannot fail, so the password gets its own endpoint below (and changing the
+email is not implemented yet - see Known limitations).
+
+**Response** `200 OK` - the updated profile, same shape as `GET /users/me`.
+
+**Errors:** `400 Bad Request` with a per-field map, `404 Not Found` if the
+account behind a still-valid token is gone, `401` without a token.
+
+---
+
+### `POST /api/v1/users/me/verify-email`
+
+Sends the caller a fresh verification link — the *"no me llegó el mail"*
+button. Requires `Authorization: Bearer <accessToken>`.
+
+No body, and **no address**: the caller's own is the only one it can target,
+so it cannot be pointed at a stranger's inbox. Issuing a new link retires the
+previous one, so an older email stops working.
+
+**Response** `202 Accepted`.
+
+**Errors:** `429 Too Many Requests` within the throttle window
+(`app.mail.resend-throttle-seconds`, 60s) — answerable here, unlike
+`forgot-password`, because the caller is already identified so there is
+nothing to leak. `409 Conflict` if the address is already verified. `401`
+without a token.
+
+---
+
+### `POST /api/v1/users/me/password`
+
+Changes the caller's password and signs every **other** device out.
+
+**Body** (`application/json`):
+
+```json
+{ "currentPassword": "supersecret123", "newPassword": "evenbetter456" }
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `currentPassword` | yes | the password in force right now |
+| `newPassword` | yes | 8-72 characters, and different from the current one |
+
+**The current password is required even though the caller already holds a
+valid access token.** A token proves the session, not the person - a borrowed
+unlocked phone carries one.
+
+**Response** `200 OK` - the same envelope `login` returns, plus a rotated
+`refreshToken` cookie:
+
+```json
+{
+  "accessToken": "eyJhbGciOi...",
+  "tokenType": "Bearer",
+  "expireInSeconds": 900,
+  "userId": "8f14e...",
+  "userEmail": "ada@example.com"
+}
+```
+
+The change revokes **every** refresh family, including the caller's own, and
+then issues a fresh one - in that order, or the new family would be revoked
+along with the rest. That is why a new token pair comes back: without it the
+user would be signed out of the very device they just changed the password on.
+
+**Other devices stop working immediately, not eventually.** Revoking refresh
+tokens cannot reach the access tokens already issued - they are self-contained
+and valid until they expire, so another phone would otherwise keep working for
+up to `app.jwt.access-ttl-minutes`. The change stamps
+`users.password_changed_at`, and `JwtAuthFilter` rejects any token minted
+before it. This costs nothing: the filter already loads the user from the
+database on every request.
+
+Both sides of that comparison are at **second precision** - a JWT's `iat` is
+epoch seconds, so the stamp is truncated to match. Without that, the token
+minted by the change itself would look older than the change and be rejected
+on its first request. Pinned by
+`JwtAuthFilterTest.theTokenMintedByTheChangeItselfSurvives`.
+
+**Errors:** `401 Unauthorized` if `currentPassword` is wrong (a credential
+failure, not a validation one - and nothing is changed, no session ends),
+`400 Bad Request` if the new password is too short or equal to the current one
+(refused rather than accepted as a no-op: it would sign every other device out
+for nothing), `401` without a token.
 
 ---
 
@@ -478,7 +962,7 @@ in is a no-op.
   "name": "Telemetry car",
   "...": "...",
   "snapshotAt": "2026-09-16T18:35:22Z",
-  "group": { "id": "937bcb73-203e-44c8-8f6d-8adc2f4a2994", "name": "Familia Lazzari" }
+  "group": { "id": "937bcb73-203e-44c8-8f6d-8adc2f4a2994", "name": "Familia Garcia" }
 }
 ```
 
@@ -709,7 +1193,7 @@ Creates a group (a "family") and enrols the caller as its first member with the
 **Body** (`application/json`):
 
 ```json
-{ "name": "Familia Lazzari" }
+{ "name": "Familia Garcia" }
 ```
 
 | Field | Required | Notes |
@@ -726,7 +1210,7 @@ The creator is always taken from the access token, never from the body.
 ```json
 {
   "id": "e6c055de-e501-4e00-baf5-9cbc2d6722d2",
-  "name": "Familia Lazzari",
+  "name": "Familia Garcia",
   "createdAt": "2026-09-08T16:45:39.848482Z",
   "memberCount": 1,
   "callerRole": "ADMIN"
@@ -759,7 +1243,7 @@ ordered by name:
 [
   {
     "id": "e6c055de-e501-4e00-baf5-9cbc2d6722d2",
-    "name": "Familia Lazzari",
+    "name": "Familia Garcia",
     "createdAt": "2026-09-08T16:45:39.848482Z",
     "memberCount": 3,
     "callerRole": "ADMIN"
@@ -894,7 +1378,7 @@ filtered out, so every id returned is one the caller can accept right now:
   {
     "id": "dc839824-2a6a-4a6e-905b-098a90c9cca4",
     "groupId": "fa3b6130-bee8-4523-a450-75147ef7fb19",
-    "groupName": "Familia Lazzari",
+    "groupName": "Familia Garcia",
     "invitationCreatedAt": "2026-09-15T13:04:36.832938Z",
     "invitationExpiresAt": "2026-09-22T13:04:36.832938Z"
   }
@@ -1067,7 +1551,7 @@ keeps them in.
 ### `GET /api/v1/invite-codes/{code}`
 
 **"What am I about to join?"** — what the phone asks the moment it scans, to
-show *"Join Familia Lazzari · 3 members?"* before the user commits.
+show *"Join Familia Garcia · 3 members?"* before the user commits.
 
 **No token required.** Someone scanning a QR before they have an account sees
 the group's name rather than a bare login wall; the code is the capability,
@@ -1079,7 +1563,7 @@ that is public — joining still needs a token.
 ```json
 {
   "groupId": "fa3b6130-bee8-4523-a450-75147ef7fb19",
-  "groupName": "Familia Lazzari",
+  "groupName": "Familia Garcia",
   "memberCount": 3,
   "expiresAt": "2026-09-25T18:00:00Z"
 }
@@ -1111,7 +1595,7 @@ navigate straight in:
 ```json
 {
   "id": "fa3b6130-bee8-4523-a450-75147ef7fb19",
-  "name": "Familia Lazzari",
+  "name": "Familia Garcia",
   "createdAt": "2026-09-08T16:45:39.848482Z",
   "memberCount": 4,
   "callerRole": "MEMBER"
@@ -1487,14 +1971,28 @@ or a `since` that does not parse — the parameters bind to a record so a type
 error is a field error, not a `500`. `404 Not Found` if the car does not exist
 or is not the caller's. `401 Unauthorized` without a token.
 
-## Auth flow at a glance
+## Auth flow — how it works server-side
 
-1. `register`/`login` → access token (body) + refresh token (cookie), same
-   "family" id for the refresh token.
+What a client has to *do* is under
+[Keeping a session alive](#keeping-a-session-alive). This is the mechanism
+underneath it.
+
+1. `register`/`login` issue an access token (body) and a refresh token
+   (cookie). Each login starts a **family**: the chain of refresh tokens
+   descended from it.
 2. Protected endpoints are called with `Authorization: Bearer <accessToken>`.
-3. When the access token expires, call `refresh` (cookie sent automatically)
-   to get a new access token and a rotated refresh token.
-4. `logout` revokes the whole refresh-token family server-side.
+3. `refresh` rotates: it revokes the token presented and issues its successor
+   in the same family. Presenting an already-rotated token is treated as theft
+   — the **whole family** is revoked, so both the attacker and the legitimate
+   holder are logged out and the user has to log in again. That is why a client
+   must never run two refreshes at once.
+4. `logout` revokes every family for that account.
+5. `POST /users/me/password` revokes every family, issues a fresh one for the
+   caller, and stamps `password_changed_at`. Access tokens cannot be revoked on
+   their own, so `JwtAuthFilter` rejects any token minted before that stamp —
+   which is what makes "signed out everywhere" immediate rather than up to 15
+   minutes later. A reset via `POST /auth/reset-password` does the same, with no
+   exception for the device doing the reset.
 
 ## Testing
 
@@ -1555,3 +2053,22 @@ What is missing, in what order to build it, and the endpoint roadmap live in
 - No admin account is seeded, so the smoke script only covers the `403` side
   of `POST /models`; the `201` path is pinned by `ModelControllerTest`.
 - Updating and deleting a car are not implemented.
+- **No mail is sent yet in practice.** `ResendMailer` exists and is tested, but
+  `app.mail.provider` is still `log` everywhere, so links appear in the
+  application log. Turning it on needs only a verified sending domain and an
+  API key — no code change.
+- **Changing the email address** is not implemented. It needs the same mail
+  infrastructure (the new address must be proven) and has knock-on effects
+  worth thinking through first: the email is the login identifier, it is a
+  claim inside the access token, and `invitations` are keyed by it, so a
+  pending invitation sent to the old address would not follow the user.
+- Delivery is best-effort: a failed send is logged and the request still
+  succeeds. There is no outbox and no retry — the resend endpoint is the
+  retry. Good enough while a human can always ask for another link.
+- Smoke checks 49–50 and 88–90 need `MAIL_LOG` pointed at the application log,
+  since they complete flows that genuinely require reading an email. Without
+  it they skip and the rest of the suite still runs.
+- `password_changed_at` gives revocation a one-second granularity, because a
+  JWT's `iat` is expressed in whole seconds. A token minted in the same second
+  as a password change survives it. Harmless in practice, and the alternative
+  (a per-token blacklist) costs far more than it is worth here.

@@ -3,6 +3,7 @@ package com.obd.api.invitation;
 import com.obd.api.group.*;
 import com.obd.api.invitation.dto.InvitationDTO;
 import com.obd.api.invitation.exception.*;
+import com.obd.api.user.exception.EmailNotVerifiedException;
 import com.obd.api.support.RepositoryTest;
 import com.obd.api.user.Role;
 import com.obd.api.user.User;
@@ -27,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * for the accept statement on its own.
  */
 @RepositoryTest
-@Import({InvitationService.class, GroupAccess.class})
+@Import({InvitationService.class, GroupAccess.class, com.obd.api.user.UserAccess.class})
 class InvitationServiceTest {
 
     @Autowired
@@ -50,6 +51,16 @@ class InvitationServiceTest {
     private UUID familiaId;
 
     private UUID newUser(String email) {
+        // Verified: accepting an invitation requires it. The gate itself is
+        // covered by the two tests at the end.
+        return userRepository.saveAndFlush(User.builder()
+                .userName("Test").userLastName("User").userEmail(email)
+                .userPasswordHash("$2a$12$notarealhash")
+                .userEmailVerifiedAt(Instant.now())
+                .role(Role.USER).enabled(true).build()).getUserId();
+    }
+
+    private UUID newUnverifiedUser(String email) {
         return userRepository.saveAndFlush(User.builder()
                 .userName("Test").userLastName("User").userEmail(email)
                 .userPasswordHash("$2a$12$notarealhash")
@@ -308,5 +319,38 @@ class InvitationServiceTest {
         assertThatThrownBy(() -> invitationService.accept(strangerId, "stranger@example.com", id))
                 .isInstanceOf(InvitationExpiredException.class);
         assertThat(invitationRepository.findById(id).orElseThrow().getInvitationAcceptedAt()).isNull();
+    }
+
+    // --- the email gate ------------------------------------------------------
+
+    @Test
+    void anUnverifiedAccountCannotAcceptAnInvitation() {
+        // The hole this closes: invitations are keyed by email, and
+        // registering with an address has never proved it is yours.
+        UUID impostor = newUnverifiedUser("grace.impostor@example.com");
+        InvitationDTO.Read invite = invitationService.invite(adaId, "invitee@example.com", familiaId);
+
+        assertThatThrownBy(() -> invitationService.accept(impostor, "invitee@example.com", invite.invitationId()))
+                .isInstanceOf(EmailNotVerifiedException.class);
+
+        // Nothing was accepted and nobody joined.
+        assertThat(invitationRepository.findById(invite.invitationId()).orElseThrow()
+                .getInvitationAcceptedAt()).isNull();
+        assertThat(groupMemberRepository.findByIdGroupIdAndIdUserId(familiaId, impostor)).isEmpty();
+    }
+
+    @Test
+    void verifyingLetsThatSameAccountAccept() {
+        UUID invitee = newUnverifiedUser("invitee@example.com");
+        InvitationDTO.Read invite = invitationService.invite(adaId, "invitee@example.com", familiaId);
+
+        User user = userRepository.findById(invitee).orElseThrow();
+        user.setUserEmailVerifiedAt(Instant.now());
+        userRepository.saveAndFlush(user);
+
+        invitationService.accept(invitee, "invitee@example.com", invite.invitationId());
+
+        assertThat(groupMemberRepository.findByIdGroupIdAndIdUserId(familiaId, invitee))
+                .get().extracting(GroupMember::getRole).isEqualTo(GroupRole.MEMBER);
     }
 }

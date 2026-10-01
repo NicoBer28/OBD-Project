@@ -539,6 +539,42 @@ OTHER_LIST=$(curl -sS "$CARS" -H "Authorization: Bearer $OTHER_TOKEN")
 echo "$OTHER_LIST" | grep -q "\"id\":\"$CAR_ID\"" && fail "another owner's car leaked into the list"
 echo "ok: $(echo "$OTHER_LIST" | grep -o '"id"' | wc -l | tr -d ' ') car(s) for the other owner, none of them Carl's"
 
+# These need the link that was mailed, and therefore the `log` provider: with
+# MAIL_PROVIDER=resend nothing reaches the log, and Resend rejects the
+# @example.com recipients these checks use. Run the app with
+# MAIL_PROVIDER=log (overriding .env.dev if it sets resend).
+#
+# These need the link that was mailed. Nothing is actually sent in
+# development: LoggingMailer writes it to the application log, so point
+# MAIL_LOG at that file to run these checks:
+#
+#   MAIL_LOG=/tmp/app.log ./scripts/test-endpoints.sh
+#
+# Without it the rest of the script still runs and these are skipped, rather
+# than the suite depending on a dev-only endpoint that hands tokens out.
+MAIL_LOG="${MAIL_LOG:-}"
+
+# Pulls the newest link mailed to an address ($1) out of the log.
+mail_link() {
+  [ -n "$MAIL_LOG" ] || return 1
+  grep -o "https\?://[^[:space:]]*" "$MAIL_LOG" | tail -1
+}
+
+mail_link_for_purpose() {
+  local purpose="$1" address="$2"
+  [ -n "$MAIL_LOG" ] || return 1
+  # index(), not ~: an address like "invitee+1790@example.com" contains a
+  # regex metacharacter, so matching it as a pattern silently finds nothing.
+  # The marker line names the recipient and purpose; the link is a line or two
+  # below, inside the body. Take the last such pair in the file.
+  awk -v p="purpose=$purpose" -v a="to=$address" '
+    index($0, "MAIL ") && index($0, p) && index($0, a) { want = 1; next }
+    want && match($0, /https?:\/\/[^ ]+/) { link = substr($0, RSTART, RLENGTH); want = 0 }
+    END { print link }
+  ' "$MAIL_LOG"
+}
+
+
 # --- Invitations -------------------------------------------------------------
 # Carl (CAR_TOKEN) is ADMIN of GROUP_ID from step 18; Grace (OTHER_TOKEN) is
 # not in it. The invitee does not have an account yet when invited.
@@ -578,7 +614,33 @@ ACC_FOREIGN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITATIONS/$INV
 echo "status: $ACC_FOREIGN"
 [ "$ACC_FOREIGN" = "404" ] || fail "expected 404 accepting someone else's invitation, got $ACC_FOREIGN"
 
-line "49. The invitee accepts (expect 200, ACCEPTED); accepting again (expect 409)"
+line "49. Unverified, the invitee cannot accept (expect 403); verified, they can"
+# The hole this closes: invitations are addressed to an email, and registering
+# with one has never proved it is yours.
+ACC_UNVERIFIED=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITATIONS/$INV_ID/accept" \
+  -H "Authorization: Bearer $INV_TOKEN")
+echo "unverified: $ACC_UNVERIFIED"
+[ "$ACC_UNVERIFIED" = "403" ] || fail "expected 403 accepting unverified, got $ACC_UNVERIFIED"
+
+if [ -z "$MAIL_LOG" ]; then
+  echo "skipped the rest of 49 and 50 (no MAIL_LOG) - accepting needs the mailed link"
+  # The checks further down need a member of this group who is not its owner,
+  # so get the invitee in by code instead: that flow is not gated, since a QR
+  # is handed over in person and claims no address.
+  BOOTSTRAP_QR=$(curl -sS -X POST "$GROUPS_URL/$GROUP_ID/invite-code" \
+    -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" -d '{}')
+  BOOTSTRAP_CODE=$(extract_field "$BOOTSTRAP_QR" code)
+  BOOTSTRAP_JOIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/v1/invite-codes/$BOOTSTRAP_CODE/join" \
+    -H "Authorization: Bearer $INV_TOKEN")
+  [ "$BOOTSTRAP_JOIN" = "200" ] || fail "could not get the invitee into the group by code, got $BOOTSTRAP_JOIN"
+else
+VERIFY_LINK_INV=$(mail_link_for_purpose EMAIL_VERIFICATION "$INV_EMAIL")
+[ -n "$VERIFY_LINK_INV" ] || fail "no verification link found in $MAIL_LOG for $INV_EMAIL"
+V_INV=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/verify-email" \
+  -H "Content-Type: application/json" -d "{\"token\":\"${VERIFY_LINK_INV##*/}\"}")
+[ "$V_INV" = "204" ] || fail "could not verify the invitee, got $V_INV"
+echo "verified the invitee from the mail log"
+
 ACC=$(curl -sS -X POST "$INVITATIONS/$INV_ID/accept" -H "Authorization: Bearer $INV_TOKEN")
 print_json "$ACC"
 [ "$(extract_field "$ACC" invitationStatus)" = "ACCEPTED" ] || fail "expected ACCEPTED after accepting"
@@ -596,6 +658,7 @@ INV_GROUPS=$(curl -sS "$GROUPS_URL" -H "Authorization: Bearer $INV_TOKEN")
 print_json "$INV_GROUPS"
 echo "$INV_GROUPS" | grep -q "\"id\":\"$GROUP_ID\"" || fail "the invitee is not in the group after accepting"
 echo "$INV_GROUPS" | grep -q '"callerRole":"MEMBER"' || fail "expected the invitee to join as MEMBER"
+fi
 
 # --- Devices ---------------------------------------------------------------
 # Carl owns TCAR_ID (the telemetry car) and FRESH_CAR_ID; Grace is a stranger.
@@ -851,6 +914,9 @@ echo "non-member: $MEMBERS_FOREIGN   unknown group: $MEMBERS_UNKNOWN"
 INVITE_CODES="$BASE_URL/api/v1/invite-codes"
 
 line "73. Admin mints a QR code (expect 201, code + joinUrl, no Location)"
+# Start from no live code, so replacedPrevious below means what it says
+# whatever path the earlier checks took through this group.
+curl -sS -o /dev/null -X DELETE "$GROUPS_URL/$GROUP_ID/invite-code" -H "Authorization: Bearer $CAR_TOKEN"
 QR_HEADERS=$(mktemp)
 QR=$(curl -sS -D "$QR_HEADERS" -X POST "$GROUPS_URL/$GROUP_ID/invite-code" \
   -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" -d '{}')
@@ -938,5 +1004,244 @@ echo "revoke: $REV   again: $REV2   join revoked: $DEAD   unknown: $UNKNOWN   me
 # Revoking never removes anyone who already joined.
 STILL_IN=$(curl -sS "$GROUPS_URL" -H "Authorization: Bearer $OTHER_TOKEN")
 echo "$STILL_IN" | grep -q "\"id\":\"$GROUP_ID\"" || fail "revoking a code must not remove the members it let in"
+
+# ---------------------------------------------------------------------------
+# Profile: edit and change password
+# ---------------------------------------------------------------------------
+# A user of its own, so signing its sessions out cannot disturb the checks above.
+USERS_ME="$BASE_URL/api/v1/users/me"
+PROF_EMAIL="prof+$(date +%s)@example.com"
+PROF_REG=$(curl -sS -X POST "$BASE/register" -H "Content-Type: application/json" \
+  -d "{\"userName\":\"Pro\",\"userLastName\":\"File\",\"userEmail\":\"$PROF_EMAIL\",\"userPassword\":\"$PASSWORD\",\"userPhone\":\"+39 320 1234567\"}")
+PROF_TOKEN=$(extract_field "$PROF_REG" accessToken)
+[ -n "$PROF_TOKEN" ] || fail "could not register a user for the profile checks"
+
+line "80. GET then PUT /users/me (expect 200, the new values come back)"
+ME=$(curl -sS "$USERS_ME" -H "Authorization: Bearer $PROF_TOKEN")
+print_json "$ME"
+expect_json "$ME" userName "\"Pro\""
+UPDATED=$(curl -sS -w '\n%{http_code}' -X PUT "$USERS_ME" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d '{"userName":"Augusta","userLastName":"Byron","userPhone":"+39 06 999999"}')
+UPD_STATUS=$(echo "$UPDATED" | tail -1); UPD_BODY=$(echo "$UPDATED" | sed '$d')
+print_json "$UPD_BODY"
+[ "$UPD_STATUS" = "200" ] || fail "expected 200 from PUT /users/me, got $UPD_STATUS"
+expect_json "$UPD_BODY" userName "\"Augusta\""
+expect_json "$UPD_BODY" userPhone "\"+39 06 999999\""
+# The email is not editable here, whatever the body says.
+expect_json "$UPD_BODY" userEmail "\"$PROF_EMAIL\""
+
+line "81. PUT is a replace: an absent phone clears it (expect 200, null)"
+CLEARED=$(curl -sS -X PUT "$USERS_ME" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d '{"userName":"Augusta","userLastName":"Byron"}')
+print_json "$CLEARED"
+expect_json "$CLEARED" userPhone null
+
+line "82. Invalid profile edits (expect 400, 400, 401)"
+P_BLANK=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$USERS_ME" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d '{"userName":"  ","userLastName":""}')
+P_PHONE=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$USERS_ME" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d '{"userName":"Augusta","userLastName":"Byron","userPhone":"not a phone"}')
+P_NOAUTH=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$USERS_ME" \
+  -H "Content-Type: application/json" -d '{"userName":"A","userLastName":"B"}')
+echo "blank: $P_BLANK   bad phone: $P_PHONE   no token: $P_NOAUTH"
+[ "$P_BLANK" = "400" ]  || fail "expected 400 for blank names, got $P_BLANK"
+[ "$P_PHONE" = "400" ]  || fail "expected 400 for a malformed phone, got $P_PHONE"
+[ "$P_NOAUTH" = "401" ] || fail "expected 401 without a token, got $P_NOAUTH"
+
+line "83. Wrong current password, and reusing the same one (expect 401, 400 - nothing changes)"
+PW_WRONG=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$USERS_ME/password" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"currentPassword\":\"not-my-password\",\"newPassword\":\"evenbetter456\"}")
+PW_SAME=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$USERS_ME/password" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"currentPassword\":\"$PASSWORD\",\"newPassword\":\"$PASSWORD\"}")
+PW_SHORT=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$USERS_ME/password" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"currentPassword\":\"$PASSWORD\",\"newPassword\":\"short\"}")
+echo "wrong: $PW_WRONG   same: $PW_SAME   too short: $PW_SHORT"
+[ "$PW_WRONG" = "401" ] || fail "expected 401 for a wrong current password, got $PW_WRONG"
+[ "$PW_SAME" = "400" ]  || fail "expected 400 for reusing the password, got $PW_SAME"
+[ "$PW_SHORT" = "400" ] || fail "expected 400 for a short new password, got $PW_SHORT"
+# A failed attempt must not have signed this session out.
+STILL_OK=$(curl -sS -o /dev/null -w '%{http_code}' "$USERS_ME" -H "Authorization: Bearer $PROF_TOKEN")
+[ "$STILL_OK" = "200" ] || fail "a failed password change must not end the session, got $STILL_OK"
+
+line "84. Change the password (expect 200 + fresh tokens); the old token dies, the new one works"
+OLD_TOKEN="$PROF_TOKEN"
+PW_HEADERS=$(mktemp)
+sleep 1   # so the new token's iat is strictly after the previous one's
+CHANGED=$(curl -sS -D "$PW_HEADERS" -X POST "$USERS_ME/password" \
+  -H "Authorization: Bearer $PROF_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"currentPassword\":\"$PASSWORD\",\"newPassword\":\"evenbetter456\"}")
+print_json "$CHANGED"
+NEW_TOKEN=$(extract_field "$CHANGED" accessToken)
+[ -n "$NEW_TOKEN" ] || fail "no access token in the change-password response"
+grep -qi "^set-cookie:.*refreshToken=" "$PW_HEADERS" || fail "expected a rotated refresh cookie"
+echo "$CHANGED" | grep -q '"refreshToken"' && fail "the raw refresh token must stay in the cookie, not the body"
+rm -f "$PW_HEADERS"
+# The other devices: tokens minted before the change stop working at once,
+# without waiting for them to expire.
+OLD_USE=$(curl -sS -o /dev/null -w '%{http_code}' "$USERS_ME" -H "Authorization: Bearer $OLD_TOKEN")
+NEW_USE=$(curl -sS -o /dev/null -w '%{http_code}' "$USERS_ME" -H "Authorization: Bearer $NEW_TOKEN")
+echo "old token: $OLD_USE   new token: $NEW_USE"
+[ "$OLD_USE" = "401" ] || fail "a token minted before the change must be rejected, got $OLD_USE"
+[ "$NEW_USE" = "200" ] || fail "the token issued by the change must work, got $NEW_USE"
+# ...and the new password is the one that logs in now.
+OLD_LOGIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/login" -H "Content-Type: application/json" \
+  -d "{\"userEmail\":\"$PROF_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
+NEW_LOGIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/login" -H "Content-Type: application/json" \
+  -d "{\"userEmail\":\"$PROF_EMAIL\",\"userPassword\":\"evenbetter456\"}")
+echo "old password: $OLD_LOGIN   new password: $NEW_LOGIN"
+[ "$OLD_LOGIN" = "401" ] || fail "the old password must stop working, got $OLD_LOGIN"
+[ "$NEW_LOGIN" = "200" ] || fail "the new password must log in, got $NEW_LOGIN"
+
+# ---------------------------------------------------------------------------
+# Email verification and password reset
+# ---------------------------------------------------------------------------
+line "85. A new account starts unverified (expect 200, emailVerified false)"
+VER_EMAIL="verify+$(date +%s)@example.com"
+VER_REG=$(curl -sS -X POST "$BASE/register" -H "Content-Type: application/json" \
+  -d "{\"userName\":\"Vera\",\"userLastName\":\"Fica\",\"userEmail\":\"$VER_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
+VER_TOKEN=$(extract_field "$VER_REG" accessToken)
+[ -n "$VER_TOKEN" ] || fail "could not register a user for the verification checks"
+VER_ME=$(curl -sS "$BASE_URL/api/v1/users/me" -H "Authorization: Bearer $VER_TOKEN")
+print_json "$VER_ME"
+expect_json "$VER_ME" emailVerified false
+
+line "86. Unverified, the gate blocks accepting an invitation (expect 403) but nothing else"
+# Carl invites the new account to his group; it is addressed to an email, and
+# an unverified account has not proved that address is its own.
+GATE_INV=$(curl -sS -X POST "$INVITATIONS/invite/$GROUP_ID" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"email\":\"$VER_EMAIL\"}")
+GATE_INV_ID=$(extract_field "$GATE_INV" invitationId)
+[ -n "$GATE_INV_ID" ] || fail "could not create an invitation for the gate check"
+GATE_ACCEPT=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITATIONS/$GATE_INV_ID/accept" \
+  -H "Authorization: Bearer $VER_TOKEN")
+# ...while everything that only touches their own data still works.
+GATE_CAR=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$CARS" \
+  -H "Authorization: Bearer $VER_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"name\":\"Unverified car\",\"modelId\":\"$MODEL_GOL\"}")
+GATE_GROUP=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$GROUPS_URL" \
+  -H "Authorization: Bearer $VER_TOKEN" -H "Content-Type: application/json" -d '{"name":"Propio"}')
+echo "accept: $GATE_ACCEPT   create car: $GATE_CAR   create group: $GATE_GROUP"
+[ "$GATE_ACCEPT" = "403" ] || fail "expected 403 accepting an invitation unverified, got $GATE_ACCEPT"
+[ "$GATE_CAR" = "201" ]    || fail "an unverified account must still register a car, got $GATE_CAR"
+[ "$GATE_GROUP" = "201" ]  || fail "an unverified account must still create its own group, got $GATE_GROUP"
+
+line "86b. A QR code is deliberately NOT gated (expect 200 for an unverified scanner)"
+# The asymmetry is the point: an invitation names an address, so it could be
+# claimed by an account that never proved it owns one. A code is a bearer
+# secret handed over in person - nobody is impersonated, and gating it would
+# only stop a guest joining at the dinner table.
+SCAN_EMAIL="scanner+$(date +%s)@example.com"
+SCAN_REG=$(curl -sS -X POST "$BASE/register" -H "Content-Type: application/json" \
+  -d "{\"userName\":\"Scan\",\"userLastName\":\"Ner\",\"userEmail\":\"$SCAN_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
+SCAN_TOKEN=$(extract_field "$SCAN_REG" accessToken)
+SCAN_QR=$(curl -sS -X POST "$GROUPS_URL/$GROUP_ID/invite-code" \
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" -d '{}')
+SCAN_CODE=$(extract_field "$SCAN_QR" code)
+SCAN_ME=$(curl -sS "$BASE_URL/api/v1/users/me" -H "Authorization: Bearer $SCAN_TOKEN")
+expect_json "$SCAN_ME" emailVerified false
+SCAN_JOIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITE_CODES/$SCAN_CODE/join" \
+  -H "Authorization: Bearer $SCAN_TOKEN")
+echo "unverified scanner: $SCAN_JOIN"
+[ "$SCAN_JOIN" = "200" ] || fail "an unverified scanner must still be able to join by code, got $SCAN_JOIN"
+
+line "87. Asking for another verification mail right away is throttled (expect 429)"
+RESEND_SOON=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/v1/users/me/verify-email" \
+  -H "Authorization: Bearer $VER_TOKEN")
+echo "status: $RESEND_SOON"
+[ "$RESEND_SOON" = "429" ] || fail "expected 429 resending within the throttle window, got $RESEND_SOON"
+
+line "88. Redeeming the mailed link verifies the address, and the gate lifts"
+if [ -z "$MAIL_LOG" ]; then
+  echo "skipped (no MAIL_LOG) - set MAIL_LOG=/path/to/app.log to run the mail flows"
+else
+  VERIFY_LINK=$(mail_link_for_purpose EMAIL_VERIFICATION "$VER_EMAIL")
+  [ -n "$VERIFY_LINK" ] || fail "no verification link found in $MAIL_LOG for $VER_EMAIL"
+  VERIFY_CODE="${VERIFY_LINK##*/}"
+  echo "link: $VERIFY_LINK"
+  # No token on this call: the link is its own proof, since the mail may be
+  # opened on a device that is not logged in.
+  V_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/verify-email" \
+    -H "Content-Type: application/json" -d "{\"token\":\"$VERIFY_CODE\"}")
+  [ "$V_STATUS" = "204" ] || fail "expected 204 redeeming the verification link, got $V_STATUS"
+  V_ME=$(curl -sS "$BASE_URL/api/v1/users/me" -H "Authorization: Bearer $VER_TOKEN")
+  expect_json "$V_ME" emailVerified true
+  # The same link again: a mail scanner prefetching, or a double tap.
+  V_AGAIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/verify-email" \
+    -H "Content-Type: application/json" -d "{\"token\":\"$VERIFY_CODE\"}")
+  V_BOGUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/verify-email" \
+    -H "Content-Type: application/json" -d '{"token":"not-a-real-token"}')
+  echo "again: $V_AGAIN   unknown: $V_BOGUS"
+  [ "$V_AGAIN" = "409" ] || fail "expected 409 redeeming a spent link, got $V_AGAIN"
+  [ "$V_BOGUS" = "404" ] || fail "expected 404 for an unknown link, got $V_BOGUS"
+  # Now verified, the invitation that was refused goes through.
+  NOW_ACCEPT=$(curl -sS -X POST "$INVITATIONS/$GATE_INV_ID/accept" -H "Authorization: Bearer $VER_TOKEN")
+  print_json "$NOW_ACCEPT"
+  [ "$(extract_field "$NOW_ACCEPT" invitationStatus)" = "ACCEPTED" ] \
+    || fail "a verified account must be able to accept its invitation"
+  # ...and asking to verify again is a conflict, not another mail.
+  V_DONE=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/v1/users/me/verify-email" \
+    -H "Authorization: Bearer $VER_TOKEN")
+  [ "$V_DONE" = "409" ] || fail "expected 409 asking to verify an already verified address, got $V_DONE"
+fi
+
+line "89. Forgot password answers 202 for any address, registered or not"
+FP_KNOWN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/forgot-password" \
+  -H "Content-Type: application/json" -d "{\"userEmail\":\"$VER_EMAIL\"}")
+FP_UNKNOWN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/forgot-password" \
+  -H "Content-Type: application/json" -d '{"userEmail":"nobody+'"$(date +%s)"'@example.com"}')
+FP_INVALID=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/forgot-password" \
+  -H "Content-Type: application/json" -d '{"userEmail":"not-an-email"}')
+echo "registered: $FP_KNOWN   unknown: $FP_UNKNOWN   malformed: $FP_INVALID"
+# Identical answers, so this cannot be used to ask who has an account here.
+[ "$FP_KNOWN" = "202" ]   || fail "expected 202 for a registered address, got $FP_KNOWN"
+[ "$FP_UNKNOWN" = "202" ] || fail "expected 202 for an unknown address too, got $FP_UNKNOWN"
+[ "$FP_INVALID" = "400" ] || fail "expected 400 for a malformed address, got $FP_INVALID"
+
+line "90. The reset link sets a new password and kills every session"
+if [ -z "$MAIL_LOG" ]; then
+  echo "skipped (no MAIL_LOG)"
+else
+  RESET_LINK=$(mail_link_for_purpose PASSWORD_RESET "$VER_EMAIL")
+  [ -n "$RESET_LINK" ] || fail "no reset link found in $MAIL_LOG for $VER_EMAIL"
+  RESET_CODE="${RESET_LINK##*/}"
+  echo "link: $RESET_LINK"
+  R_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/reset-password" \
+    -H "Content-Type: application/json" \
+    -d "{\"token\":\"$RESET_CODE\",\"newPassword\":\"brandnew789\"}")
+  [ "$R_STATUS" = "204" ] || fail "expected 204 from reset-password, got $R_STATUS"
+  # The session that existed before the reset is gone, without waiting for
+  # the access token to expire.
+  R_OLD_TOKEN=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE_URL/api/v1/users/me" -H "Authorization: Bearer $VER_TOKEN")
+  R_OLD_PW=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/login" -H "Content-Type: application/json" \
+    -d "{\"userEmail\":\"$VER_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
+  R_NEW_PW=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/login" -H "Content-Type: application/json" \
+    -d "{\"userEmail\":\"$VER_EMAIL\",\"userPassword\":\"brandnew789\"}")
+  R_REUSE=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/reset-password" \
+    -H "Content-Type: application/json" \
+    -d "{\"token\":\"$RESET_CODE\",\"newPassword\":\"another999\"}")
+  echo "old token: $R_OLD_TOKEN   old password: $R_OLD_PW   new password: $R_NEW_PW   link again: $R_REUSE"
+  [ "$R_OLD_TOKEN" = "401" ] || fail "a session from before the reset must be dead, got $R_OLD_TOKEN"
+  [ "$R_OLD_PW" = "401" ]    || fail "the old password must stop working, got $R_OLD_PW"
+  [ "$R_NEW_PW" = "200" ]    || fail "the new password must log in, got $R_NEW_PW"
+  [ "$R_REUSE" = "409" ]     || fail "a reset link must work only once, got $R_REUSE"
+fi
+
+line "91. The mailed links are never handed out over HTTP"
+# Whatever else these endpoints do, no response may carry a token: the only
+# copy leaves through the mail, and only its hash is stored.
+NO_LEAK=$(curl -sS -X POST "$BASE/forgot-password" -H "Content-Type: application/json" \
+  -d "{\"userEmail\":\"$VER_EMAIL\"}")
+[ -z "$NO_LEAK" ] || fail "forgot-password must answer with an empty body, got: $NO_LEAK"
+LEAK_ME=$(curl -sS "$BASE_URL/api/v1/users/me" -H "Authorization: Bearer $CAR_TOKEN")
+echo "$LEAK_ME" | grep -qi "token" && fail "GET /users/me must not mention a token"
+echo "no token in any response body"
 
 line "All checks passed"

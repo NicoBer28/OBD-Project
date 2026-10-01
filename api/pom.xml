@@ -123,6 +123,16 @@
             <artifactId>testcontainers-junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Used only by ResendMailer, which is inactive unless
+             app.mail.provider=resend. Pinned: LATEST resolves to whatever is
+             newest at build time, so two builds of the same commit can differ
+             and an offline or CI build fails outright. -->
+        <dependency>
+            <groupId>com.resend</groupId>
+            <artifactId>resend-java</artifactId>
+            <version>4.28.0</version>
+        </dependency>
+
     </dependencies>
 
 	<build>
