@@ -3,7 +3,7 @@ plugins {
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
     // Para la base de datos local
-    id("com.google.devtools.ksp") version "2.2.20-2.0.4"
+    id("com.google.devtools.ksp") version "2.3.12"
 }
 
 android {
@@ -53,7 +53,7 @@ flutter {
 dependencies {
     implementation("com.google.android.gms:play-services-location:21.2.0")
     // Dependencias de Room (para la base de datos local)
-    val room_version = "2.6.1"
+    val room_version = "2.8.5"
     implementation("androidx.room:room-runtime:$room_version")
     implementation("androidx.room:room-ktx:$room_version")
     ksp("androidx.room:room-compiler:$room_version")
