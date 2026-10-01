@@ -48,6 +48,12 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     }
 
     override suspend fun doWork(): Result = mutex.withLock {
+        val dao = AppDatabase.getDatabase(applicationContext).obdDao()
+
+        // Red de seguridad: un viaje que quedó abierto sin que nadie programara su cierre
+        // (el proceso murió en pleno viaje) se cierra acá.
+        TripGrace.cerrarViajeVencido(applicationContext, dao)
+
         val session = NativeSession.read(applicationContext)
         val token = session?.accessToken
         if (session == null || token == null) {
@@ -57,7 +63,6 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
         val api = ApiClient.service(session.baseUrl)
         val auth = "Bearer $token"
-        val dao = AppDatabase.getDatabase(applicationContext).obdDao()
 
         Log.i(TAG, "🔄 Iniciando sincronización...")
 

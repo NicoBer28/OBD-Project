@@ -20,7 +20,9 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 //Foreground Service que se ejecuta en segundo plano cuando el auto está encendido y conectado al ESP32
 class ObdCompanionService : CompanionDeviceService() {
@@ -46,8 +48,20 @@ class ObdCompanionService : CompanionDeviceService() {
     private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     private var bluetoothGatt: BluetoothGatt? = null
 
+    // --- RECONEXIÓN Y TIEMPO DE GRACIA (el umbral es TripGrace.TIEMPO_DE_GRACIA_MS) ---
+    // El estado de la conexión se toca solo desde el hilo principal.
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val conectarRunnable = Runnable { conectarBLE() }
+    // MAC del ESP32 mientras Android lo ve presente; null si el auto desapareció.
+    private var macActual: String? = null
+    private var intentosReconexion = 0
     private var disconnectJob: Job? = null
-    private val TIEMPO_DE_GRACIA_MS = 3 * 60 * 1000L // 3 minutos
+    private var recuperacionJob: Job? = null
+    // true mientras no llegan datos (todavía no conectó, o se cayó el enlace).
+    @Volatile private var enlaceCaido = true
+    // Momento del último paquete BLE recibido: es la hora real de fin si el viaje se cierra.
+    // 0 = no hay datos de un viaje en curso.
+    @Volatile private var ultimoDatoMs = 0L
 
     // --- BASE DE DATOS Y BUFFER LOCAL ---
     private lateinit var db: AppDatabase
@@ -69,6 +83,8 @@ class ObdCompanionService : CompanionDeviceService() {
         private const val MUESTREO_MIN_MS = 1_000L       // 1 muestra por segundo
         private const val CHUNK_MAX_MUESTRAS = 60        // se guarda al llegar a 60 muestras...
         private const val CHUNK_MAX_EDAD_MS = 15_000L    // ...o a los 15 s, lo que pase primero
+        private const val RECONEXION_BASE_MS = 1_000L    // espera antes de conectar; se duplica en cada fallo...
+        private const val RECONEXION_MAX_MS = 30_000L    // ...hasta este tope
     }
 
     // TODO: Mejorar lógica de detección de inicio real del auto
@@ -81,6 +97,10 @@ class ObdCompanionService : CompanionDeviceService() {
 
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         crearCanalNotificacion()
+
+        // Si el proceso murió con un viaje abierto y ya pasó el tiempo de gracia, se cierra
+        // ahora (con la hora de su último dato) en vez de retomarlo como si fuera el mismo.
+        recuperacionJob = serviceScope.launch { TripGrace.cerrarViajeVencido(applicationContext, dao) }
 
         // Red de seguridad: si algún aviso de sync se perdió, cada 15 min se reintenta.
         SyncScheduler.schedulePeriodic(this)
@@ -95,9 +115,8 @@ class ObdCompanionService : CompanionDeviceService() {
         }
         Log.i("OBD-C", "Auto detectado ($macAddress). Iniciando Viaje...")
 
-        //si habia un contarizador, lo cancelamos
-        disconnectJob?.cancel()
-        disconnectJob = null
+        // El tiempo de gracia NO se cancela acá: que Android vea al ESP32 no garantiza que
+        // lleguen datos. Lo cancela el primer paquete recibido (alRecuperarEnlace).
 
         carIdActual = NativeSession.read(this)?.carId
         if (carIdActual == null) {
@@ -116,45 +135,111 @@ class ObdCompanionService : CompanionDeviceService() {
 
         iniciarTrackingGPS()
 
-        conectarBLE(macAddress)
+        macActual = macAddress.uppercase()
+        intentosReconexion = 0
+        Log.i("OBD-C", "Antena ocupada leyendo aparición. Esperando 1 segundo...")
+        // Retrasamos la conexión (para no saturar)
+        programarConexion(RECONEXION_BASE_MS)
     }
 
     // se desconectó del ESP32 (auto apagado o fuera de rango)
     override fun onDeviceDisappeared(associationInfo: AssociationInfo) {
         Log.i("OBD-C", "Auto apagado. Esperando tiempo de gracia...")
 
-        val tiempoExactoDesconexion = System.currentTimeMillis()
-
+        macActual = null
+        mainHandler.removeCallbacks(conectarRunnable)
         detenerTrackingGPS()
-        desconectarBLE()
-
-        // Lo que quedó en RAM se guarda YA, no al final del tiempo de gracia.
-        guardarBufferEnDb()
-
-        disconnectJob = serviceScope.launch {
-            delay(TIEMPO_DE_GRACIA_MS)
-
-            Log.i("OBD-C", "⏳ Tiempo de gracia expirado. Finalizando Viaje definitivamente...")
-
-            if (isTripActive) {
-                finalizarViajeLocal(lastFuel, tiempoExactoDesconexion)
-                isTripActive = false
-            }
-
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf() // Apagamos el servicio de Android
-        }
+        alCaerEnlace()
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(conectarRunnable)
         detenerTrackingGPS()
         desconectarBLE()
+        // La espera en memoria muere con el servicio; el cierre queda en manos de WorkManager.
+        disconnectJob?.cancel()
+        registrarCorte()
         // Si Android mata el servicio, que no se pierda lo que estaba en RAM.
         val pendiente = extraerChunk()
         if (pendiente != null) {
             runBlocking(Dispatchers.IO) { persistirChunk(pendiente) }
         }
         super.onDestroy()
+    }
+
+    // Se perdió la conexión con el ESP32: error de GATT, desconexión o auto fuera de rango.
+    private fun alCaerEnlace() {
+        enlaceCaido = true
+        desconectarBLE()
+
+        // Lo que quedó en RAM se guarda YA, no al final del tiempo de gracia.
+        guardarBufferEnDb()
+
+        iniciarTiempoDeGracia()
+    }
+
+    // Volvieron a llegar datos antes de que venza el tiempo de gracia: el viaje sigue.
+    private fun alRecuperarEnlace() {
+        // Aviso repetido, o paquete tardío de una conexión que ya se cerró.
+        if (!enlaceCaido || bluetoothGatt == null) return
+
+        enlaceCaido = false
+        intentosReconexion = 0
+        disconnectJob?.cancel()
+        disconnectJob = null
+        guardarUltimoDato()
+    }
+
+    private fun iniciarTiempoDeGracia() {
+        // Si ya está corriendo no se reinicia: no llegó ningún dato desde el primer corte,
+        // así que el corte sigue siendo el mismo.
+        if (disconnectJob?.isActive == true) return
+
+        registrarCorte()
+
+        // Se cuenta desde el último dato recibido, no desde que Android avisa del corte.
+        val ultimo = ultimoDatoMs
+        val espera = if (ultimo > 0) {
+            (ultimo + TripGrace.TIEMPO_DE_GRACIA_MS - System.currentTimeMillis()).coerceAtLeast(0)
+        } else {
+            TripGrace.TIEMPO_DE_GRACIA_MS
+        }
+
+        disconnectJob = serviceScope.launch {
+            delay(espera)
+
+            // Una vez vencido no se cancela a medias: el cierre en la base y el estado en
+            // memoria tienen que quedar coherentes.
+            withContext(NonCancellable) {
+                Log.i("OBD-C", "⏳ Tiempo de gracia expirado. Finalizando Viaje definitivamente...")
+                TripGrace.cerrarViajeVencido(applicationContext, dao)
+                isTripActive = false
+                ultimoDatoMs = 0L
+            }
+
+            withContext(Dispatchers.Main) {
+                // Si el auto sigue presente se sigue intentando reconectar: cuando vuelvan
+                // los datos arranca un viaje nuevo.
+                if (macActual == null) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf() // Apagamos el servicio de Android
+                }
+            }
+        }
+    }
+
+    // Deja el corte asentado fuera de la memoria del servicio, para que el viaje se cierre
+    // (con la hora correcta) aunque Android destruya el servicio durante la espera.
+    private fun registrarCorte() {
+        val corte = ultimoDatoMs
+        if (corte == 0L) return
+        TripGrace.guardarUltimoDato(applicationContext, corte, lastFuel)
+        TripGrace.programarCierre(applicationContext, corte)
+    }
+
+    private fun guardarUltimoDato() {
+        val ultimo = ultimoDatoMs
+        if (ultimo > 0) TripGrace.guardarUltimoDato(applicationContext, ultimo, lastFuel)
     }
 
     private fun iniciarTrackingGPS() {
@@ -203,35 +288,49 @@ class ObdCompanionService : CompanionDeviceService() {
     }
 
 
-    private fun conectarBLE(macAddress: String) {
-        val macMayusculas = macAddress.uppercase()
-        Log.i("OBD-C", "Antena ocupada leyendo aparición. Esperando 1 segundo...")
+    private fun programarConexion(esperaMs: Long) {
+        mainHandler.removeCallbacks(conectarRunnable)
+        mainHandler.postDelayed(conectarRunnable, esperaMs)
+    }
 
-        // Retrasamos la conexión 1000 milisegundos (para no saturar)
-        Handler(Looper.getMainLooper()).postDelayed({
-            try {
-                val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-                val adapter = bluetoothManager.adapter
-                val device = adapter.getRemoteDevice(macMayusculas)
+    // Tras una caída del enlace: se reintenta mientras el auto siga presente, cada vez más
+    // espaciado para no saturar la antena si el ESP32 no responde.
+    private fun reintentarConexion() {
+        if (macActual == null) return
+        val espera = (RECONEXION_BASE_MS shl intentosReconexion.coerceAtMost(5))
+            .coerceAtMost(RECONEXION_MAX_MS)
+        intentosReconexion++
+        Log.i("OBD-C", "Reintentando conexión BLE en $espera ms (intento $intentosReconexion)...")
+        programarConexion(espera)
+    }
 
-                Log.i("OBD-C", "Intentando dar la mano (GATT LE) al ESP32 ($macMayusculas)...")
+    private fun conectarBLE() {
+        val mac = macActual ?: return     // el auto desapareció mientras esperábamos
+        if (bluetoothGatt != null) return // ya hay una conexión en curso
 
-                bluetoothGatt = device.connectGatt(
-                    this@ObdCompanionService,
-                    true,
-                    gattCallback,
-                    BluetoothDevice.TRANSPORT_LE
-                )
+        try {
+            val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+            val adapter = bluetoothManager.adapter
+            val device = adapter.getRemoteDevice(mac)
 
-                if (bluetoothGatt == null) {
-                    Log.e("OBD-C", "Android se negó a iniciar la conexión GATT.")
-                }
-            } catch (e: SecurityException) {
-                Log.e("OBD-C", "🚨 FALTA PERMISO BLUETOOTH_CONNECT: ${e.message}")
-            } catch (e: Exception) {
-                Log.e("OBD-C", "Error fatal conectando BLE: ${e.message}")
+            Log.i("OBD-C", "Intentando dar la mano (GATT LE) al ESP32 ($mac)...")
+
+            bluetoothGatt = device.connectGatt(
+                this@ObdCompanionService,
+                true,
+                gattCallback,
+                BluetoothDevice.TRANSPORT_LE
+            )
+
+            if (bluetoothGatt == null) {
+                Log.e("OBD-C", "Android se negó a iniciar la conexión GATT.")
+                reintentarConexion()
             }
-        }, 1000) //ms
+        } catch (e: SecurityException) {
+            Log.e("OBD-C", "🚨 FALTA PERMISO BLUETOOTH_CONNECT: ${e.message}")
+        } catch (e: Exception) {
+            Log.e("OBD-C", "Error fatal conectando BLE: ${e.message}")
+        }
     }
 
     private fun desconectarBLE() {
@@ -245,37 +344,46 @@ class ObdCompanionService : CompanionDeviceService() {
 
         // Se ejecuta cuando el ESP32 acepta o rechaza la conexión
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.e("OBD-C", "Error GATT: status=$status. Cerrando conexión para liberar memoria.")
-                gatt.close()
-                bluetoothGatt = null
-                return
-            }
+            // Este callback llega en un hilo de Binder; el estado se maneja en el principal.
+            mainHandler.post {
+                if (gatt !== bluetoothGatt) return@post // aviso tardío de una conexión ya descartada
 
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.i("OBD-C", "GATT Conectado. Buscando servicios OBD...")
-                gatt.discoverServices()
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                Log.w("OBD-C", "GATT Desconectado.")
+                if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
+                    Log.i("OBD-C", "GATT Conectado. Buscando servicios OBD...")
+                    gatt.discoverServices()
+                } else if (status != BluetoothGatt.GATT_SUCCESS || newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    // Un microcorte suele llegar como error (status 8 = timeout, 133). Antes
+                    // se cerraba la conexión y no se volvía a intentar nunca más.
+                    Log.w("OBD-C", "Enlace BLE caído (status=$status).")
+                    alCaerEnlace()
+                    reintentarConexion()
+                }
             }
         }
 
         // Se ejecuta cuando Android termina de leer los UUIDs del ESP32
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                val service = gatt.getService(OBD_SERVICE_UUID)
-                val characteristic = service?.getCharacteristic(NOTIFY_CHARACTERISTIC_UUID)
+            val characteristic = if (status == BluetoothGatt.GATT_SUCCESS) {
+                gatt.getService(OBD_SERVICE_UUID)?.getCharacteristic(NOTIFY_CHARACTERISTIC_UUID)
+            } else {
+                null
+            }
 
-                if (characteristic != null) {
-                    Log.i("OBD-C", "Característica encontrada. Suscribiendo...")
+            if (characteristic != null) {
+                Log.i("OBD-C", "Característica encontrada. Suscribiendo...")
 
-                    gatt.setCharacteristicNotification(characteristic, true)
+                gatt.setCharacteristicNotification(characteristic, true)
 
-                    val descriptor = characteristic.getDescriptor(CCCD_UUID)
-                    descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    gatt.writeDescriptor(descriptor)
-                } else {
-                    Log.e("OBD-C", "No se encontró la característica de notificación")
+                val descriptor = characteristic.getDescriptor(CCCD_UUID)
+                descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                gatt.writeDescriptor(descriptor)
+            } else {
+                // Conectado pero sin datos no sirve: se empieza de nuevo.
+                Log.e("OBD-C", "No se encontró la característica de notificación (status=$status)")
+                mainHandler.post {
+                    if (gatt !== bluetoothGatt) return@post
+                    alCaerEnlace()
+                    reintentarConexion()
                 }
             }
         }
@@ -294,6 +402,9 @@ class ObdCompanionService : CompanionDeviceService() {
 
     private fun recepcionDatos(bytes: ByteArray) {
         if (bytes.isEmpty()) return
+
+        ultimoDatoMs = System.currentTimeMillis()
+        if (enlaceCaido) mainHandler.post { alRecuperarEnlace() }
 
         decodificarBytes(bytes)
 
@@ -390,6 +501,8 @@ class ObdCompanionService : CompanionDeviceService() {
 
     private suspend fun persistirChunk(chunk: TelemetryChunk) {
         dao.insertChunk(chunk)
+        // Mientras llegan datos, la marca en disco nunca queda más vieja que un chunk.
+        guardarUltimoDato()
         // Le avisamos al WorkManager que hay datos nuevos (sube solo cuando haya internet).
         SyncScheduler.requestSync(applicationContext)
     }
@@ -415,6 +528,9 @@ class ObdCompanionService : CompanionDeviceService() {
     // El servicio SOLO escribe en la base local. La red la maneja únicamente el SyncWorker:
     // antes el servicio y el worker podían iniciar el mismo viaje a la vez (→ 409 / duplicados).
     private suspend fun iniciarViajeLocal(carId: String, nivelNaftaInicial: Int) {
+        // Primero termina la revisión de onCreate: un viaje vencido no se retoma.
+        recuperacionJob?.join()
+
         val activeTrip = dao.getActiveTrip()
         if (activeTrip != null) {
             Log.i("OBD-DB", "Se retoma el viaje local ${activeTrip.localId}")
@@ -433,13 +549,5 @@ class ObdCompanionService : CompanionDeviceService() {
         dao.insertTrip(nuevo)
         Log.i("OBD-DB", "¡Nuevo viaje creado en SQLite! ID local: ${nuevo.localId}")
         SyncScheduler.requestSync(applicationContext)
-    }
-
-    private suspend fun finalizarViajeLocal(nivelNaftaFinal: Int?, tiempoFin: Long) {
-        val filas = dao.closeActiveTrip(tiempoFin, nivelNaftaFinal)
-        if (filas > 0) {
-            Log.i("OBD-DB", "Viaje cerrado en SQLite local.")
-            SyncScheduler.requestSync(applicationContext)
-        }
     }
 }
