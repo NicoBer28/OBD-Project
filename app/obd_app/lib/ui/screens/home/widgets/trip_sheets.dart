@@ -152,13 +152,10 @@ class _StartTripSheetState extends State<StartTripSheet> {
     });
   }
 
-  Future<void> _scanForInvite() async {
-    final result = await ScanQrScreen.show(context);
-    if (result == null || !mounted) return;
-    setState(() {
-      _inviteEmail.text = result.email;
-      if (result.name != null) _inviteName.text = result.name!;
-    });
+  void _showQr() {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Iniciá el viaje primero para poder mostrar el código QR.')));
   }
 
   void _warn(String text) {
@@ -329,7 +326,7 @@ class _StartTripSheetState extends State<StartTripSheet> {
                 onAddGuest: _addGuest,
                 inviteEmailController: _inviteEmail,
                 inviteNameController: _inviteName,
-                onScan: _scanForInvite,
+                onScan: _showQr,
                 onInvite: _invite,
               ),
               const SizedBox(height: 20),

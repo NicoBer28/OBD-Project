@@ -10,6 +10,7 @@ import 'package:obd_app/core/theme/app_theme.dart';
 import 'package:obd_app/core/utils/api_messages.dart';
 import 'package:obd_app/core/utils/trip_format.dart';
 import 'package:obd_app/core/utils/trip_share_text.dart';
+import 'package:obd_app/core/utils/qr_payload.dart';
 import 'package:obd_app/data/api/obd_api.dart';
 import 'package:obd_app/ui/screens/groups/scan_qr_screen.dart';
 import 'package:obd_app/ui/screens/home/widgets/add_person_section.dart';
@@ -111,6 +112,8 @@ class _TripPeopleSheetState extends State<TripPeopleSheet> {
       final participants = await widget.controller.tripParticipants(widget.trip.id);
       if (!mounted) return;
       setState(() => _participants = participants);
+      final updated = widget.trip.copyWith(participants: _participants!);
+      widget.controller.updateTripLocally(updated);
       unawaited(_loadSplit());
     } on ObdApiException catch (e) {
       if (mounted) setState(() => _loadError = e);
@@ -164,6 +167,8 @@ class _TripPeopleSheetState extends State<TripPeopleSheet> {
       _participants = [...?_participants, added];
       _addMode = AddPersonMode.none;
     });
+    final updated = widget.trip.copyWith(participants: _participants!);
+    widget.controller.updateTripLocally(updated);
     unawaited(_loadSplit());
   }
 
@@ -187,13 +192,16 @@ class _TripPeopleSheetState extends State<TripPeopleSheet> {
     }
   }
 
-  Future<void> _scanForInvite() async {
-    final result = await ScanQrScreen.show(context);
-    if (result == null || !mounted) return;
-    setState(() {
-      _inviteEmail.text = result.email;
-      if (result.name != null) _inviteName.text = result.name!;
-    });
+  Future<void> _showQr() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      backgroundColor: context.tokens.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => _TripQrSheet(tripId: widget.trip.id),
+    );
   }
 
   Future<void> _invite() async {
@@ -336,7 +344,7 @@ class _TripPeopleSheetState extends State<TripPeopleSheet> {
                     onAddGuest: _addGuest,
                     inviteEmailController: _inviteEmail,
                     inviteNameController: _inviteName,
-                    onScan: _scanForInvite,
+                    onScan: _showQr,
                     onInvite: _invite,
                   ),
                 ],
@@ -698,6 +706,50 @@ class _LoadErrorCard extends StatelessWidget {
           Text(ApiMessages.of(error), style: TextStyle(fontSize: 13, color: t.text)),
           const SizedBox(height: 10),
           OutlinedButton(onPressed: onRetry, child: const Text('Reintentar')),
+        ],
+      ),
+    );
+  }
+}
+
+class _TripQrSheet extends StatelessWidget {
+  final String tripId;
+
+  const _TripQrSheet({required this.tripId});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final text = QrPayload.trip(tripId);
+
+    return Padding(
+      padding: _sheetPadding(context),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('QR para unirse', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, letterSpacing: -.4)),
+          const SizedBox(height: 4),
+          Text(
+            'Que tus acompañantes escaneen este código desde la pestaña Compartido para unirse al viaje.',
+            style: TextStyle(fontSize: 12, color: t.muted),
+          ),
+          const SizedBox(height: 18),
+          Center(
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18)),
+              child: QrImageView(data: text, size: 200, backgroundColor: Colors.white),
+            ),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cerrar'),
+            ),
+          ),
         ],
       ),
     );

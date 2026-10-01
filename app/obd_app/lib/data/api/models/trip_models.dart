@@ -18,6 +18,7 @@ class Trip {
     this.fuelUsed,
     this.distance,
     this.cost,
+    this.participants = const [],
   });
 
   factory Trip.fromJson(Map<String, dynamic> json) => Trip(
@@ -32,10 +33,33 @@ class Trip {
     distance: json.integer('distance'),
     active: json.flag('active'),
     cost: json.integer('cost'),
+    participants: json.containsKey('participants')
+        ? parseList(json['participants'], TripParticipant.fromJson)
+        : const [],
   );
 
   final String id;
   final String carId;
+  final List<TripParticipant> participants;
+
+  Trip copyWith({
+    List<TripParticipant>? participants,
+  }) {
+    return Trip(
+      id: id,
+      carId: carId,
+      driverId: driverId,
+      active: active,
+      startedAt: startedAt,
+      endedAt: endedAt,
+      initialFuel: initialFuel,
+      finalFuel: finalFuel,
+      fuelUsed: fuelUsed,
+      distance: distance,
+      cost: cost,
+      participants: participants ?? this.participants,
+    );
+  }
 
   /// Always the token holder at the time the trip started — a trip cannot be
   /// logged in someone else's name.

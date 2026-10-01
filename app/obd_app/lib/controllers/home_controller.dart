@@ -434,6 +434,11 @@ class HomeController extends ChangeNotifier {
     _notify();
   }
 
+  void updateTripLocally(Trip updated) {
+    carTrips = [for (final t in carTrips) t.id == updated.id ? updated : t];
+    _notify();
+  }
+
   /// Los miembros del grupo del auto que todavía no están en [participants]
   /// de un viaje, ni son su conductor — a quién le ofrece elegir "Del grupo".
   List<GroupMember> selectableMembers({
@@ -464,6 +469,8 @@ class HomeController extends ChangeNotifier {
 
   Future<TripParticipant> addGuestParticipant(String tripId, String name) =>
       _api.trips.addGuest(tripId: tripId, name: name);
+
+  Future<TripParticipant> joinTrip(String tripId) => _api.trips.joinParticipant(tripId);
 
   Future<void> removeParticipant(String tripId, String participantId) =>
       _api.trips.removeParticipant(tripId: tripId, participantId: participantId);
