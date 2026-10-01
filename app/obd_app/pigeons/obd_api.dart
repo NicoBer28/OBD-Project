@@ -16,6 +16,10 @@ class TelemetryEvent {
   int? fuel;
   double? lat;
   double? lng;
+
+  /// Auto del que vienen los datos (sale de la MAC del ESP32). Null si ese ESP32 no está
+  /// vinculado a ningún auto en este celular.
+  String? carId;
 }
 
 @FlutterApi()

@@ -187,7 +187,12 @@ data class TelemetryEvent (
   val rpm: Long? = null,
   val fuel: Long? = null,
   val lat: Double? = null,
-  val lng: Double? = null
+  val lng: Double? = null,
+  /**
+   * Auto del que vienen los datos (sale de la MAC del ESP32). Null si ese ESP32 no está
+   * vinculado a ningún auto en este celular.
+   */
+  val carId: String? = null
 )
  {
   companion object {
@@ -197,7 +202,8 @@ data class TelemetryEvent (
       val fuel = pigeonVar_list[2] as Long?
       val lat = pigeonVar_list[3] as Double?
       val lng = pigeonVar_list[4] as Double?
-      return TelemetryEvent(speed, rpm, fuel, lat, lng)
+      val carId = pigeonVar_list[5] as String?
+      return TelemetryEvent(speed, rpm, fuel, lat, lng, carId)
     }
   }
   fun toList(): List<Any?> {
@@ -207,6 +213,7 @@ data class TelemetryEvent (
       fuel,
       lat,
       lng,
+      carId,
     )
   }
   override fun equals(other: Any?): Boolean {
@@ -217,7 +224,7 @@ data class TelemetryEvent (
       return true
     }
     val other = other as TelemetryEvent
-    return ObdApiPigeonUtils.deepEquals(this.speed, other.speed) && ObdApiPigeonUtils.deepEquals(this.rpm, other.rpm) && ObdApiPigeonUtils.deepEquals(this.fuel, other.fuel) && ObdApiPigeonUtils.deepEquals(this.lat, other.lat) && ObdApiPigeonUtils.deepEquals(this.lng, other.lng)
+    return ObdApiPigeonUtils.deepEquals(this.speed, other.speed) && ObdApiPigeonUtils.deepEquals(this.rpm, other.rpm) && ObdApiPigeonUtils.deepEquals(this.fuel, other.fuel) && ObdApiPigeonUtils.deepEquals(this.lat, other.lat) && ObdApiPigeonUtils.deepEquals(this.lng, other.lng) && ObdApiPigeonUtils.deepEquals(this.carId, other.carId)
   }
 
   override fun hashCode(): Int {
@@ -227,10 +234,11 @@ data class TelemetryEvent (
     result = 31 * result + ObdApiPigeonUtils.deepHash(this.fuel)
     result = 31 * result + ObdApiPigeonUtils.deepHash(this.lat)
     result = 31 * result + ObdApiPigeonUtils.deepHash(this.lng)
+    result = 31 * result + ObdApiPigeonUtils.deepHash(this.carId)
     return result
   }
   override fun toString(): String {
-    return "TelemetryEvent(speed=$speed, rpm=$rpm, fuel=$fuel, lat=$lat, lng=$lng)"
+    return "TelemetryEvent(speed=$speed, rpm=$rpm, fuel=$fuel, lat=$lat, lng=$lng, carId=$carId)"
   }
 }
 private open class ObdApiPigeonCodec : StandardMessageCodec() {

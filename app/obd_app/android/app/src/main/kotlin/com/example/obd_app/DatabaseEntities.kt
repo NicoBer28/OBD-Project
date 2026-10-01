@@ -26,3 +26,12 @@ data class TelemetryChunk(
     val syncStatus: String,          // "PENDING", "SYNCED", "FAILED"
     val retryCount: Int = 0
 )
+
+// Qué ESP32 (MAC, siempre en mayúsculas) corresponde a qué auto en este celular.
+@Entity(tableName = "associations")
+data class Association(
+    @PrimaryKey val mac: String,
+    val associationId: Int,          // id de la asociación en CompanionDeviceManager
+    val carId: String,
+    val createdAt: Long
+)

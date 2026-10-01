@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:obd_app/core/constants/app_icons.dart';
-import 'package:obd_app/core/native_bridge.dart';
 import 'package:obd_app/core/theme/app_theme.dart';
 import 'package:obd_app/core/utils/trip_format.dart';
 import 'package:obd_app/data/api/obd_api.dart';
 import 'package:obd_app/models/models.dart';
+import 'package:obd_app/ui/screens/home/widgets/link_device_button.dart';
 import 'package:obd_app/ui/widgets/widgets.dart';
 
 class VitalData {
@@ -268,6 +268,8 @@ class NextTurnCard extends StatelessWidget {
 /// ---------------------------------------------------------------------------
 
 class TelemetryCard extends StatelessWidget {
+  /// Auto elegido: el botón de vincular muestra el estado de su ESP32.
+  final Car? car;
   final int speed;
   final int rpm;
   final double fuel;
@@ -276,6 +278,7 @@ class TelemetryCard extends StatelessWidget {
 
   const TelemetryCard({
     super.key,
+    required this.car,
     required this.speed,
     required this.rpm,
     required this.fuel,
@@ -325,24 +328,7 @@ class TelemetryCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              icon: const Icon(Icons.bluetooth_searching),
-              label: const Text('Vincular ESP32 (Fondo)'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue.shade700,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              onPressed: () async {
-                await NativeBleBridge.iniciarVinculacion();
-              },
-            ),
-          ),
+          LinkDeviceButton(car: car),
           const SizedBox(height: 16),
           Text(
             'Simulador de nafta UI',

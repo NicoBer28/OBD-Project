@@ -185,6 +185,7 @@ class CarTab extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               TelemetryCard(
+                car: controller.car,
                 speed: speed,
                 rpm: rpm,
                 fuel: liveFuel ?? 0,
@@ -325,6 +326,7 @@ class CarTab extends StatelessWidget {
                 ),
               const SizedBox(height: 16),
               TelemetryCard(
+                car: controller.car,
                 speed: speed,
                 rpm: rpm,
                 fuel: liveFuel ?? (car.fuelLevel ?? 0).toDouble(),

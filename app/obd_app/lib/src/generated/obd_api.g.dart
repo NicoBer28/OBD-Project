@@ -86,6 +86,7 @@ class TelemetryEvent {
     this.fuel,
     this.lat,
     this.lng,
+    this.carId,
   });
 
   int? speed;
@@ -98,6 +99,10 @@ class TelemetryEvent {
 
   double? lng;
 
+  /// Auto del que vienen los datos (sale de la MAC del ESP32). Null si ese ESP32 no está
+  /// vinculado a ningún auto en este celular.
+  String? carId;
+
   List<Object?> _toList() {
     return <Object?>[
       speed,
@@ -105,6 +110,7 @@ class TelemetryEvent {
       fuel,
       lat,
       lng,
+      carId,
     ];
   }
 
@@ -120,6 +126,7 @@ class TelemetryEvent {
       fuel: result[2] as int?,
       lat: result[3] as double?,
       lng: result[4] as double?,
+      carId: result[5] as String?,
     );
   }
 
@@ -136,7 +143,8 @@ class TelemetryEvent {
         _deepEquals(rpm, other.rpm) &&
         _deepEquals(fuel, other.fuel) &&
         _deepEquals(lat, other.lat) &&
-        _deepEquals(lng, other.lng);
+        _deepEquals(lng, other.lng) &&
+        _deepEquals(carId, other.carId);
   }
 
   @override
@@ -145,7 +153,7 @@ class TelemetryEvent {
 
   @override
   String toString() {
-    return 'TelemetryEvent(speed: $speed, rpm: $rpm, fuel: $fuel, lat: $lat, lng: $lng)';
+    return 'TelemetryEvent(speed: $speed, rpm: $rpm, fuel: $fuel, lat: $lat, lng: $lng, carId: $carId)';
   }
 }
 

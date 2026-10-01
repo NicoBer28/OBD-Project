@@ -17,12 +17,14 @@ import java.util.Locale
 import java.util.TimeZone
 
 /**
- * Vacía la cola local hacia el backend. Orden: iniciar viajes → telemetría → cerrar viajes.
+ * Vacía la cola local hacia el backend, auto por auto. Orden para cada auto: iniciar
+ * viajes → telemetría → cerrar viajes.
  *
  * Reglas de error (lo importante es que un dato roto nunca bloquee la cola):
  * - 2xx                → listo, se borra / se marca.
  * - 401                → token vencido. Se corta SIN borrar nada; sube cuando Flutter mande
- *                        un token nuevo (eso vuelve a encolar este worker).
+ *                        un token nuevo (eso vuelve a encolar este worker). Corta la corrida
+ *                        entera: el token es del usuario, el mismo para todos sus autos.
  * - red, 408, 429, 5xx → Result.retry() con backoff exponencial.
  * - otro 4xx           → el servidor lo rechaza: se marca FAILED y se sigue con el resto.
  *
@@ -35,7 +37,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
     companion object {
         private const val TAG = "OBD-SYNC"
-        private const val MAX_RONDAS_CHUNKS = 20 // 20 x 50 chunks por corrida, como mucho
+        private const val MAX_RONDAS_CHUNKS = 20 // 20 x 50 chunks por auto en cada corrida, como mucho
 
         // El worker único y el periódico podrían coincidir: que no corran a la vez.
         private val mutex = Mutex()
@@ -52,32 +54,47 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
         // Red de seguridad: un viaje que quedó abierto sin que nadie programara su cierre
         // (el proceso murió en pleno viaje) se cierra acá.
-        TripGrace.cerrarViajeVencido(applicationContext, dao)
+        TripGrace.cerrarViajesVencidos(applicationContext, dao)
 
         val session = NativeSession.read(applicationContext)
-        val token = session?.accessToken
-        if (session == null || token == null) {
+        if (session == null) {
             Log.w(TAG, "Flutter todavía no entregó la sesión. Los datos quedan en cola.")
             return@withLock Result.success()
         }
 
         val api = ApiClient.service(session.baseUrl)
-        val auth = "Bearer $token"
+        var reintentar = false
 
-        Log.i(TAG, "🔄 Iniciando sincronización...")
+        for (carId in dao.getCarIdsWithPendingWork()) {
+            val auth = authHeaderFor(carId)
+            if (auth == null) {
+                Log.w(TAG, "No hay token para subir. Los datos quedan en cola.")
+                return@withLock Result.success()
+            }
 
-        val inicio = iniciarViajes(api, auth, dao, session.userId)
-        if (inicio == Outcome.AUTH) return@withLock tokenVencido()
+            Log.i(TAG, "🔄 Iniciando sincronización del auto $carId...")
 
-        // La telemetría no depende de los viajes: se sube aunque el inicio haya fallado.
-        val telemetria = subirTelemetria(api, auth, dao)
-        if (telemetria == Outcome.AUTH) return@withLock tokenVencido()
+            val inicio = iniciarViajes(api, auth, dao, carId, session.userId)
+            if (inicio == Outcome.AUTH) return@withLock tokenVencido()
 
-        val cierre = cerrarViajes(api, auth, dao)
-        if (cierre == Outcome.AUTH) return@withLock tokenVencido()
+            // La telemetría no depende de los viajes: se sube aunque el inicio haya fallado.
+            val telemetria = subirTelemetria(api, auth, dao, carId)
+            if (telemetria == Outcome.AUTH) return@withLock tokenVencido()
 
-        val reintentar = Outcome.RETRY in listOf(inicio, telemetria, cierre)
+            val cierre = cerrarViajes(api, auth, dao, carId)
+            if (cierre == Outcome.AUTH) return@withLock tokenVencido()
+
+            if (Outcome.RETRY in listOf(inicio, telemetria, cierre)) reintentar = true
+        }
+
         if (reintentar) Result.retry() else Result.success()
+    }
+
+    // Con qué credencial se suben los datos de [carId]. Hoy es el JWT del usuario, que sirve
+    // para todos sus autos. FASE 2: pasa a ser el token de dispositivo de ese auto ("Device …").
+    private fun authHeaderFor(carId: String): String? {
+        val token = NativeSession.read(applicationContext)?.accessToken ?: return null
+        return "Bearer $token"
     }
 
     // Se devuelve success para no reintentar en loop con un token que no sirve. Cuando
@@ -89,8 +106,10 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
     // ---------------------------------------------------------------- VIAJES: INICIO
 
-    private suspend fun iniciarViajes(api: ObdApiService, auth: String, dao: ObdDao, myUserId: String?): Outcome {
-        for (viaje in dao.getTripsToStart()) {
+    private suspend fun iniciarViajes(
+        api: ObdApiService, auth: String, dao: ObdDao, carId: String, myUserId: String?
+    ): Outcome {
+        for (viaje in dao.getTripsToStart(carId)) {
             val (outcome, response) = llamar {
                 api.startTrip(auth, StartTripRequest(viaje.carId, viaje.initialFuel))
             }
@@ -144,9 +163,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
     // ---------------------------------------------------------------- TELEMETRÍA
 
-    private suspend fun subirTelemetria(api: ObdApiService, auth: String, dao: ObdDao): Outcome {
+    private suspend fun subirTelemetria(api: ObdApiService, auth: String, dao: ObdDao, carId: String): Outcome {
         repeat(MAX_RONDAS_CHUNKS) {
-            val chunks = dao.getPendingChunks()
+            val chunks = dao.getPendingChunksForCar(carId)
             if (chunks.isEmpty()) return Outcome.OK
 
             for (chunk in chunks) {
@@ -214,8 +233,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
     // ---------------------------------------------------------------- VIAJES: FIN
 
-    private suspend fun cerrarViajes(api: ObdApiService, auth: String, dao: ObdDao): Outcome {
-        for (viaje in dao.getTripsToFinish()) {
+    private suspend fun cerrarViajes(api: ObdApiService, auth: String, dao: ObdDao, carId: String): Outcome {
+        for (viaje in dao.getTripsToFinish(carId)) {
             val backendId = viaje.backendId ?: continue
             val (outcome, response) = llamar {
                 api.finishTrip(auth, backendId, FinishTripRequest(tripFinalFuel = viaje.finalFuel))

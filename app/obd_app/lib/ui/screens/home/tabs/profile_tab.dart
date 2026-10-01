@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:obd_app/controllers/home_controller.dart';
 import 'package:obd_app/core/constants/app_icons.dart';
-import 'package:obd_app/core/native_bridge.dart';
 import 'package:obd_app/core/theme/app_theme.dart';
-import 'package:obd_app/data/api/obd_api.dart';
+import 'package:obd_app/data/device_link_service.dart';
+import 'package:obd_app/ui/screens/auth/cerrar_sesion.dart';
 import 'package:obd_app/ui/screens/cars/my_cars_screen.dart';
 import 'package:obd_app/ui/screens/groups/group_sheets.dart';
 import 'package:obd_app/ui/widgets/widgets.dart';
@@ -36,35 +36,20 @@ class ProfileTab extends StatelessWidget {
     required this.onTripAlertsChanged,
   });
 
-  /// Revoca la sesión en el servidor (`POST /api/v1/auth/logout`, que invalida
-  /// todos los refresh tokens del usuario). La vuelta al login la hace
-  /// `MainScreen`, que escucha la sesión: así también se vuelve al login
-  /// cuando el refresh token vence solo.
-  ///
-  /// Si la llamada falla igual se limpia la sesión local: los tokens que
-  /// quedaron no le sirven a esta app.
-  Future<void> _cerrarSesion(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Cerrar sesión'),
-        content: const Text(
-          'Vas a tener que ingresar de nuevo con tu contraseña.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Quedarme'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Cerrar sesión'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    await ObdApi.instance.auth.logout();
+  /// Vincula el ESP32 del auto elegido (lo mismo que el botón de la pestaña Auto).
+  Future<void> _vincular(BuildContext context, String carId, String carName) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final vinculacion = await DeviceLinkService.instance.vincular(carId: carId, carName: carName);
+
+    final mensaje = switch (vinculacion.resultado) {
+      ResultadoVinculacion.cancelado => null,
+      ResultadoVinculacion.error => 'No se pudo vincular. Probá de nuevo.',
+      ResultadoVinculacion.vinculado =>
+        vinculacion.reemplazoCarId == null
+            ? 'ESP32 vinculado a $carName'
+            : 'Este ESP32 estaba vinculado a otro auto; ahora quedó en $carName',
+    };
+    if (mensaje != null) messenger.showSnackBar(SnackBar(content: Text(mensaje)));
   }
 
   @override
@@ -112,12 +97,26 @@ class ProfileTab extends StatelessWidget {
               padding: EdgeInsets.zero,
               child: Column(
                 children: [
-                  SettingTile(
-                    icon: AppIcons.bluetooth,
-                    title: 'Conexión OBD',
-                    subtitle: connectionStatus,
-                    onTap: () async {
-                      await NativeBleBridge.iniciarVinculacion();
+                  // El ESP32 del auto elegido: cada auto tiene el suyo.
+                  ListenableBuilder(
+                    listenable: DeviceLinkService.instance,
+                    builder: (context, _) {
+                      final links = DeviceLinkService.instance;
+                      final vinculando = car != null && links.estaVinculando(car.id);
+                      final asociacion = car == null ? null : links.asociacionDe(car.id);
+
+                      return SettingTile(
+                        icon: AppIcons.bluetooth,
+                        title: 'Conexión OBD',
+                        subtitle: vinculando
+                            ? 'Vinculando…'
+                            : asociacion != null
+                            ? 'Vinculado · ${asociacion.mac}'
+                            : connectionStatus,
+                        onTap: car == null || vinculando || asociacion != null
+                            ? null
+                            : () => _vincular(context, car.id, car.name),
+                      );
                     },
                   ),
                   const Divider(height: 1),
@@ -190,7 +189,7 @@ class ProfileTab extends StatelessWidget {
             ),
             const SizedBox(height: 24),
             OutlinedButton.icon(
-              onPressed: () => _cerrarSesion(context),
+              onPressed: () => confirmarYCerrarSesion(context, confirmar: true),
               icon: const Icon(AppIcons.logout),
               label: const Text('Cerrar sesión'),
               style: OutlinedButton.styleFrom(
