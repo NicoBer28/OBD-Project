@@ -93,16 +93,21 @@ typedef struct
     uint8_t data[8];
 } twai_can_rx_event_t;
 
+// handler para la int de recepcion
 static bool obd_twai_rx_handler(twai_node_handle_t handle, const twai_rx_done_event_data_t* edata, void* user_ctx)
 {
+    
+    // creo buffer y lo paso para escritura
     uint8_t recv_buff[8];
 
     twai_frame_t rx_frame = {};
     rx_frame.buffer = recv_buff;
     rx_frame.buffer_len = sizeof(recv_buff);
 
+    // si se recibio el paquete adecuadamente
     if (twai_node_receive_from_isr(handle, &rx_frame) == ESP_OK)
     {
+        // obtengo id, len y escribo en received la data del buffer
         twai_can_rx_event_t received = {};
         received.id = rx_frame.header.id;
         received.len = rx_frame.buffer_len;
@@ -112,6 +117,7 @@ static bool obd_twai_rx_handler(twai_node_handle_t handle, const twai_rx_done_ev
             received.data[i] = recv_buff[i];
         }
 
+        // mando por cola el paquete recibido y por ende mando a despertar a la tarea de lectura
         BaseType_t higher_priority_task_woken = pdFALSE;
         QueueHandle_t rx_queue = (QueueHandle_t)user_ctx;
         if (rx_queue != NULL) {
@@ -144,6 +150,7 @@ bool OBD_TWAI::init() {
         return false;
     }
 
+    // vars twai
     twai_onchip_node_config_t node_config = {};
     node_config.io_cfg.tx = tx_pin;
     node_config.io_cfg.rx = rx_pin;
@@ -179,8 +186,9 @@ void OBD_TWAI::process() {
     uint32_t current_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
     twai_can_rx_event_t received;
     
-    // Leemos de la cola bloqueante (emula twai_receive) por 10ms
+    // espero 10ms o a que me despierte la int
     if (xQueueReceive(rx_queue, &received, pdMS_TO_TICKS(10)) == pdTRUE) {
+        // si hay cola de bt, mando la data por ahi
         if (tx_queue != NULL) {
             BleCanPacket packet;
             packet.can_id = received.id;
@@ -205,9 +213,9 @@ void OBD_TWAI::process() {
 void OBD_TWAI::request_pid(BleCanPacket packet) {
     if (node_hdl == NULL) return;
 
+    // armo paquete
     twai_frame_t tx_msg = {};
     tx_msg.header.id = packet.can_id;
-    // Asumimos que si el can_id es mayor a 0x7FF, es extendido (29 bits)
     tx_msg.header.ide = (packet.can_id > 0x7FF) ? 1 : 0;
     tx_msg.header.rtr = 0;
     
@@ -218,16 +226,18 @@ void OBD_TWAI::request_pid(BleCanPacket packet) {
     tx_msg.buffer = tx_data;
     tx_msg.buffer_len = packet.dlc;
 
+    // transmito
     esp_err_t err = twai_node_transmit(node_hdl, &tx_msg, 10);
     if (err == ESP_OK) {
         tx_fail_count = 0;
-    } else {
+    }
+    // si esta fallando consistentemente, aborto comunicacion 
+    else {
         tx_fail_count++;
         ESP_LOGW("OBD_TWAI", "Fallo transmision ID 0x%03X, error: %s, fallos: %d", (unsigned int)packet.can_id, esp_err_to_name(err), tx_fail_count);
         if (tx_fail_count >= 3) {
             ESP_LOGE("OBD_TWAI", "Demasiados fallos seguidos. Abortando polling de PIDs.");
-            // No existe un clear_transmit_queue explicito en el nuevo API onchip.
-            // Si estalla, simplemente abortamos el polling_pids
+
             polling_pids.clear();
             tx_fail_count = 0;
         }

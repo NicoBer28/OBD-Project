@@ -24,7 +24,6 @@ static const char *TAG_SYS = "MAIN_TWAI";
 #define CAN_TX_PIN GPIO_NUM_2
 #define CAN_RX_PIN GPIO_NUM_3
 
-// Opcional: Pin de control de Standby/Enable del transceptor CAN
 // #define CAN_STBY_PIN GPIO_NUM_4
 
 // ============================================================================
@@ -89,13 +88,13 @@ void init_can() {
 #ifdef CAN_STBY_PIN
     // Control del Transceptor Físico
     gpio_set_direction(CAN_STBY_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(CAN_STBY_PIN, 0); // 0 para modo normal en TJA1050/SN65HVD230
+    gpio_set_level(CAN_STBY_PIN, 0);
 #endif
 
     obd_interface = new OBD_TWAI(CAN_TX_PIN, CAN_RX_PIN);
     obd_interface->set_tx_queue(ble_tx_queue);
 
-    // Paquetes soportados por Audi para testing (default OBD2)
+    // paquetes default
     std::vector<BleCanPacket> pids;
     uint8_t default_pids[] = {
         0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 
@@ -158,11 +157,8 @@ void vOBDTask(void *pvParameters) {
     ESP_LOGI(TAG_OBD, "Tarea OBD Iniciada en core %d", xPortGetCoreID());
     
     while(1) {
-        // process() incluye un twai_receive bloqueante por 10ms,
-        // por lo que no es necesario un vTaskDelay adicional.
         obd_interface->process();
         
-        // Un respiro ínfimo por si twai_receive retorna instantaneamente por trafico denso
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }

@@ -56,9 +56,11 @@ public:
     }
 
 protected:
+    // PIDs que se le pediran al auto
     std::vector<BleCanPacket> polling_pids;
     size_t current_pid_index = 0;
     
+    // cola para enviar datos de lectura CAN a BT
     QueueHandle_t tx_queue = NULL;
 };
 
@@ -90,9 +92,13 @@ public:
     void set_request_interval(uint32_t ms) { request_interval_ms = ms; }
 
 private:
+
     spi_device_handle_t* spi_handle;
+    // lo usa el mcp para avisar que llego dato
     gpio_num_t int_pin;
+
     SemaphoreHandle_t rx_sem;
+    // objeto mcp
     MCP2515* mcp;
 
     uint32_t last_request_time = 0;
@@ -120,10 +126,14 @@ public:
     void set_request_interval(uint32_t ms) { request_interval_ms = ms; }
 
 private:
+    // pines serial
     gpio_num_t tx_pin;
     gpio_num_t rx_pin;
 
+    // nodo necesario para twai
     twai_node_handle_t node_hdl = NULL;
+
+    // cola para recepcion de datos por twai
     QueueHandle_t rx_queue = NULL;
 
     uint32_t last_request_time = 0;

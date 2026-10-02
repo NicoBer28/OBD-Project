@@ -129,7 +129,7 @@ void init_spi_and_can() {
     obd_interface = new OBD_MCP2515(&spi_handle, MCP2515_INT_PIN, can_rx_semaphore);
     obd_interface->set_tx_queue(ble_tx_queue);
 
-    // Paquetes soportados por Audi para testing (default OBD2)
+    // paquetes default
     std::vector<BleCanPacket> pids;
     uint8_t default_pids[] = {
         0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 

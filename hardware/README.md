@@ -60,14 +60,13 @@ code .
 ```bash
 ./set_driver.sh <transceptor> <modelo>
 ```
-- Modelo puede ser `esp32`, `esp32-c3` o cualquier modelo compatible con las funcionalidades
-- transceptor puede ser `twai` o `mcp`
+- Modelo puede ser `esp32`, `esp32-c3` o cualquier modelo compatible con las funcionalidades (tomar en cuenta la implementación en simple o multinúcleo de las tareas en FreeRTOS)
+- Transceptor puede ser `twai` o `mcp`
 ### 3. Para compilar:
 ```bash
 idf.py build
 ```
 - Se van a descargar todas las dependencias del proyecto
-- Como alternativa, se puede setear como target `esp32-c3` y tomar consideraciones para un nucleo solo
 ### 4. La libreria del mcp2515 utilizada tiene un error de dependencias en su `CMakeLists.txt`. Para corregirlo ejecutar, desde el directorio actual:
 
 ```bash
