@@ -3,6 +3,7 @@ package com.obd.api.invitecode;
 import com.obd.api.group.*;
 import com.obd.api.group.dto.GroupDTO;
 import com.obd.api.invitecode.dto.InviteCodeDTO;
+import com.obd.api.user.UserAccess;
 import com.obd.api.invitecode.exception.InviteCodeNoLongerValidException;
 import com.obd.api.invitecode.exception.InviteCodeNotFoundException;
 import jakarta.transaction.Transactional;
@@ -31,6 +32,7 @@ public class InviteCodeService {
     private final GroupRepository groupRepository;
     private final GroupMemberRepository groupMemberRepository;
     private final GroupAccess groupAccess;
+    private final UserAccess userAccess;
 
     private final SecureRandom random = new SecureRandom();
 
@@ -44,6 +46,8 @@ public class InviteCodeService {
     @Transactional
     public InviteCodeDTO.Minted mint(UUID userId, UUID groupId, InviteCodeDTO.Create request) {
         groupAccess.requireAdmin(userId, groupId);
+
+        userAccess.requireVerifiedEmail(userId);
 
         Instant now = Instant.now();
         int ttlHours = request != null && request.ttlHours() != null ? request.ttlHours() : defaultTtlHours;

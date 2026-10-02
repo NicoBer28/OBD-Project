@@ -210,7 +210,9 @@ class PasswordResetServiceTest {
         resetService.reset(mailedToken(), NEW_PASSWORD);
 
         // Reading the link proves ownership just as well as the verification
-        // flow does, so the soft gate lifts too.
+        // flow does, so the gate lifts too - otherwise somebody who reset
+        // their password would still be walled out of the application with
+        // nothing left to click.
         assertThat(userRepository.findById(unverified.getUserId()).orElseThrow()
                 .getUserEmailVerifiedAt()).isNotNull();
     }

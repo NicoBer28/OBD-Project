@@ -9,6 +9,7 @@ import com.obd.api.user.User;
 import com.obd.api.user.UserMapper;
 import com.obd.api.user.UserRepository;
 import com.obd.api.user.dto.UserDTO;
+import com.obd.api.user.exception.EmailNotVerifiedException;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -55,7 +56,12 @@ public class AuthService {
 
     public TokenPair login(UserDTO.Login userDto){
         Authentication authentication = authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(userDto.userEmail().trim().toLowerCase(), userDto.userPassword()));
-        return pairFor((UserPrincipal) authentication.getPrincipal(), true);
+        UserPrincipal principal = (UserPrincipal) authentication.getPrincipal();
+
+        if (!principal.isEmailVerified()) {
+            throw new EmailNotVerifiedException(principal.getId());
+        }
+        return pairFor(principal, true);
     }
 
     public TokenPair refresh(String rawRefreshToken) {

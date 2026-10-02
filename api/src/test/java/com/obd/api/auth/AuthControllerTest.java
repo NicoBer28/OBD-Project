@@ -1,6 +1,7 @@
 package com.obd.api.auth;
 
 import com.obd.api.auth.dto.AuthResponseDTO;
+import com.obd.api.devicetoken.DeviceAuthFilter;
 import com.obd.api.auth.dto.TokenPair;
 import com.obd.api.auth.exception.EmailAlreadyInUseException;
 import com.obd.api.auth.refresh.RefreshCookie;
@@ -57,7 +58,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(controllers = AuthController.class,
         excludeFilters = @ComponentScan.Filter(
                 type = FilterType.ASSIGNABLE_TYPE,
-                classes = {SecurityConfig.class, JwtAuthFilter.class, JwtAuthEntryPoint.class}))
+                classes = {SecurityConfig.class, JwtAuthFilter.class, JwtAuthEntryPoint.class, DeviceAuthFilter.class}))
 @Import(SliceSecurityConfig.class)
 class AuthControllerTest {
 

@@ -54,6 +54,12 @@ public class AuthController {
         emailVerificationService.verify(req.token());
     }
 
+    @PostMapping("/resend-verification")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public void resendVerification(@RequestBody @Valid UserDTO.ResendVerification req){
+        emailVerificationService.resendPublicly(req.userEmail());
+    }
+
     @PostMapping("/forgot-password")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public void forgotPassword(@RequestBody @Valid UserDTO.ForgotPassword req){

@@ -24,7 +24,12 @@ class MailProviderSelectionTest {
             .withUserConfiguration(LoggingMailer.class, ResendMailer.class)
             .withPropertyValues(
                     "app.mail.from=no-reply@mail.obidi.com.ar",
-                    "app.mail.from-name=OBIDI");
+                    "app.mail.from-name=OBIDI",
+                    // LoggingMailer refuses to exist in a run that serves real
+                    // traffic, so every case below has to say which kind of run
+                    // this is. The one that leaves it out is the guard's own
+                    // test at the bottom.
+                    "spring.profiles.active=test");
 
     @Test
     void withNoProviderSetNothingIsSent() {
@@ -53,6 +58,39 @@ class MailProviderSelectionTest {
                         // Exactly one: the two implementations are mutually
                         // exclusive, so nothing is ambiguous to inject.
                         .hasSingleBean(Mailer.class)
+                        .hasSingleBean(ResendMailer.class)
+                        .doesNotHaveBean(LoggingMailer.class));
+    }
+
+    /**
+     * The guard that stops a production deployment from printing live tokens
+     * to its log - and, since the email gate became hard, from locking out
+     * every account that registers, because nobody can confirm an address
+     * whose mail was never sent.
+     */
+    @Test
+    void theLoggingMailerRefusesToStartWhereTrafficIsReal() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(LoggingMailer.class, ResendMailer.class)
+                .run(context -> assertThat(context)
+                        .hasFailed()
+                        .getFailure()
+                        .rootCause()
+                        .hasMessageContaining("app.mail.provider is 'log'"));
+    }
+
+    @Test
+    void butResendIsFineThere() {
+        // The same run with a real provider configured starts normally: the
+        // guard is about the logging mailer, not about profiles.
+        new ApplicationContextRunner()
+                .withUserConfiguration(LoggingMailer.class, ResendMailer.class)
+                .withPropertyValues(
+                        "app.mail.from=no-reply@mail.obidi.com.ar",
+                        "app.mail.from-name=OBIDI",
+                        "app.mail.provider=resend",
+                        "app.mail.resend.api-key=re_test_notarealkey")
+                .run(context -> assertThat(context)
                         .hasSingleBean(ResendMailer.class)
                         .doesNotHaveBean(LoggingMailer.class));
     }

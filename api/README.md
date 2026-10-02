@@ -28,6 +28,16 @@ Every path below starts with `/api/v1`, so a full call looks like
 `https://api.obidi.com.ar/api/v1/users/me`. An Android emulator reaches a
 backend on the host machine at `http://10.0.2.2:8080`, not `localhost`.
 
+### Two credentials
+
+| | For | Header |
+|---|---|---|
+| **Access token** (JWT) | a person using the app | `Authorization: Bearer <accessToken>` |
+| **Device token** | the phone's background service, with the app closed | `Authorization: Device <token>` |
+
+Most of what follows is about the first. The second exists because the two
+cannot be shared: see [Device tokens](#device-tokens-for-the-background-service).
+
 ### Authentication
 
 `register` and `login` return this envelope:
@@ -64,7 +74,9 @@ body — it is set as a cookie named `refreshToken`
 ### Keeping a session alive
 
 1. `POST /auth/login` → store `accessToken` in memory; the cookie jar keeps the
-   refresh token.
+   refresh token. A `403` with `reason: email_not_verified` here means the
+   address was never confirmed — see
+   [Email verification is a hard gate](#email-verification-is-a-hard-gate).
 2. Call endpoints with the bearer token.
 3. On a `401` whose `reason` is `token_expired`, call `POST /auth/refresh`
    (no body) and retry the original request once with the new token.
@@ -117,6 +129,19 @@ above switches on:
 A `token_invalid` can also mean the password was changed on another device:
 that invalidates every access token issued earlier, everywhere, immediately.
 
+A `403` carries a `reason` too:
+
+| `reason` | Meaning |
+|---|---|
+| `email_not_verified` | the account never confirmed its address — see [the gate](#email-verification-is-a-hard-gate) |
+| `forbidden` | this credential may not call this endpoint. What a **device token** gets outside [its four](#device-tokens-for-the-background-service) |
+| `device_out_of_scope` | a device token aimed at a car that is not its own |
+| `car_not_accessible` | a device token whose owner lost access to that car |
+
+A `403` with no `reason` at all comes from the endpoint rather than the
+security chain, and means an ordinary permission refusal: not an admin of that
+group, or not an admin account.
+
 ### Conventions that hold everywhere
 
 | | |
@@ -126,34 +151,205 @@ that invalidates every access token issued earlier, everywhere, immediately.
 | **`404` vs `403`** | A resource that exists but is not yours answers **`404`**, exactly like one that does not exist — so an id is never confirmed to a stranger. `403` appears only where the caller already knows the thing exists and simply lacks the right (not an admin of a group, not an admin account, email not verified). |
 | **`204`** | A successful write with nothing to return, and also "the normal empty answer" — e.g. no active trip on a car. It is **not** an error; `404` there would mean "no such car". |
 | **`409`** | A state conflict: already on a trip, already a member, a link already used or expired. Retrying without changing something will not help. |
-| **`429`** | Throttled. Only `POST /users/me/verify-email` answers it (one link per 60s). |
+| **`429`** | Throttled. Only `POST /users/me/verify-email` answers it (one link per 60s); the public resend stays silent at `202`. |
+| **`403` with `reason: email_not_verified`** | The account has not confirmed its email address. Every endpoint answers this except `/auth/*` and the three listed under [Email verification is a hard gate](#email-verification-is-a-hard-gate). |
 | **Empty lists** | `[]` and `200`, never `404`. |
 | **The caller's identity** | Always taken from the token, never from the body. Sending `userId`, `ownerId` or `driverId` in a request body has no effect. |
 | **Unknown JSON fields** | Ignored. |
+| **A body that will not parse** | `400`, not `500` - malformed JSON, a 35-character "UUID", a string where a number belongs. The parser's own message is not forwarded, since it quotes the payload back. |
+| **Distances** | Kilometres, two decimals (`numeric(8,2)`). A third decimal is a `400` rather than a silent rounding. The field is `distanceKm`, named for its unit on purpose. |
 
-### Email verification, and the one thing it blocks
+### Email verification is a hard gate
 
-A new account can do almost everything immediately: log in, edit its profile,
-create a group, register a car, start trips, upload telemetry.
+**An account can do nothing until it has confirmed its email address.** Not a
+reduced set of things — nothing. That is deliberate: it means an account
+created with somebody else's address is inert rather than merely limited, and
+there is no window in which it can register cars, create groups, start trips,
+or become visible to anybody.
 
-The exception is **accepting an invitation** — that answers `403` until the
-address is verified, because invitations are addressed to an email and an
-unverified account has not proved that address is its own. `GET /users/me`
-reports `emailVerified`, so the app can show a banner and offer
-`POST /users/me/verify-email`.
+Three things work before confirming, and they exist only to get the user
+through the wall:
 
-**Joining by QR code is not gated** — a code is handed over in person, so
-there is no address being claimed. An unverified user can join that way.
+| | |
+|---|---|
+| `GET /users/me` | so the app can read `emailVerified` and show the right screen |
+| `POST /users/me/verify-email` | ask for another link, using the token registration handed over |
+| `POST /auth/logout` | |
+
+**Everything else answers `403`** with `reason: "email_not_verified"` — the
+one 403 an app can act on, so it is worth switching on:
+
+```json
+{ "status": 403, "title": "Forbidden", "reason": "email_not_verified",
+  "detail": "Confirm your email address before using the application" }
+```
+
+**`POST /auth/login` also answers `403`** with that reason, and issues no
+token. The password is checked **first**, so a wrong password is still a `401`
+whatever state the account is in — otherwise the `403` would tell anybody who
+asked that an address is registered.
+
+#### The flow the client has to implement
+
+```
+POST /auth/register          → 200 + tokens, emailVerified: false
+                               (registration still logs the user in)
+   └─ show "confirmá tu correo", offer resend with the token it just got
+
+user opens the mail, taps the link
+   └─ the page POSTs /auth/verify-email  → 204
+
+GET /users/me                → emailVerified: true
+   └─ the same token now works everywhere; nothing needs re-issuing
+```
+
+And for somebody who comes back later, after the token is gone:
+
+```
+POST /auth/login             → 403 email_not_verified
+POST /auth/resend-verification  {userEmail}  → 202, always
+```
+
+That last endpoint is **public**, because an account that cannot log in has no
+authenticated way to ask for anything. It answers `202` whether the address is
+unknown, already confirmed, or throttled — identical in every case, so it
+cannot be used to ask who has an account here. A malformed address is the only
+thing it will admit to, with a `400`.
+
+**`POST /auth/refresh` keeps working while the account is walled**, on
+purpose. The cookie came from registration, so the wall screen survives the
+access token expiring under it — otherwise a user who left the app open for
+twenty minutes would be thrown out of the one screen that can get them
+through. The token it returns is still walled, and whether the gate has lifted
+is read from `GET /users/me`, not from having a fresh token.
+
+**`POST /auth/reset-password` also lifts the gate.** Reaching the mailbox is
+the same proof either way, so somebody who goes through *forgot password*
+comes out confirmed and does not have to then find the verification mail too.
+
+#### What this replaced
+
+An earlier version let an unconfirmed account use most of the app and blocked
+only the three actions that touched other people. It was dropped because
+blocking actions one at a time leaves the account itself usable, and the list
+of actions that expose you to somebody else is not a list you can be sure you
+finished. Two consequences of the change:
+
+- **Joining by QR is no longer an exception.** It used to be allowed
+  unconfirmed, on the grounds that a code is handed over in person and claims
+  no address. Now nothing is allowed unconfirmed, so invitations and codes are
+  treated the same.
+- **Previewing a code (`GET /invite-codes/{code}`) is still public**, and is
+  now the only endpoint outside `auth/*` that needs no credential at all —
+  it is how somebody with no account sees whose group they were handed before
+  deciding to sign up.
+
+#### A note on roles
+
+`EMAIL_VERIFIED` is an **authority of its own, not a role**. The role says
+what kind of account this is (`USER`, `ADMIN`); whether its address is
+confirmed is orthogonal — an admin can be unconfirmed and a plain user
+confirmed. Folding the two together is what briefly locked every `ADMIN`
+account out of the whole API, since an admin's only role authority is
+`ROLE_ADMIN`.
+
+### Device tokens, for the background service
+
+The app has to record trips **with the app closed**, and the access token
+cannot be used for that: it lasts 15 minutes, renewing it needs a cookie jar
+and a live session, and handing a credential that can read and change the
+whole profile to a background service is far more than that service needs.
+
+A device token is the narrow alternative:
+
+| | |
+|---|---|
+| Header | `Authorization: Device obdd_…` |
+| Lives | until revoked, or **90 days without being used** |
+| Scoped to | **one car** — the one it was minted for |
+| May call | `POST /telemetry`, `POST /trips`, `POST /trips/{id}/finish`, `GET /cars/{carId}/trips/active`. Nothing else, `GET /users/me` included |
+| Acts as | the person who minted it, so a trip it starts is that person's trip |
+
+**Minting.** `POST /cars/{carId}/device-tokens` with a person's bearer token
+and a `label` (the phone's name, so the user knows what they are revoking).
+The response is the **only** time the token is returned — only its SHA-256 is
+stored. Hand it to the native side and keep it in the Keystore/Keychain, not
+in `SharedPreferences`. Any member of the car's group may mint one, several
+per phone are fine, and each is revocable on its own with
+`DELETE /device-tokens/{id}`.
+
+**What the client must handle.** The token can stop working without anybody
+revoking it, because it carries no copy of the permission — it is re-checked
+against the car on every request. The `reason` says which case it is, and they
+need different handling:
+
+| Status | `reason` | Meaning | What to do |
+|---|---|---|---|
+| `401` | `token_invalid` | not one of ours, or no such token | drop it, ask the user to pair again |
+| `401` | `token_revoked` | revoked, or 90 days idle | drop it, ask the user to pair again |
+| `403` | `car_not_accessible` | the owner lost access to that car (un-shared, left the group) | **stop**; re-minting will fail too |
+| `403` | `device_out_of_scope` | the car is not the one this token is scoped to | a bug in the caller: it sent the wrong `carId` |
+
+Keep uploading at least once every 90 days of use, or let the token lapse on
+purpose when the user stops driving that car — lapsing is the safety net for a
+phone that was lost or wiped without anybody revoking anything.
+
+### Recording trips offline
+
+The phone is the source of truth for *when* things happened; the server is the
+source of truth for *who* they happened to. Three features make a sync that
+runs hours later come out right.
+
+**1. `clientTripId` makes starting idempotent.** Mint a UUID per trip on the
+phone and send it with `POST /trips`. A repeat of the same start returns the
+same trip with **`200`** instead of creating a second one or failing with
+`409`. Without it a lost response is unrecoverable: the retry gets
+`409 "car already on a trip"` and the client cannot tell its own trip from one
+another driver started. Keys are scoped per driver, so the same UUID from
+another account is a different trip.
+
+**2. `startedAt` and `endedAt` are yours to send.** Omit them and the server
+clock is used, which is right online and wrong for a trip that ended in a
+tunnel and uploaded two hours later. Bounds, on both: at most **5 minutes**
+into the future (clock skew) and at most **30 days** old; `endedAt` may not
+predate the trip's own `startedAt`. Outside those, `400` with an `errors` map
+naming the field.
+
+**3. Readings carry their own `recordedAt`.** `POST /telemetry` takes up to
+500 readings per batch, in any order, and is idempotent on
+`(carId, recordedAt)` — re-uploading a batch whose response was lost changes
+nothing. Each reading keeps the phone's `recordedAt` and the server stamps its
+own `receivedAt`, so a queue flushed late is not mistaken for a car that drove
+at 3 a.m.
+
+A sync therefore looks like:
+
+```
+POST /trips              {carId, clientTripId, startedAt}   → 201 (or 200 on retry)
+POST /telemetry          {carId, readings:[…]}              → 200, repeatable
+POST /trips/{id}/finish  {distanceKm, endedAt}              → 200
+```
+
+**Order does not matter, and telemetry may arrive before its trip exists.**
+A reading is stamped with `trip_id` only if a trip was open when it was
+ingested, so readings uploaded first have `trip_id: null` forever — and
+`GET /trips/{tripId}/route` still returns them, because it resolves the route
+by time window on `(car_id, recorded_at)` rather than by that column. Do not
+build anything on `trip_id`: it is never wrong, only sometimes absent.
+
+**Distance is whatever the client reports** — `distanceKm`, kilometres, two
+decimals. The server does not compute it from the route.
 
 ### Endpoint index
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | `POST` | `/auth/register` | — | creates the account, logs it in, mails a verification link |
-| `POST` | `/auth/login` | — | |
+| `POST` | `/auth/login` | — | `403 email_not_verified` until the address is confirmed |
 | `POST` | `/auth/refresh` | cookie | no body |
 | `POST` | `/auth/logout` | bearer | `204` |
 | `POST` | `/auth/verify-email` | — | body `{token}`; the link's last path segment |
+| `POST` | `/auth/resend-verification` | — | body `{userEmail}`; **always** `202`. The way back in for an account that cannot log in |
 | `POST` | `/auth/forgot-password` | — | body `{userEmail}`; **always** `202` |
 | `POST` | `/auth/reset-password` | — | body `{token, newPassword}`; `204`, kills every session |
 | `GET` | `/users/me` | bearer | includes `emailVerified` |
@@ -174,28 +370,63 @@ there is no address being claimed. An unverified user can join that way.
 | `GET` | `/groups/{groupId}/members` | bearer | members only |
 | `POST` | `/invitations/invite/{groupId}` | bearer, **admin** | by email |
 | `GET` | `/invitations/pending` | bearer | your own pending invitations |
-| `POST` | `/invitations/{id}/accept` | bearer | **needs a verified email** |
+| `POST` | `/invitations/{id}/accept` | bearer | |
 | `POST` `GET` `DELETE` | `/groups/{groupId}/invite-code` | bearer, **admin** | mint / inspect / revoke the QR code |
 | `GET` | `/invite-codes/{code}` | **none** | preview a scanned code before joining |
-| `POST` | `/invite-codes/{code}/join` | bearer | |
-| `POST` | `/trips` | bearer | start. `201` |
+| `POST` | `/invite-codes/{code}/join` | bearer | `200` and nothing spent if already a member |
+| `POST` | `/trips` | bearer **or device** | start. `201`, or `200` for a repeated `clientTripId` |
 | `GET` | `/trips` | bearer | trips you drove |
 | `GET` | `/cars/{carId}/trips` | bearer | the car's whole history |
-| `GET` | `/cars/{carId}/trips/active` | bearer | `200` or `204` when idle |
-| `POST` | `/trips/{tripId}/finish` | bearer | driver only |
+| `GET` | `/cars/{carId}/trips/active` | bearer **or device** | `200` or `204` when idle |
+| `POST` | `/trips/{tripId}/finish` | bearer **or device** | driver only |
 | `DELETE` | `/trips/{tripId}` | bearer | cancel an open trip. `204` |
-| `POST` | `/telemetry` | bearer | batch ingest, by `serial` or `carId` |
+| `POST` | `/cars/{carId}/device-tokens` | bearer | mint a background credential. `201`, token shown once |
+| `GET` | `/cars/{carId}/device-tokens` | bearer | your own live tokens for that car |
+| `DELETE` | `/device-tokens/{id}` | bearer | revoke one. `204` |
+| `GET` | `/trips/{tripId}/route` | bearer | the positions recorded during the trip |
+| `POST` | `/telemetry` | bearer **or device** | batch ingest, by `serial` or `carId` |
 | `GET` | `/telemetry` | bearer | cursor sync |
 
+Two things the `Auth` column does not repeat for every row:
+
+- **`bearer` also means a confirmed email address.** Everything above except
+  `/auth/*`, `GET /users/me` and `POST /users/me/verify-email` answers `403`
+  with `reason: email_not_verified` until the account confirms — see
+  [Email verification is a hard gate](#email-verification-is-a-hard-gate).
+- **`bearer **or device**` marks the four endpoints a dongle credential can
+  reach.** Everywhere else a device token gets `403`, `GET /users/me`
+  included.
+
 `GET /invite-codes/{code}` is the only endpoint outside `/auth` that needs no
-token: it lets someone who scanned a QR see the group's name before they have
-an account.
+credential at all: it lets someone who scanned a QR see the group's name
+before they have an account.
+
+### Things that changed recently
+
+If you integrated before October 2026, note the gate first — it changes what
+every endpoint answers for a new account:
+
+- **An unconfirmed account now gets `403 email_not_verified` from everything**
+  except `GET /users/me`, `POST /users/me/verify-email` and `POST /auth/logout`,
+  and **`POST /auth/login` refuses it too**. Registration still returns tokens,
+  so the sign-up flow is unchanged - but the app has to read `emailVerified`
+  and show a wall until the user confirms.
+- **`POST /auth/resend-verification`** is new and public, for an account that
+  can no longer log in.
+
+Two wire changes besides:
+
+- **`distance` is now `distanceKm`**, in both the finish request (was
+  `tripDistance`) and every trip response, and it is a **decimal in
+  kilometres** rather than an integer with no documented unit. Sending the old
+  field name now leaves the distance null.
+- **Trip responses gained `createdAt` and `clientTripId`.** Additive.
 
 ### Things the API does not do yet
 
 Worth knowing before you design around them: there is no endpoint to change an
 email address, to delete an account, to remove or re-role a group member, or to
-read a trip's GPS route. Lists are unpaged. See *Known limitations* at the end.
+update or delete a car. Lists are unpaged. See *Known limitations* at the end.
 
 ## Database
 
@@ -292,6 +523,23 @@ needs the firmware half.
 | revoking sets `revoked_at`, never deletes | The row is the record that a code existed and how often it was used. |
 | `ON DELETE CASCADE` from `groups` | A code for a group that is gone is nothing. |
 
+### Device tokens
+
+`device_tokens` holds the credential the phone's background service uses.
+Reasoning for its existence is in
+[Device tokens, for the background service](#device-tokens-for-the-background-service);
+the schema decisions are these:
+
+| Decision | Because |
+|---|---|
+| a separate credential, not a second JWT session | The refresh token is single-use with family-wide theft detection, so two processes refreshing log the user out. A second login would need the password stored on the device and would grant every permission the user has. |
+| `(user_id, car_id)` on the row, and **no copy of the permission** | Access is re-derived on every request by the same `CarAccess` predicate everything else uses, so un-sharing the car, leaving the group, the group being deleted, or any rule invented later kills the token with nothing to keep in step. The alternative - revoking eagerly from every one of those places - is bookkeeping that drifts. |
+| only the SHA-256 is stored, with an `obdd_` prefix on the value | A leaked dump yields nothing usable; the prefix means a secret scanner recognises the value if it ever lands in a log, and the server can refuse obvious noise without a query. |
+| no expiry date, but dead after 90 days unused | It serves a process that must keep working for months without a person present. `last_used_at` anchors the deadline and renews it on use, so the only tokens that die of old age are the ones on phones nobody uses any more. |
+| `last_used_at` written at most once a minute | Telemetry arrives in batches; a write per request would be pure cost. The UPDATE repeats the staleness test in its WHERE clause, so two concurrent uploads cannot both write. |
+| revoked rows kept | The record of which phones had access, and it lets "already revoked" answer differently from "never existed" internally. |
+| `ON DELETE CASCADE` from both `users` and `cars` | A credential for an account or a car that is gone is nothing. |
+
 ### Email verification and password reset
 
 `V13` adds `users.email_verified_at` and two token tables. The mechanism is
@@ -312,17 +560,46 @@ registration never proved ownership of an address. Until `V13` anyone could
 register as `victim@example.com`, read their pending invitations and join the
 family group meant for them.
 
-**The soft gate.** Unverified accounts can do almost everything: register, log
-in, edit their profile, create a group, register a car, drive it, upload
-telemetry. The one thing they cannot do is **accept an invitation**
-(`UserAccess.requireVerifiedEmail`), because that is the action where an
-unproven address reaches other people's cars and trips.
+**The hard gate.** An account that has not confirmed its address can do
+nothing: three endpoints work (`GET /users/me`, `POST /users/me/verify-email`,
+`POST /auth/logout`) and everything else answers `403` with
+`reason: email_not_verified`. `POST /auth/login` refuses it too, which is why
+`POST /auth/resend-verification` is public — an account that cannot log in has
+no authenticated way to ask for another link.
 
-**Joining by QR is deliberately not gated.** An invitation names an address,
-so it can be claimed by an account that never proved it owns one. A code is a
-bearer secret handed over in person — nobody is impersonated, and gating it
-would only stop a guest joining at the dinner table. The asymmetry is
-intentional and pinned by smoke checks 86 and 86b.
+The rule is **one line in the filter chain**, not a check in each service:
+
+```java
+.anyRequest().hasAuthority(UserPrincipal.EMAIL_VERIFIED)
+```
+
+That is the whole reason to spend the authority rather than call
+`requireVerifiedEmail` where it matters. An endpoint added next month is
+closed until somebody opens it deliberately, instead of open until somebody
+remembers. `DeviceTokenScopeIT.itMayNotCallAnythingElse` and
+`EmailVerificationGateIT.everythingElseIsForbidden…` are the assertions that
+keep it true.
+
+`UserAccess.requireVerifiedEmail` still guards inviting, accepting and
+minting a code inside the services. The chain refuses those requests first, so
+the guard is unreachable over HTTP and kept deliberately: those three actions
+are the ones that put this account in front of somebody else, and they should
+not depend on one line of configuration elsewhere staying the way it is.
+
+| Decision | Because |
+|---|---|
+| `EMAIL_VERIFIED` is an authority, **not** a role | The role says what kind of account this is; confirmation is orthogonal. Folding them together — `anyRequest().hasRole("USER")` — locked every `ADMIN` out of the entire API, since an admin's only role authority is `ROLE_ADMIN`. Pinned by `anAdminAccountIsNotLockedOut`. |
+| login refuses, **after** checking the password | A `403` before the password check would confirm that an address is registered to anybody who asked. Wrong password is `401` whatever state the account is in. |
+| registration still returns tokens | The app needs a credential to show the wall screen and offer a resend. The token is simply useless everywhere else until the address is confirmed. |
+| the three allowed endpoints are `hasAnyRole("USER","ADMIN")`, not `authenticated()` | A device token authenticates. `authenticated()` let a dongle's credential read `GET /users/me`, which `DeviceTokenScopeIT` caught. |
+
+**This replaced a soft gate** that blocked only accepting an invitation, on
+the grounds that it was the one action reaching other people. It was dropped
+because an account that can create groups, cars and trips under a name that is
+not its own is already a problem, and the list of actions that expose you to
+somebody else is not a list you can be sure you finished. Joining by QR used
+to be a deliberate exception — a code is handed over in person and claims no
+address — and is now gated like everything else.
 
 ### Mail
 
@@ -338,8 +615,22 @@ The two are mutually exclusive, so exactly one `Mailer` bean exists in either
 configuration — pinned by `MailProviderSelectionTest`, because getting it
 wrong fails at startup rather than in a test.
 
-**Never `log` in production.** It prints a live token to the log, which
-discards the entire point of storing only its hash.
+**`log` refuses to run in production**, and that is enforced rather than
+documented: `LoggingMailer`'s constructor throws unless the `dev` or `test`
+profile is active, the same signal `app.cookie.secure=false` uses to mean
+"this run is not serving real traffic".
+
+Two reasons it is fatal rather than untidy. It prints a live token to the log,
+which discards the point of storing only its hash. And since verification
+became a [hard gate](#email-verification-is-a-hard-gate), mail is load-bearing:
+an account can do nothing until it confirms its address, nobody can confirm an
+address whose mail was never sent, so every new user would be locked out with
+no symptom except a `403` that never goes away.
+
+The trade-off is deliberate: a container with a misconfigured `.env`
+crashloops instead of serving. The deploy workflow's health check catches that
+and prints the reason, which names the variables to set. A deployment that
+looks healthy while locking out everyone who registers is the worse outcome.
 
 `ResendMailer` details worth knowing:
 
@@ -364,6 +655,15 @@ discards the entire point of storing only its hash.
 
 Emails are the only user-facing text in the project, and they are in
 **Spanish**. Code, comments, logs and these docs stay English.
+
+Two things the verification mail says on purpose, both consequences of the
+[hard gate](#email-verification-is-a-hard-gate): that the account cannot be
+used until the link is clicked, so nobody waits for an app that will only
+answer `403`; and that somebody who did *not* create the account should **not**
+click it — the account is inert until somebody does, and clicking would
+activate one whose password a stranger chose. It also points at the login
+screen, not the profile, for a fresh link: a walled account cannot log in to
+ask from inside the app.
 
 **The pages the links open** live in `deploy/web/` and are served by the same
 Caddy that fronts the API — `deploy/web/verify-email/index.html` and
@@ -569,6 +869,12 @@ Creates a new user, then logs them in (issues tokens).
 Also sets a `refreshToken` cookie (`httpOnly`, `SameSite=Strict`, path
 `/api/v1/auth`).
 
+**The tokens work on three endpoints until the address is confirmed.** A
+verification link is mailed here, and until it is clicked this account is
+walled — see [Email verification is a hard gate](#email-verification-is-a-hard-gate).
+The app should send the user to a *"confirmá tu correo"* screen rather than
+into the application.
+
 **Errors:** `409 Conflict` if the email is already registered, `400 Bad
 Request` with a per-field error map if validation fails.
 
@@ -592,7 +898,11 @@ Request` with a per-field error map if validation fails.
 
 **Response:** same shape as `register` — `AuthResponseDTO` body + `refreshToken` cookie.
 
-**Errors:** `401 Unauthorized` on bad credentials.
+**Errors:** `401 Unauthorized` on bad credentials. **`403 Forbidden` with
+`reason: "email_not_verified"`** if the account never confirmed its address —
+no token is issued, and the way forward is
+`POST /auth/resend-verification`. The password is checked first, so a wrong
+password is `401` either way.
 
 ---
 
@@ -643,6 +953,29 @@ token.
 
 ---
 
+### `POST /api/v1/auth/resend-verification`
+
+Mails another verification link to an address that owns an unconfirmed
+account. **Public — no access token**, and that is the point: an unconfirmed
+account cannot log in, so without this endpoint somebody who closed the app
+before clicking the link would have no way back in at all.
+
+**Body**: `{ "userEmail": "ada@example.com" }`
+
+**Response** `202 Accepted` — **always**. Unknown address, already confirmed,
+or throttled: the same answer, because this endpoint is public and anything
+else would turn it into a way to ask *"does this person use the app?"*. Same
+rule as `forgot-password`.
+
+The throttle is therefore silent here (`app.mail.resend-throttle-seconds`,
+60s), unlike `POST /users/me/verify-email`, which can answer `429` because
+that caller is already identified.
+
+**Errors:** `400 Bad Request` for a malformed address. The only thing it will
+admit to.
+
+---
+
 ### `POST /api/v1/auth/forgot-password`
 
 Starts a password reset. **Public.**
@@ -681,7 +1014,11 @@ issued die on their next request rather than lingering for up to
 took.
 
 Reaching the mailbox proves ownership of the address just as well as the
-verification flow does, so a reset also marks the address verified.
+verification flow does, so **a reset also marks the address verified** — and
+therefore lifts the [gate](#email-verification-is-a-hard-gate). It is the
+second way through the wall, and the one the real owner of a squatted address
+uses: *forgot password* takes the account over, revokes every session the
+squatter had, and leaves it confirmed.
 
 **Errors:** `404` unknown token, `409` already used or expired, `400` if the
 new password is too short.
@@ -701,15 +1038,22 @@ The user is the token holder; there is no `GET /users/{id}`.
   "userName": "Ada",
   "userLastName": "Lovelace",
   "userEmail": "ada@example.com",
-  "userPhone": "+39 320 1234567"
+  "userPhone": "+39 320 1234567",
+  "emailVerified": true
 }
 ```
 
 `userName` is the first name (the same field `register` takes), not a
 username. No password hash, no role.
 
+**`emailVerified` is the flag the app routes on.** This is one of the three
+endpoints an unconfirmed account may call, precisely so the client can read
+this field and decide between the application and the *"confirmá tu correo"*
+screen. While it is `false`, everything else answers `403`.
+
 **Errors:** `404 Not Found` if the account behind a still-valid token no
-longer exists; `401 Unauthorized` without a token.
+longer exists; `401 Unauthorized` without a token. Note a device token gets
+`403` here: this endpoint is for people, not dongles.
 
 ---
 
@@ -1353,7 +1697,9 @@ with them.
 
 **Errors:** `404 Not Found` if the caller is not a member of the group (a
 `403` would confirm the group exists); `403 Forbidden` if the caller is a
-member but not `ADMIN`; `409 Conflict` if that email already belongs to a
+member but not `ADMIN` — or, with `reason: email_not_verified`, if their own
+address is unconfirmed, which the filter chain refuses before the request
+reaches the group at all; `409 Conflict` if that email already belongs to a
 member; `400 Bad Request` for a malformed email; `401 Unauthorized` without a
 token. A second *live* pending invitation for the same email is rejected by
 `ux_invitations_pending` — see Known limitations for how that currently
@@ -1503,6 +1849,11 @@ confirmed to exist), `403 Forbidden` if they are a member but not `ADMIN`,
 `400 Bad Request` for an out-of-range `ttlHours`/`maxUses`, `401` without a
 token.
 
+Like every other endpoint, this one also answers `403` with
+`reason: email_not_verified` before any of that if the caller never confirmed
+their address. The two are told apart by `reason`, which is absent on the
+not-an-admin refusal.
+
 ---
 
 ### `GET /api/v1/groups/{groupId}/invite-code`
@@ -1555,8 +1906,9 @@ show *"Join Familia Garcia · 3 members?"* before the user commits.
 
 **No token required.** Someone scanning a QR before they have an account sees
 the group's name rather than a bare login wall; the code is the capability,
-and holding it is the authorisation. It is the only `GET` outside `auth/*`
-that is public — joining still needs a token.
+and holding it is the authorisation. It is the only endpoint outside
+`auth/*` that needs no credential at all — joining needs a token, and a
+confirmed address.
 
 **Response** `200 OK`:
 
@@ -1620,16 +1972,25 @@ crash between them would burn a use without letting anybody in.
 
 **A code never confers `ADMIN`**, and never changes an existing member's role.
 
+**A confirmed address is required**, like everywhere else: an account that has
+not verified gets `403` with `reason: email_not_verified` and the code keeps
+all its uses. This used to be an exception — a code is handed over in person,
+so nobody is impersonated — and stopped being one when the gate became
+absolute. A guest at the dinner table confirms their mail first; previewing
+the code with `GET /invite-codes/{code}` works meanwhile.
+
 **Errors:** `404` unknown code, `409` revoked/expired/exhausted, `401` without
-a token.
+a token, `403` unconfirmed address.
 
 ---
 
 ### `POST /api/v1/trips`
 
 Starts a trip ("viaje"): records that the caller is now using a car, and leaves
-the trip open until it is finished. Requires
-`Authorization: Bearer <accessToken>`.
+the trip open until it is finished. Takes **either** credential —
+`Authorization: Bearer <accessToken>` for a person, or
+`Authorization: Device <token>` for the phone's background service, which may
+only start trips on the car its token is scoped to.
 
 **Body** (`application/json`):
 
@@ -1644,9 +2005,27 @@ the trip open until it is finished. Requires
 |---|---|---|
 | `carId` | yes | a car the caller may use: their own, or one shared with a group they belong to |
 | `initialFuel` | no | fuel reading at the start, ≥ 0; defaults to the car's cached snapshot (`fuelLevel`), which is what the dongle last reported |
+| `startedAt` | no | ISO-8601 UTC. When driving actually began. Defaults to the server clock; at most 5 minutes ahead and 30 days old |
+| `clientTripId` | no | any UUID the client mints. Makes starting idempotent - see below |
 
-The driver is always taken from the access token and the start time from the
-server clock, so a trip cannot be logged in someone else's name or backdated.
+**`201` created, `200` already created.** With a `clientTripId`, a repeat of
+the same start returns the same trip and `200` instead of creating a second
+one. That distinction is the point: without it, a lost response is
+unrecoverable, because the retry gets `409 "car already on a trip"` and the
+client cannot tell its own trip from one another driver started. The key is
+scoped per driver, so the same UUID from another account is a different trip -
+keying on the value alone would hand somebody else's trip to whoever guessed
+it.
+
+Note what the key does **not** do: it makes a retry safe, not a second driver
+legal. A genuinely new start on a car that is already on a trip is still
+`409`.
+
+
+**The driver always comes from the credential, never from the body**, so a
+trip cannot be logged in somebody else's name. The *time* is the client's to
+claim: `startedAt` is what it reports and `createdAt` is when the server heard
+it, and the two differ exactly as much as the phone was offline.
 
 **Response** `201 Created`. No `Location` header: there is no
 `GET /trips/{id}` for it to point at.
@@ -1658,13 +2037,20 @@ server clock, so a trip cannot be logged in someone else's name or backdated.
   "driverId": "63173dc5-520b-4d84-8bbb-8a8367741ba7",
   "startedAt": "2026-09-09T02:45:43.663568Z",
   "endedAt": null,
+  "createdAt": "2026-09-09T02:45:43.663568Z",
+  "clientTripId": "9a0e1f4c-1d2b-4a3c-9f8e-7d6c5b4a3210",
   "initialFuel": 70,
   "finalFuel": null,
   "fuelUsed": null,
-  "distance": null,
+  "distanceKm": null,
   "active": true
 }
 ```
+
+`createdAt` is the server's clock and `startedAt` is the client's claim. For a
+trip started online they are the same instant; for one uploaded later,
+`startedAt` is older. `clientTripId` is echoed back, or `null` if none was
+sent.
 
 `fuelUsed` is `initialFuel - finalFuel`, computed on every read and never
 stored: a stored total would be a second source of truth that can drift from
@@ -1742,10 +2128,17 @@ The driver ends their trip. Requires `Authorization: Bearer <accessToken>`.
 | Field | Required | Notes |
 |---|---|---|
 | `tripFinalFuel` | no | fuel reading at the end, ≥ 0. Absent means the expense is unknown (`fuelUsed: null`), not zero. |
-| `tripDistance` | no | > 0 |
+| `distanceKm` | no | > 0, **kilometres**, two decimals. Renamed from `tripDistance`, which carried no unit |
+| `endedAt` | no | ISO-8601 UTC. When driving actually ended. Defaults to the server clock |
 
-The end time is the **server clock** — an `endedAt` in the body is ignored, so
-a trip cannot be backdated any more than it can be pre-dated at start.
+**`endedAt` is accepted and kept**, bounded the same way `startedAt` is. The
+phone is the only thing present when a trip ends, so a trip driven through a
+tunnel and uploaded two hours later must not be recorded as having ended two
+hours late. An `endedAt` that predates the trip's own start is a `400`: the
+comparison lives in the `WHERE` clause of the closing `UPDATE`, so it happens
+against the row being written rather than against a value that could change in
+between.
+
 `tripFinalFuel` may exceed `initialFuel`: the driver refuelled, and `fuelUsed`
 comes out negative rather than being "validated" away.
 
@@ -1759,10 +2152,12 @@ comes out negative rather than being "validated" away.
   "driverId": "b7a60789-bdb2-4e86-a617-3fae2266e746",
   "startedAt": "2026-09-16T20:45:59.940386Z",
   "endedAt": "2026-09-16T20:46:04.746519Z",
+  "createdAt": "2026-09-16T20:45:59.940386Z",
+  "clientTripId": null,
   "initialFuel": 68,
   "finalFuel": 50,
   "fuelUsed": 18,
-  "distance": 140,
+  "distanceKm": 12.75,
   "active": false
 }
 ```
@@ -1773,7 +2168,7 @@ so the check and the write are one atomic statement. That gives three things
 for free: only the driver can finish their trip (the owner cannot close a
 member's trip out from under them); a double tap or a retry cannot overwrite
 the first result with a second fuel reading; and `ended_at`, `final_fuel` and
-`distance` land together, which is what `ck_trips_open_has_no_result`
+`distance_km` land together, which is what `ck_trips_open_has_no_result`
 requires. The car is free the instant the statement runs — a new trip can
 start immediately (smoke 66).
 
@@ -1800,6 +2195,137 @@ same way `finish` does:
 the same answer, so a trip id is never confirmed to a non-driver (and the
 car's owner cannot cancel a trip out from under the driver). `409 Conflict`
 for a trip that has already ended. `401 Unauthorized` without a token.
+
+---
+
+### `GET /api/v1/trips/{tripId}/route`
+
+Where the car went during a trip, oldest first. Readable by anyone who may
+read the car, like its trip history.
+
+**Response** `200 OK` — only the readings that carry a position; a fuel-only
+frame draws nothing:
+
+```json
+[
+  { "recordedAt": "2026-10-01T20:21:34Z", "latitude": -34.6037, "longitude": -58.3816, "speed": 0 },
+  { "recordedAt": "2026-10-01T20:22:34Z", "latitude": -34.6040, "longitude": -58.3820, "speed": 42 }
+]
+```
+
+**Resolved by time window, not by `telemetry.trip_id`** — and this is the part
+worth knowing, because it is what makes an offline-synced trip have a route at
+all.
+
+`trip_id` is stamped at ingest, once, and only when a trip was open at that
+moment. Two ordinary situations leave it null forever, since nothing re-stamps
+an inserted row:
+
+- the phone uploads a tunnel's worth of readings **before** it uploads the
+  trip, so no trip was open;
+- it uploads them **after** the trip was already finished, in a later batch.
+
+So the route is read as "this car's readings between the trip's start and its
+end", which is correct regardless of arrival order. The window is unambiguous
+because `ux_trips_one_active_per_car` forbids two overlapping trips on one
+car, and it is already indexed - `ux_telemetry_car_recorded_at` is
+`(car_id, recorded_at)`. An open trip's window runs to now.
+
+`trip_id` is kept and still stamped: it is never *wrong*, only sometimes
+*absent* - a cache that can be cold rather than a second source of truth. But
+nothing that has to be complete may rely on it.
+
+**Errors:** `404 Not Found` if the trip does not exist or its car is not
+readable by the caller; `401` without a credential.
+
+---
+
+### `POST /api/v1/cars/{carId}/device-tokens`
+
+Mints the credential the phone's background service uses. Requires a person:
+`Authorization: Bearer <accessToken>`, with access to the car.
+
+**Body**: `{ "label": "Pixel de Juan" }` — non-blank, ≤ 60 chars. Shown back
+to the user so they know which phone they are revoking.
+
+**Response** `201 Created` — the only response that ever carries the token:
+
+```json
+{
+  "id": "eb10c7ce-fcb0-4eb1-b98e-7e9360899710",
+  "carId": "ee9e87e6-46d4-4a06-9998-8545daf00057",
+  "label": "Pixel de Juan",
+  "token": "obdd_QSvj1JBW3pl2qG9w7kQlER7HlCW69Owa1mFKgQu0bGs",
+  "createdAt": "2026-10-01T22:35:10.735274Z",
+  "idleExpiresAt": "2026-12-30T22:35:10.735274Z"
+}
+```
+
+Only the SHA-256 is stored, so this cannot be produced again — hand it to the
+native side and store it encrypted there. No `Location` header: a token is
+addressed for deletion by its id, and there is no endpoint that returns one by
+id, deliberately.
+
+**Any member may mint one for a shared car**, not only the owner. The point is
+that whoever's phone is in the car can upload for it, and a member who may
+start trips by hand may as well have them recorded automatically — the token
+can do no more than its owner already could. Several per person per car are
+allowed: one per phone, each revocable on its own.
+
+**Errors:** `404 Not Found` if the car does not exist or the caller may not use
+it, `400` for a blank or overlong label, `403` if the caller is a device token
+(a stolen token must not be able to issue itself a replacement), `401` without
+a credential.
+
+---
+
+### `GET /api/v1/cars/{carId}/device-tokens`
+
+The caller's **own** live tokens for that car — what the app lists so a user
+can see which phones have access and withdraw one.
+
+**Response** `200 OK`, newest first, and never the tokens themselves:
+
+```json
+[
+  {
+    "id": "eb10c7ce-…",
+    "carId": "ee9e87e6-…",
+    "label": "Pixel de Juan",
+    "createdAt": "2026-10-01T22:35:10.735274Z",
+    "lastUsedAt": "2026-10-01T23:02:11.004121Z",
+    "idleExpiresAt": "2026-12-30T23:02:11.004121Z"
+  }
+]
+```
+
+Only their own: another member's phone is that member's business, and listing
+it would leak which family members have the app installed. `lastUsedAt` is
+`null` until the first upload and is written at most once a minute, so it is
+accurate to the minute rather than the request.
+
+**Errors:** `404` if the car is not readable by the caller, `401` without a
+credential.
+
+---
+
+### `DELETE /api/v1/device-tokens/{id}`
+
+Withdraws a token. The phone stops working on its next upload — `401` with
+`reason: token_revoked`.
+
+**Response** `204 No Content`.
+
+Only the token's own owner may revoke it, **even the car's owner cannot revoke
+a member's**. The row is kept rather than deleted, as the record of which
+phone had access.
+
+**Errors:** `404 Not Found` for a token that is unknown, already revoked, or
+somebody else's — one answer for all three, so a token id is never confirmed
+to a stranger. `401` without a credential.
+
+**The user's own session is untouched**, which is the whole reason this
+credential is separate from it.
 
 ---
 
@@ -2001,7 +2527,9 @@ underneath it.
 ```
 
 Docker must be running; nothing else is required (no local Postgres, no
-environment variables). There are two lanes:
+environment variables). That one command runs **every** lane below, `*IT`
+classes included — Surefire's default patterns stop at `*Test`, so `pom.xml`
+lists `**/*IT.java` explicitly. Three lanes:
 
 **Controller slices** - `@WebMvcTest` with the service layer mocked. They cover
 routing, request validation, response shape and error mapping. The production
@@ -2026,6 +2554,14 @@ test class.
 
 `ApiApplicationTests` boots the whole application - every bean and the real
 security filter chain - against the same container.
+
+**Chain tests** - `@SpringBootTest` + `@AutoConfigureMockMvc`, for the rules
+that live in `SecurityConfig` and therefore in no slice.
+`EmailVerificationGateIT` asserts what an unconfirmed account may and may not
+do (and that an `ADMIN` is not locked out); `DeviceTokenScopeIT` asserts that
+a dongle's credential reaches four endpoints and nothing else. Both are
+written as blanket refusals, so an endpoint added later fails them until
+somebody opens it deliberately.
 
 If you use **Colima** rather than Docker Desktop, the `colima` Maven profile
 activates itself and points Testcontainers at the socket under your home
@@ -2053,6 +2589,26 @@ What is missing, in what order to build it, and the endpoint roadmap live in
 - No admin account is seeded, so the smoke script only covers the `403` side
   of `POST /models`; the `201` path is pinned by `ModelControllerTest`.
 - Updating and deleting a car are not implemented.
+- A device token is not rate-limited beyond what the endpoints themselves do.
+  Ingest is idempotent and capped at 500 readings per batch, so the damage a
+  misbehaving client can do is bounded, but a per-token limit is the obvious
+  next guard.
+- Trip distance is whatever the client reports; the server does not compute it
+  from the route. With positions now resolvable by time window that is
+  possible, but raw GPS summed point to point overstates distance badly, so it
+  needs filtering to be worth doing.
+- **Registering with somebody else's address is still possible, but the
+  account is inert.** It can do nothing until the link in that person's inbox
+  is clicked, so nothing is created under a name that is not the owner's. What
+  remains is a nuisance: the real owner cannot register (`409`), and if they
+  click the link they confirm an account whose password somebody else chose -
+  recoverable with *forgot password*, which revokes every session and device
+  token, but confusing. The fix is to let a new registration reclaim an
+  address that was never verified, plus an expiry for unverified accounts. The
+  verification email says what to do in the meantime.
+- `telemetry.trip_id` is a hint, not a source of truth: it is set at ingest
+  only when a trip was open then. Anything that must be complete reads by time
+  window instead - see `GET /trips/{tripId}/route`.
 - **No mail is sent yet in practice.** `ResendMailer` exists and is tested, but
   `app.mail.provider` is still `log` everywhere, so links appear in the
   application log. Turning it on needs only a verified sending domain and an
@@ -2065,9 +2621,14 @@ What is missing, in what order to build it, and the endpoint roadmap live in
 - Delivery is best-effort: a failed send is logged and the request still
   succeeds. There is no outbox and no retry — the resend endpoint is the
   retry. Good enough while a human can always ask for another link.
-- Smoke checks 49–50 and 88–90 need `MAIL_LOG` pointed at the application log,
-  since they complete flows that genuinely require reading an email. Without
-  it they skip and the rest of the suite still runs.
+- The smoke script **requires** `MAIL_LOG` pointed at the application log and
+  refuses to start without it. Every registration it makes has to read a link
+  out of the log and confirm the address before the account can do anything,
+  so there is no longer a useful subset that runs without mail.
+- **CI does not run this suite.** `.github/workflows/ci.yaml` runs `make test`,
+  which is Flutter only; the API's 496 tests are run locally. Adding them is a
+  few lines (`ubuntu-latest` has Docker, so Testcontainers works unchanged) and
+  is worth doing before more than one person pushes to `development`.
 - `password_changed_at` gives revocation a one-second granularity, because a
   JWT's `iat` is expressed in whole seconds. A token minted in the same second
   as a password change survives it. Harmless in practice, and the alternative

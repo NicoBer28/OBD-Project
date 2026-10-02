@@ -11,6 +11,8 @@ import com.obd.api.user.UserRepository;
 import com.obd.api.user.exception.EmailAlreadyVerifiedException;
 import com.obd.api.user.exception.UserNotFoundException;
 import jakarta.transaction.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -22,6 +24,8 @@ import java.util.UUID;
 
 @Service
 public class EmailVerificationService {
+
+    private static final Logger log = LoggerFactory.getLogger(EmailVerificationService.class);
 
     private final EmailVerificationTokenRepository tokenRepository;
     private final UserRepository userRepository;
@@ -62,6 +66,27 @@ public class EmailVerificationService {
                 .ifPresent(live -> {
                     throw new TokenRequestedTooSoonException(throttleSeconds);
                 });
+
+        issue(user);
+    }
+
+    @Transactional
+    public void resendPublicly(String rawEmail) {
+        String email = rawEmail.trim().toLowerCase();
+
+        User user = userRepository.findByUserEmail(email).orElse(null);
+        if (user == null || user.getUserEmailVerifiedAt() != null) {
+            log.debug("Verification resend requested for an address with no unverified account");
+            return;
+        }
+
+        boolean throttled = tokenRepository.findByTokenUserIdAndTokenConsumedAtIsNull(user.getUserId())
+                .filter(live -> live.getTokenCreatedAt().isAfter(Instant.now().minusSeconds(throttleSeconds)))
+                .isPresent();
+        if (throttled) {
+            log.debug("Verification resend throttled");
+            return;
+        }
 
         issue(user);
     }

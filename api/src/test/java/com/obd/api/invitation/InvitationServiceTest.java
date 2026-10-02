@@ -353,4 +353,43 @@ class InvitationServiceTest {
         assertThat(groupMemberRepository.findByIdGroupIdAndIdUserId(familiaId, invitee))
                 .get().extracting(GroupMember::getRole).isEqualTo(GroupRole.MEMBER);
     }
+
+    @Test
+    void anUnverifiedAdminCannotInvite() {
+        UUID impostor = newUnverifiedUser("impostor@example.com");
+        UUID theirGroup = newGroup("Grupo del impostor");
+        enrol(theirGroup, impostor, GroupRole.ADMIN);
+
+        // The hole this closes: an account registered with somebody else's
+        // address could create its own group and lure real people into it,
+        // appearing in the member list under that stolen identity.
+        assertThatThrownBy(() -> invitationService.invite(impostor, "alguien@example.com", theirGroup))
+                .isInstanceOf(EmailNotVerifiedException.class);
+
+        assertThat(invitationRepository.count()).isZero();
+    }
+
+    @Test
+    void aStrangerStillGetsNotAMemberRatherThanTheGate() {
+        UUID impostor = newUnverifiedUser("impostor2@example.com");
+
+        // requireAdmin runs first on purpose, so a group id is never confirmed
+        // to somebody who is not in it.
+        assertThatThrownBy(() -> invitationService.invite(impostor, "alguien@example.com", familiaId))
+                .isInstanceOf(NotAMemberException.class);
+    }
+
+    @Test
+    void verifyingLetsThatSameAdminInvite() {
+        UUID impostor = newUnverifiedUser("impostor3@example.com");
+        UUID theirGroup = newGroup("Grupo propio");
+        enrol(theirGroup, impostor, GroupRole.ADMIN);
+
+        User user = userRepository.findById(impostor).orElseThrow();
+        user.setUserEmailVerifiedAt(Instant.now());
+        userRepository.saveAndFlush(user);
+
+        assertThat(invitationService.invite(impostor, "alguien@example.com", theirGroup).invitationEmail())
+                .isEqualTo("alguien@example.com");
+    }
 }

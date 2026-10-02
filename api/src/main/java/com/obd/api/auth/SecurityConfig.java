@@ -1,7 +1,11 @@
 package com.obd.api.auth;
 
+import com.obd.api.devicetoken.DeviceAuthFilter;
+import com.obd.api.devicetoken.DevicePrincipal;
+import jakarta.servlet.DispatcherType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -32,6 +36,8 @@ public class SecurityConfig {
     private final JwtAuthFilter jwtAuthFilter;
     private final JwtAuthEntryPoint jwtAuthEntryPoint;
     private final AppUserDetailsService userDetailsService;
+    private final DeviceAuthFilter deviceAuthFilter;
+    private final ProblemAccessDeniedHandler accessDeniedHandler;
 
     @Value("${app.cors.allowed-origins:http://localhost:5173}")
     private List<String> allowedOrigins;
@@ -55,16 +61,48 @@ public class SecurityConfig {
                 .cors(c -> c.configurationSource(corsConfigurationSource()))
                 .sessionManagement(s->s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+
                         .requestMatchers("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/refresh").permitAll()
                         .requestMatchers("/api/v1/auth/verify-email",
                                 "/api/v1/auth/forgot-password",
                                 "/api/v1/auth/reset-password").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/invite-codes/*").permitAll()
-                        .anyRequest().authenticated())
-                .exceptionHandling(e -> e.authenticationEntryPoint(jwtAuthEntryPoint))
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/resend-verification").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/users/me").hasAnyRole("USER", "ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/users/me/verify-email").hasAnyRole("USER", "ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/logout").hasAnyRole("USER", "ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/telemetry")
+                            .hasAnyAuthority(UserPrincipal.EMAIL_VERIFIED, DevicePrincipal.ROLE)
+                        .requestMatchers(HttpMethod.POST, "/api/v1/trips")
+                            .hasAnyAuthority(UserPrincipal.EMAIL_VERIFIED, DevicePrincipal.ROLE)
+                        .requestMatchers(HttpMethod.POST, "/api/v1/trips/*/finish")
+                            .hasAnyAuthority(UserPrincipal.EMAIL_VERIFIED, DevicePrincipal.ROLE)
+                        .requestMatchers(HttpMethod.GET, "/api/v1/cars/*/trips/active")
+                            .hasAnyAuthority(UserPrincipal.EMAIL_VERIFIED, DevicePrincipal.ROLE)
+                        .anyRequest().hasAuthority(UserPrincipal.EMAIL_VERIFIED))
+                .exceptionHandling(e -> e
+                        .authenticationEntryPoint(jwtAuthEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler))
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(deviceAuthFilter, JwtAuthFilter.class)
                 .build();
+    }
+
+
+    @Bean
+    FilterRegistrationBean<DeviceAuthFilter> deviceAuthFilterNotInServletChain(DeviceAuthFilter filter) {
+        var registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
+    @Bean
+    FilterRegistrationBean<JwtAuthFilter> jwtAuthFilterNotInServletChain(JwtAuthFilter filter) {
+        var registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
     }
 
     @Bean

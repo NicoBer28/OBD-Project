@@ -31,6 +31,14 @@ public class UserDTO {
             @NotBlank String token
     ){}
 
+    /**
+     * Who to send another verification link to, if anyone owns the address and
+     * has not confirmed it yet.
+     */
+    public record ResendVerification(
+            @NotBlank @Email String userEmail
+    ){}
+
     public record ForgotPassword(
             @NotBlank @Email String userEmail
     ){}

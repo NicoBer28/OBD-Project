@@ -3,6 +3,7 @@ package com.obd.api.invitecode;
 import com.obd.api.group.*;
 import com.obd.api.group.dto.GroupDTO;
 import com.obd.api.invitation.exception.NotAMemberException;
+import com.obd.api.user.exception.EmailNotVerifiedException;
 import com.obd.api.invitation.exception.NotAnAdminException;
 import com.obd.api.invitecode.dto.InviteCodeDTO;
 import com.obd.api.invitecode.exception.InviteCodeNoLongerValidException;
@@ -31,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * claim statement and the constraints on its own.
  */
 @RepositoryTest
-@Import({InviteCodeService.class, GroupAccess.class})
+@Import({InviteCodeService.class, GroupAccess.class, com.obd.api.user.UserAccess.class})
 class InviteCodeServiceTest {
 
     @Autowired
@@ -332,5 +333,45 @@ class InviteCodeServiceTest {
         // Joined Familia as MEMBER; their ADMIN role in Los Lopez is untouched.
         assertThat(roleOf(strangerId, familiaId)).isEqualTo(GroupRole.MEMBER);
         assertThat(roleOf(strangerId, lopezId)).isEqualTo(GroupRole.ADMIN);
+    }
+
+    // --- the gate on minting -------------------------------------------------
+
+    @Test
+    void anUnverifiedAdminCannotMintACode() {
+        UUID impostor = newUnverifiedUser("impostor@example.com");
+        UUID theirGroup = newGroup("Grupo del impostor");
+        enrol(theirGroup, impostor, GroupRole.ADMIN);
+
+        // A code is how somebody else ends up in this group, and the member
+        // list then shows them this caller's name and email. Until the address
+        // is proved, that identity is unproven.
+        assertThatThrownBy(() -> inviteCodeService.mint(impostor, theirGroup, defaults()))
+                .isInstanceOf(EmailNotVerifiedException.class);
+
+        assertThat(inviteCodeRepository.count()).isZero();
+    }
+
+    @Test
+    void readingAndRevokingAreNotGated() {
+        UUID impostor = newUnverifiedUser("impostor2@example.com");
+        UUID theirGroup = newGroup("Otro grupo");
+        enrol(theirGroup, impostor, GroupRole.ADMIN);
+
+        // Neither exposes the caller to anybody, so neither needs the gate -
+        // and an account that verified, minted, then somehow un-verified must
+        // still be able to withdraw what it issued.
+        assertThat(inviteCodeService.current(impostor, theirGroup)).isEmpty();
+        inviteCodeService.revoke(impostor, theirGroup);
+    }
+
+    @Test
+    void notBeingAMemberStillAnswersBeforeTheGateDoes() {
+        UUID impostor = newUnverifiedUser("impostor3@example.com");
+
+        // Order matters: a stranger pointing at a group id must get the 404
+        // that refuses to confirm it exists, not a 403 about their own account.
+        assertThatThrownBy(() -> inviteCodeService.mint(impostor, familiaId, defaults()))
+                .isInstanceOf(NotAMemberException.class);
     }
 }

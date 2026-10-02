@@ -3,18 +3,6 @@ package com.obd.api.mail;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-/**
- * The two messages this application sends, in Spanish - the only user-facing
- * text in the codebase, which is otherwise English throughout.
- *
- * Plain text rather than HTML on purpose for now: it renders everywhere, it
- * cannot be broken by a mail client's CSS handling, and it is far less likely
- * to be scored as spam than a first HTML template from a young domain.
- *
- * The links are built from configuration, not hard-coded, because where they
- * point changes per environment and is not decided yet: a universal link into
- * the app once the domain exists, a local URL until then.
- */
 @Component
 public class MailMessages {
 
@@ -39,9 +27,19 @@ public class MailMessages {
 
                 %s
 
-                El enlace vence en 24 horas. Si no creaste esta cuenta, podés
-                ignorar este mensaje: sin confirmar, nadie puede usar tu
-                dirección para entrar a un grupo.
+                Hasta que lo confirmes, la cuenta no se puede usar: no vas a
+                poder iniciar sesión ni cargar autos, grupos o viajes.
+
+                El enlace vence en 24 horas. Si vence, pedí uno nuevo desde la
+                pantalla de inicio de sesión de la app.
+
+                ¿No creaste esta cuenta? Entonces alguien escribió tu dirección
+                al registrarse. NO entres al enlace: mientras nadie lo use, esa
+                cuenta no sirve para nada, y si entrás vos la estarías
+                habilitando con una contraseña que eligió otra persona. La
+                dirección es tuya, así que podés quedártela en cualquier
+                momento con «olvidé mi contraseña» desde la app, lo que cierra
+                todas las sesiones de quien la creó.
                 """.formatted(firstName, link),
                 Email.Purpose.EMAIL_VERIFICATION);
     }

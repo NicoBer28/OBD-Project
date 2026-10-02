@@ -148,7 +148,11 @@ sure:
 
 - no value is wrapped in quotes (`DB_PASSWORD=abc`, not `DB_PASSWORD="abc"`)
 - there is **no** `SPRING_PROFILES_ACTIVE=dev` line
-- `MAIL_PROVIDER` is **not** `log` (it would write live tokens to the log)
+- the mail variables from [Turning email on](#turning-email-on) are **all
+  present**. The API **will not start** otherwise: without a `dev` profile and
+  with `MAIL_PROVIDER` unset or `log`, it refuses to boot rather than write
+  live tokens to the log and leave every new account unable to confirm its
+  address. Do that section before the first deploy — it is no longer optional
 
 Then lock it down, since it holds the database password and the JWT secret:
 
@@ -251,10 +255,15 @@ Finally, point the Flutter app's API base URL at `https://<your-domain>`.
 
 ## Turning email on
 
-The verification and password-reset flows work today, but the links in those
-emails still point at `localhost`, and nothing is actually sent until a
-provider is configured. These steps are independent of the deploy above and
-can be done in any order.
+**Do this before the first deploy, not after.** Email is not a finishing
+touch any more: an account can do nothing until it confirms its address, so an
+API with no working provider is an API nobody can use. It knows that about
+itself and refuses to start — `LoggingMailer` throws unless the `dev` or
+`test` profile is active, so a container whose `.env` is missing these
+variables crashloops and the deploy's health check fails with the reason.
+
+Without these steps the links in those emails also point at `localhost`, which
+is the other half of the same problem.
 
 ### Step A — Verify a sending domain in Resend
 
@@ -326,9 +335,11 @@ MAIL_RESET_URL_BASE=https://www.obidi.com.ar/reset-password
 
 Three things to get right:
 
-- **Never leave `MAIL_PROVIDER=log` in production.** It writes the live token
-  to the application log, which throws away the point of storing only its
-  hash.
+- **`MAIL_PROVIDER=log` in production is refused, not merely discouraged.**
+  It writes the live token to the application log, throwing away the point of
+  storing only its hash, and with the email gate in place it would lock out
+  every account that registers. The API fails to start instead; the message in
+  `docker compose logs api` names the variables to set.
 - **The two `MAIL_*_URL_BASE` values are the step people forget.** Without
   them the emails arrive with `localhost` links.
 - **`CORS_ORIGINS` needs nothing added for these pages.** Caddy proxies

@@ -3,6 +3,7 @@ package com.obd.api.user;
 import com.obd.api.auth.AuthService;
 import com.obd.api.auth.dto.TokenPair;
 import com.obd.api.auth.refresh.RefreshTokenService;
+import com.obd.api.devicetoken.DeviceTokenRepository;
 import com.obd.api.user.dto.UserDTO;
 import com.obd.api.user.exception.IncorrectPasswordException;
 import com.obd.api.user.exception.PasswordUnchangedException;
@@ -24,6 +25,7 @@ public class UserService {
     private final PasswordEncoder passwordEncoder;
     private final RefreshTokenService refreshTokenService;
     private final AuthService authService;
+    private final DeviceTokenRepository deviceTokenRepository;
 
     @Transactional
     public UserDTO.Read me(UUID userId){
@@ -37,7 +39,6 @@ public class UserService {
 
         user.setUserName(request.userName().trim());
         user.setUserLastName(request.userLastName().trim());
-        // Absent clears it: PUT replaces the profile, it does not merge.
         user.setUserPhone(request.userPhone() == null ? null : request.userPhone().trim());
 
         return UserDTO.Read.from(userRepository.saveAndFlush(user));
@@ -59,6 +60,7 @@ public class UserService {
         userRepository.saveAndFlush(user);
 
         refreshTokenService.revokeAllForUser(userId);
+        deviceTokenRepository.revokeAllForUser(userId, Instant.now());
 
         return authService.reissue(userId);
     }

@@ -37,6 +37,8 @@ public class InvitationService {
 
        groupAccess.requireAdmin(userId, groupID);
 
+        userAccess.requireVerifiedEmail(userId);
+
         GroupMember groupMember2 = groupMemberRepository.findByGroupIdAndUserEmail(groupID, email.trim().toLowerCase()).orElse(null);
         if(groupMember2 != null)
             throw new AlreadyAMemberException(email, groupID);

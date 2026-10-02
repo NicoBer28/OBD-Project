@@ -2,6 +2,7 @@ package com.obd.api.auth.reset;
 
 import com.obd.api.auth.refresh.RefreshTokenService;
 import com.obd.api.auth.token.SecretTokens;
+import com.obd.api.devicetoken.DeviceTokenRepository;
 import com.obd.api.auth.token.TokenKind;
 import com.obd.api.auth.token.exception.TokenNoLongerValidException;
 import com.obd.api.auth.token.exception.TokenNotFoundException;
@@ -30,6 +31,7 @@ public class PasswordResetService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final RefreshTokenService refreshTokenService;
+    private final DeviceTokenRepository deviceTokenRepository;
     private final ApplicationEventPublisher events;
     private final long ttlMinutes;
     private final long throttleSeconds;
@@ -38,6 +40,7 @@ public class PasswordResetService {
                                 UserRepository userRepository,
                                 PasswordEncoder passwordEncoder,
                                 RefreshTokenService refreshTokenService,
+                                DeviceTokenRepository deviceTokenRepository,
                                 ApplicationEventPublisher events,
                                 @Value("${app.mail.reset-ttl-minutes}") long ttlMinutes,
                                 @Value("${app.mail.resend-throttle-seconds}") long throttleSeconds) {
@@ -45,6 +48,7 @@ public class PasswordResetService {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.refreshTokenService = refreshTokenService;
+        this.deviceTokenRepository = deviceTokenRepository;
         this.events = events;
         this.ttlMinutes = ttlMinutes;
         this.throttleSeconds = throttleSeconds;
@@ -107,5 +111,6 @@ public class PasswordResetService {
         userRepository.saveAndFlush(user);
 
         refreshTokenService.revokeAllForUser(user.getUserId());
+        deviceTokenRepository.revokeAllForUser(user.getUserId(), now);
     }
 }

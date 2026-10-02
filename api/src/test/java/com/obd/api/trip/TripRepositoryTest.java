@@ -16,6 +16,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
@@ -83,7 +84,7 @@ class TripRepositoryTest {
                 .tripEndedAt(started.plus(90, ChronoUnit.MINUTES))
                 .tripInitialFuel(70)
                 .tripFinalFuel(52)
-                .tripDistance(140)
+                .tripDistance(BigDecimal.valueOf(140))
                 .build());
         entityManager.clear();
 
@@ -94,7 +95,7 @@ class TripRepositoryTest {
         assertThat(found.getTripEndedAt()).isNotNull();
         assertThat(found.getTripInitialFuel()).isEqualTo(70);
         assertThat(found.getTripFinalFuel()).isEqualTo(52);
-        assertThat(found.getTripDistance()).isEqualTo(140);
+        assertThat(found.getTripDistance()).isEqualByComparingTo("140");
         assertThat(found.isActive()).isFalse();
     }
 
@@ -187,12 +188,12 @@ class TripRepositoryTest {
         UUID id = tripRepository.saveAndFlush(aTrip().tripInitialFuel(70).build()).getTripId();
         Instant at = Instant.now();
 
-        assertThat(tripRepository.finish(id, adaId, at, 52, 140)).isEqualTo(1);
+        assertThat(tripRepository.finish(id, adaId, at, 52, BigDecimal.valueOf(140))).isEqualTo(1);
 
         Trip found = tripRepository.findById(id).orElseThrow();
         assertThat(found.getTripEndedAt()).isEqualTo(at);
         assertThat(found.getTripFinalFuel()).isEqualTo(52);
-        assertThat(found.getTripDistance()).isEqualTo(140);
+        assertThat(found.getTripDistance()).isEqualByComparingTo("140");
         assertThat(found.isActive()).isFalse();
         // The car is free again.
         assertThat(tripRepository.findByTripCarIdAndTripEndedAtIsNull(carId)).isEmpty();
@@ -204,24 +205,24 @@ class TripRepositoryTest {
 
         // Grace may be the owner, a member, anyone: only the driver closes
         // their own trip.
-        assertThat(tripRepository.finish(id, graceId, Instant.now(), 52, 140)).isZero();
+        assertThat(tripRepository.finish(id, graceId, Instant.now(), 52, BigDecimal.valueOf(140))).isZero();
         assertThat(tripRepository.findById(id).orElseThrow().isActive()).isTrue();
     }
 
     @Test
     void finishRefusesToFinishTwice() {
         UUID id = tripRepository.saveAndFlush(aTrip().build()).getTripId();
-        tripRepository.finish(id, adaId, Instant.now(), 52, 140);
+        tripRepository.finish(id, adaId, Instant.now(), 52, BigDecimal.valueOf(140));
 
         // A double tap must not overwrite the first result with a second
         // fuel reading - that would silently change the expense.
-        assertThat(tripRepository.finish(id, adaId, Instant.now(), 10, 999)).isZero();
+        assertThat(tripRepository.finish(id, adaId, Instant.now(), 10, BigDecimal.valueOf(999))).isZero();
         assertThat(tripRepository.findById(id).orElseThrow().getTripFinalFuel()).isEqualTo(52);
     }
 
     @Test
     void finishRefusesAnUnknownTrip() {
-        assertThat(tripRepository.finish(UUID.randomUUID(), adaId, Instant.now(), 52, 140)).isZero();
+        assertThat(tripRepository.finish(UUID.randomUUID(), adaId, Instant.now(), 52, BigDecimal.valueOf(140))).isZero();
     }
 
     @Test
@@ -239,7 +240,7 @@ class TripRepositoryTest {
     @Test
     void aFinishedCarCanStartAgainImmediately() {
         UUID first = tripRepository.saveAndFlush(aTrip().build()).getTripId();
-        tripRepository.finish(first, adaId, Instant.now(), 52, 140);
+        tripRepository.finish(first, adaId, Instant.now(), 52, BigDecimal.valueOf(140));
 
         // A JPQL update runs at once, so the insert that follows sees the
         // closed row - no flush-ordering trap here.
@@ -262,7 +263,7 @@ class TripRepositoryTest {
     @Test
     void cancelRefusesAFinishedTripAndSomeoneElsesTrip() {
         UUID finished = tripRepository.saveAndFlush(aTrip().build()).getTripId();
-        tripRepository.finish(finished, adaId, Instant.now(), 52, 140);
+        tripRepository.finish(finished, adaId, Instant.now(), 52, BigDecimal.valueOf(140));
         UUID open = tripRepository.saveAndFlush(aTrip().build()).getTripId();
 
         // A finished trip is history and stays; an open one is only the

@@ -45,6 +45,59 @@ extract_field() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# Reading the mail
+# ---------------------------------------------------------------------------
+# MAIL_LOG is required, from the very first check. An account cannot log in or
+# do anything at all until its address is confirmed, and the only way to
+# confirm one is to read the link out of the application log - which is where
+# LoggingMailer writes it, because nothing is actually sent in development.
+#
+#   MAIL_LOG=/tmp/app.log ./scripts/test-endpoints.sh
+#
+# Run the app with MAIL_PROVIDER=log (overriding .env.dev if it sets resend):
+# with a real provider nothing reaches the log, and Resend rejects the
+# @example.com addresses these checks use.
+MAIL_LOG="${MAIL_LOG:-}"
+
+if [ -z "$MAIL_LOG" ]; then
+  printf '\033[1;31mMAIL_LOG is required\033[0m\n\n'
+  cat <<'EOF'
+Confirming an email address means reading the link out of the application log,
+and no account can do anything before it is confirmed - so every check here
+needs it.
+
+    MAIL_PROVIDER=log SPRING_PROFILES_ACTIVE=dev ./mvnw spring-boot:run > /tmp/app.log 2>&1 &
+    MAIL_LOG=/tmp/app.log ./scripts/test-endpoints.sh
+EOF
+  exit 1
+fi
+
+# Pulls the newest link mailed to an address ($2) for a purpose ($1).
+mail_link_for_purpose() {
+  local purpose="$1" address="$2"
+  # index(), not ~: an address like "invitee+1790@example.com" contains a
+  # regex metacharacter, so matching it as a pattern silently finds nothing.
+  # The marker line names the recipient and purpose; the link is a line or two
+  # below, inside the body. Take the last such pair in the file.
+  awk -v p="purpose=$purpose" -v a="to=$address" '
+    index($0, "MAIL ") && index($0, p) && index($0, a) { want = 1; next }
+    want && match($0, /https?:\/\/[^ ]+/) { link = substr($0, RSTART, RLENGTH); want = 0 }
+    END { print link }
+  ' "$MAIL_LOG"
+}
+
+# Redeems the verification link mailed to an address ($1). Every account has
+# to go through this before it can do anything.
+verify_email() {
+  local address="$1" link token
+  link=$(mail_link_for_purpose EMAIL_VERIFICATION "$address")
+  [ -n "$link" ] || return 1
+  token="${link##*/}"
+  [ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/verify-email" \
+      -H "Content-Type: application/json" -d "{\"token\":\"$token\"}")" = "204" ]
+}
+
 line "1. Register ($EMAIL)"
 REGISTER_BODY=$(curl -sS -c "$JAR" -X POST "$BASE/register" \
   -H "Content-Type: application/json" \
@@ -58,6 +111,10 @@ REGISTER_BODY=$(curl -sS -c "$JAR" -X POST "$BASE/register" \
 print_json "$REGISTER_BODY"
 ACCESS_TOKEN=$(extract_field "$REGISTER_BODY" accessToken)
 [ -n "$ACCESS_TOKEN" ] || fail "no accessToken in register response"
+# Registration still issues tokens, but the account can do nothing until the
+# address is confirmed - including log in again at step 2.
+verify_email "$EMAIL" || fail "could not confirm $EMAIL from $MAIL_LOG"
+echo "confirmed $EMAIL"
 
 line "2. Login"
 LOGIN_BODY=$(curl -sS -c "$JAR" -X POST "$BASE/login" \
@@ -120,6 +177,7 @@ CAR_REG=$(curl -sS -X POST "$BASE/register" \
   -d "{\"userName\":\"Carl\",\"userLastName\":\"Sagan\",\"userEmail\":\"$CAR_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
 CAR_TOKEN=$(extract_field "$CAR_REG" accessToken)
 [ -n "$CAR_TOKEN" ] || fail "could not register a user to own cars"
+verify_email "$CAR_EMAIL" || fail "could not confirm $CAR_EMAIL"
 # Kept so the trip checks below can assert the driver really is this account.
 CAR_USER_ID=$(extract_field "$CAR_REG" userId)
 
@@ -198,6 +256,7 @@ OTHER_EMAIL="grace+$(date +%s)@example.com"
 OTHER_REG=$(curl -sS -X POST "$BASE/register" -H "Content-Type: application/json" \
   -d "{\"userName\":\"Grace\",\"userLastName\":\"Hopper\",\"userEmail\":\"$OTHER_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
 OTHER_TOKEN=$(extract_field "$OTHER_REG" accessToken)
+verify_email "$OTHER_EMAIL" || fail "could not confirm $OTHER_EMAIL"
 [ -n "$OTHER_TOKEN" ] || fail "could not register the second owner"
 OTHER_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$CARS" \
   -H "Authorization: Bearer $OTHER_TOKEN" -H "Content-Type: application/json" \
@@ -540,40 +599,21 @@ echo "$OTHER_LIST" | grep -q "\"id\":\"$CAR_ID\"" && fail "another owner's car l
 echo "ok: $(echo "$OTHER_LIST" | grep -o '"id"' | wc -l | tr -d ' ') car(s) for the other owner, none of them Carl's"
 
 # These need the link that was mailed, and therefore the `log` provider: with
-# MAIL_PROVIDER=resend nothing reaches the log, and Resend rejects the
-# @example.com recipients these checks use. Run the app with
-# MAIL_PROVIDER=log (overriding .env.dev if it sets resend).
-#
-# These need the link that was mailed. Nothing is actually sent in
-# development: LoggingMailer writes it to the application log, so point
-# MAIL_LOG at that file to run these checks:
-#
-#   MAIL_LOG=/tmp/app.log ./scripts/test-endpoints.sh
-#
-# Without it the rest of the script still runs and these are skipped, rather
-# than the suite depending on a dev-only endpoint that hands tokens out.
-MAIL_LOG="${MAIL_LOG:-}"
 
-# Pulls the newest link mailed to an address ($1) out of the log.
-mail_link() {
-  [ -n "$MAIL_LOG" ] || return 1
-  grep -o "https\?://[^[:space:]]*" "$MAIL_LOG" | tail -1
-}
+if [ -z "$MAIL_LOG" ]; then
+  line "Stopping here (no MAIL_LOG)"
+  cat <<'EOF'
+Everything past this point needs a verified account, and verifying one means
+reading the link out of the application log. Re-run with the app's log file:
 
-mail_link_for_purpose() {
-  local purpose="$1" address="$2"
-  [ -n "$MAIL_LOG" ] || return 1
-  # index(), not ~: an address like "invitee+1790@example.com" contains a
-  # regex metacharacter, so matching it as a pattern silently finds nothing.
-  # The marker line names the recipient and purpose; the link is a line or two
-  # below, inside the body. Take the last such pair in the file.
-  awk -v p="purpose=$purpose" -v a="to=$address" '
-    index($0, "MAIL ") && index($0, p) && index($0, a) { want = 1; next }
-    want && match($0, /https?:\/\/[^ ]+/) { link = substr($0, RSTART, RLENGTH); want = 0 }
-    END { print link }
-  ' "$MAIL_LOG"
-}
+    MAIL_LOG=/path/to/app.log ./scripts/test-endpoints.sh
 
+Skipped: invitations, sharing, group members, QR invites, the email flows and
+the device-token checks. Everything before this point passed.
+EOF
+  line "All checks up to this point passed"
+  exit 0
+fi
 
 # --- Invitations -------------------------------------------------------------
 # Carl (CAR_TOKEN) is ADMIN of GROUP_ID from step 18; Grace (OTHER_TOKEN) is
@@ -603,6 +643,15 @@ INV_REG=$(curl -sS -X POST "$BASE/register" -H "Content-Type: application/json" 
   -d "{\"userName\":\"Inv\",\"userLastName\":\"Itee\",\"userEmail\":\"$INV_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
 INV_TOKEN=$(extract_field "$INV_REG" accessToken)
 [ -n "$INV_TOKEN" ] || fail "could not register the invitee"
+
+# Before confirming the address the account is inert, pending list included -
+# so the invitation it was sent is not even visible yet.
+PENDING_WALLED=$(curl -sS "$INVITATIONS/pending" -H "Authorization: Bearer $INV_TOKEN")
+echo "$PENDING_WALLED" | grep -q '"reason":"email_not_verified"' \
+  || fail "an unconfirmed account should not see its pending invitations: $PENDING_WALLED"
+verify_email "$INV_EMAIL" || fail "could not confirm $INV_EMAIL"
+echo "confirmed $INV_EMAIL - the invitation should be visible now"
+
 PENDING=$(curl -sS "$INVITATIONS/pending" -H "Authorization: Bearer $INV_TOKEN")
 print_json "$PENDING"
 echo "$PENDING" | grep -q "\"id\":\"$INV_ID\"" || fail "the invitation is not in the invitee's pending list"
@@ -614,33 +663,9 @@ ACC_FOREIGN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITATIONS/$INV
 echo "status: $ACC_FOREIGN"
 [ "$ACC_FOREIGN" = "404" ] || fail "expected 404 accepting someone else's invitation, got $ACC_FOREIGN"
 
-line "49. Unverified, the invitee cannot accept (expect 403); verified, they can"
-# The hole this closes: invitations are addressed to an email, and registering
-# with one has never proved it is yours.
-ACC_UNVERIFIED=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITATIONS/$INV_ID/accept" \
-  -H "Authorization: Bearer $INV_TOKEN")
-echo "unverified: $ACC_UNVERIFIED"
-[ "$ACC_UNVERIFIED" = "403" ] || fail "expected 403 accepting unverified, got $ACC_UNVERIFIED"
-
-if [ -z "$MAIL_LOG" ]; then
-  echo "skipped the rest of 49 and 50 (no MAIL_LOG) - accepting needs the mailed link"
-  # The checks further down need a member of this group who is not its owner,
-  # so get the invitee in by code instead: that flow is not gated, since a QR
-  # is handed over in person and claims no address.
-  BOOTSTRAP_QR=$(curl -sS -X POST "$GROUPS_URL/$GROUP_ID/invite-code" \
-    -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" -d '{}')
-  BOOTSTRAP_CODE=$(extract_field "$BOOTSTRAP_QR" code)
-  BOOTSTRAP_JOIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/v1/invite-codes/$BOOTSTRAP_CODE/join" \
-    -H "Authorization: Bearer $INV_TOKEN")
-  [ "$BOOTSTRAP_JOIN" = "200" ] || fail "could not get the invitee into the group by code, got $BOOTSTRAP_JOIN"
-else
-VERIFY_LINK_INV=$(mail_link_for_purpose EMAIL_VERIFICATION "$INV_EMAIL")
-[ -n "$VERIFY_LINK_INV" ] || fail "no verification link found in $MAIL_LOG for $INV_EMAIL"
-V_INV=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/verify-email" \
-  -H "Content-Type: application/json" -d "{\"token\":\"${VERIFY_LINK_INV##*/}\"}")
-[ "$V_INV" = "204" ] || fail "could not verify the invitee, got $V_INV"
-echo "verified the invitee from the mail log"
-
+line "49. The invitee accepts (expect 200, ACCEPTED); accepting again (expect 409)"
+# The refusal for an unconfirmed account is step 86, with an account kept
+# unconfirmed on purpose - this one has already confirmed at step 47.
 ACC=$(curl -sS -X POST "$INVITATIONS/$INV_ID/accept" -H "Authorization: Bearer $INV_TOKEN")
 print_json "$ACC"
 [ "$(extract_field "$ACC" invitationStatus)" = "ACCEPTED" ] || fail "expected ACCEPTED after accepting"
@@ -658,7 +683,6 @@ INV_GROUPS=$(curl -sS "$GROUPS_URL" -H "Authorization: Bearer $INV_TOKEN")
 print_json "$INV_GROUPS"
 echo "$INV_GROUPS" | grep -q "\"id\":\"$GROUP_ID\"" || fail "the invitee is not in the group after accepting"
 echo "$INV_GROUPS" | grep -q '"callerRole":"MEMBER"' || fail "expected the invitee to join as MEMBER"
-fi
 
 # --- Devices ---------------------------------------------------------------
 # Carl owns TCAR_ID (the telemetry car) and FRESH_CAR_ID; Grace is a stranger.
@@ -805,11 +829,11 @@ echo "idle: $IDLE   stranger: $STRANGER"
 line "65. The driver finishes the trip (expect 200, fuelUsed derived)"
 FIN=$(curl -sS -X POST "$TRIPS/$TRIP2_ID/finish" \
   -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
-  -d '{"tripFinalFuel": 50, "tripDistance": 140}')
+  -d '{"tripFinalFuel": 50, "distanceKm": 140}')
 print_json "$FIN"
 expect_json "$FIN" active false
 expect_json "$FIN" finalFuel 50
-expect_json "$FIN" distance 140
+expect_json "$FIN" distanceKm 140
 # 68 - 50: computed on read, never stored.
 expect_json "$FIN" fuelUsed 18
 [ -n "$(extract_field "$FIN" endedAt)" ] || fail "expected endedAt to be set"
@@ -826,9 +850,9 @@ TRIP3_ID=$(extract_field "$NEXT_BODY" id)
 
 line "67. Finishing twice (expect 409); someone else finishing (expect 404)"
 TWICE=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TRIPS/$TRIP2_ID/finish" \
-  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" -d '{"tripFinalFuel": 10, "tripDistance": 1}')
+  -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" -d '{"tripFinalFuel": 10, "distanceKm": 1}')
 FOREIGN_FIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TRIPS/$TRIP3_ID/finish" \
-  -H "Authorization: Bearer $OTHER_TOKEN" -H "Content-Type: application/json" -d '{"tripFinalFuel": 10, "tripDistance": 1}')
+  -H "Authorization: Bearer $OTHER_TOKEN" -H "Content-Type: application/json" -d '{"tripFinalFuel": 10, "distanceKm": 1}')
 echo "twice: $TWICE   someone else: $FOREIGN_FIN"
 [ "$TWICE" = "409" ]       || fail "expected 409 finishing an ended trip, got $TWICE"
 [ "$FOREIGN_FIN" = "404" ] || fail "expected 404 for a non-driver finishing, got $FOREIGN_FIN"
@@ -1015,6 +1039,7 @@ PROF_REG=$(curl -sS -X POST "$BASE/register" -H "Content-Type: application/json"
   -d "{\"userName\":\"Pro\",\"userLastName\":\"File\",\"userEmail\":\"$PROF_EMAIL\",\"userPassword\":\"$PASSWORD\",\"userPhone\":\"+39 320 1234567\"}")
 PROF_TOKEN=$(extract_field "$PROF_REG" accessToken)
 [ -n "$PROF_TOKEN" ] || fail "could not register a user for the profile checks"
+verify_email "$PROF_EMAIL" || fail "could not confirm $PROF_EMAIL"
 
 line "80. GET then PUT /users/me (expect 200, the new values come back)"
 ME=$(curl -sS "$USERS_ME" -H "Authorization: Bearer $PROF_TOKEN")
@@ -1112,45 +1137,80 @@ VER_ME=$(curl -sS "$BASE_URL/api/v1/users/me" -H "Authorization: Bearer $VER_TOK
 print_json "$VER_ME"
 expect_json "$VER_ME" emailVerified false
 
-line "86. Unverified, the gate blocks accepting an invitation (expect 403) but nothing else"
-# Carl invites the new account to his group; it is addressed to an email, and
-# an unverified account has not proved that address is its own.
+line "86. Unverified, the account can do nothing at all (expect 403 everywhere)"
+# The hard gate. An account created with somebody else's address is inert:
+# there is no window in which it can register cars, create groups, start
+# trips, or be seen by anybody.
 GATE_INV=$(curl -sS -X POST "$INVITATIONS/invite/$GROUP_ID" \
   -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" \
   -d "{\"email\":\"$VER_EMAIL\"}")
 GATE_INV_ID=$(extract_field "$GATE_INV" invitationId)
 [ -n "$GATE_INV_ID" ] || fail "could not create an invitation for the gate check"
-GATE_ACCEPT=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITATIONS/$GATE_INV_ID/accept" \
-  -H "Authorization: Bearer $VER_TOKEN")
-# ...while everything that only touches their own data still works.
+
+for req in \
+  "GET  $CARS" \
+  "GET  $GROUPS_URL" \
+  "GET  $TRIPS" \
+  "GET  $BASE_URL/api/v1/models" \
+  "GET  $INVITATIONS/pending" \
+  "POST $INVITATIONS/$GATE_INV_ID/accept" ; do
+  METHOD="${req%% *}"; URL="${req##* }"
+  BODY=$(curl -sS -X "$METHOD" "$URL" -H "Authorization: Bearer $VER_TOKEN")
+  echo "$BODY" | grep -q '"reason":"email_not_verified"' \
+    || fail "$METHOD $URL should be 403 email_not_verified, got: $BODY"
+done
+# Creating things is refused too, not merely reading.
 GATE_CAR=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$CARS" \
   -H "Authorization: Bearer $VER_TOKEN" -H "Content-Type: application/json" \
-  -d "{\"name\":\"Unverified car\",\"modelId\":\"$MODEL_GOL\"}")
+  -d "{\"name\":\"Auto sin verificar\",\"modelId\":\"$MODEL_GOL\"}")
 GATE_GROUP=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$GROUPS_URL" \
   -H "Authorization: Bearer $VER_TOKEN" -H "Content-Type: application/json" -d '{"name":"Propio"}')
-echo "accept: $GATE_ACCEPT   create car: $GATE_CAR   create group: $GATE_GROUP"
-[ "$GATE_ACCEPT" = "403" ] || fail "expected 403 accepting an invitation unverified, got $GATE_ACCEPT"
-[ "$GATE_CAR" = "201" ]    || fail "an unverified account must still register a car, got $GATE_CAR"
-[ "$GATE_GROUP" = "201" ]  || fail "an unverified account must still create its own group, got $GATE_GROUP"
+# And it cannot log in again: the token registration gave it is the only way
+# in until the address is confirmed.
+GATE_LOGIN=$(curl -sS -X POST "$BASE/login" -H "Content-Type: application/json" \
+  -d "{\"userEmail\":\"$VER_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
+echo "create car: $GATE_CAR   create group: $GATE_GROUP"
+[ "$GATE_CAR" = "403" ]   || fail "an unconfirmed account must not register a car, got $GATE_CAR"
+[ "$GATE_GROUP" = "403" ] || fail "an unconfirmed account must not create a group, got $GATE_GROUP"
+echo "$GATE_LOGIN" | grep -q '"reason":"email_not_verified"' \
+  || fail "login should be refused with email_not_verified, got: $GATE_LOGIN"
 
-line "86b. A QR code is deliberately NOT gated (expect 200 for an unverified scanner)"
-# The asymmetry is the point: an invitation names an address, so it could be
-# claimed by an account that never proved it owns one. A code is a bearer
-# secret handed over in person - nobody is impersonated, and gating it would
-# only stop a guest joining at the dinner table.
-SCAN_EMAIL="scanner+$(date +%s)@example.com"
-SCAN_REG=$(curl -sS -X POST "$BASE/register" -H "Content-Type: application/json" \
-  -d "{\"userName\":\"Scan\",\"userLastName\":\"Ner\",\"userEmail\":\"$SCAN_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
-SCAN_TOKEN=$(extract_field "$SCAN_REG" accessToken)
-SCAN_QR=$(curl -sS -X POST "$GROUPS_URL/$GROUP_ID/invite-code" \
+line "86b. What it CAN do: see itself, ask for another link, and log out"
+GATE_ME=$(curl -sS "$BASE_URL/api/v1/users/me" -H "Authorization: Bearer $VER_TOKEN")
+expect_json "$GATE_ME" emailVerified false
+# The public resend, for somebody who came back later with no token at all.
+# Always 202, so it cannot be used to ask who has an account here.
+PUB_KNOWN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/resend-verification" \
+  -H "Content-Type: application/json" -d "{\"userEmail\":\"$VER_EMAIL\"}")
+PUB_UNKNOWN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/resend-verification" \
+  -H "Content-Type: application/json" -d '{"userEmail":"nadie+'"$(date +%s)"'@example.com"}')
+PUB_VERIFIED=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/resend-verification" \
+  -H "Content-Type: application/json" -d "{\"userEmail\":\"$CAR_EMAIL\"}")
+PUB_BAD=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/resend-verification" \
+  -H "Content-Type: application/json" -d '{"userEmail":"not-an-email"}')
+echo "resend: unconfirmed $PUB_KNOWN   unknown $PUB_UNKNOWN   already confirmed $PUB_VERIFIED   malformed $PUB_BAD"
+[ "$PUB_KNOWN" = "202" ]    || fail "expected 202, got $PUB_KNOWN"
+[ "$PUB_UNKNOWN" = "202" ]  || fail "an unknown address must look identical, got $PUB_UNKNOWN"
+[ "$PUB_VERIFIED" = "202" ] || fail "an already-confirmed address must look identical, got $PUB_VERIFIED"
+[ "$PUB_BAD" = "400" ]      || fail "a malformed address is the only thing it will admit, got $PUB_BAD"
+
+line "86c. The QR exception is gone, but previewing a code stays public"
+# This used to be an exception: a code is handed over in person, so no address
+# is being claimed, and an unconfirmed scanner was allowed to join. The hard
+# gate removes the exception - an account does nothing before confirming - so
+# invitations and codes are no longer treated differently at the HTTP layer.
+QR_GATE=$(curl -sS -X POST "$GROUPS_URL/$GROUP_ID/invite-code" \
   -H "Authorization: Bearer $CAR_TOKEN" -H "Content-Type: application/json" -d '{}')
-SCAN_CODE=$(extract_field "$SCAN_QR" code)
-SCAN_ME=$(curl -sS "$BASE_URL/api/v1/users/me" -H "Authorization: Bearer $SCAN_TOKEN")
-expect_json "$SCAN_ME" emailVerified false
-SCAN_JOIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITE_CODES/$SCAN_CODE/join" \
-  -H "Authorization: Bearer $SCAN_TOKEN")
-echo "unverified scanner: $SCAN_JOIN"
-[ "$SCAN_JOIN" = "200" ] || fail "an unverified scanner must still be able to join by code, got $SCAN_JOIN"
+QR_GATE_CODE=$(extract_field "$QR_GATE" code)
+QR_JOIN_WALLED=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$INVITE_CODES/$QR_GATE_CODE/join" \
+  -H "Authorization: Bearer $VER_TOKEN")
+# Previewing is still the one endpoint that needs no credential at all: it is
+# how somebody with no account sees whose group they were handed before they
+# decide to sign up.
+QR_PREVIEW_ANON=$(curl -sS -o /dev/null -w '%{http_code}' "$INVITE_CODES/$QR_GATE_CODE")
+echo "unconfirmed join: $QR_JOIN_WALLED   preview with no credential: $QR_PREVIEW_ANON"
+[ "$QR_JOIN_WALLED" = "403" ]   || fail "an unconfirmed account must not join by code, got $QR_JOIN_WALLED"
+[ "$QR_PREVIEW_ANON" = "200" ]  || fail "previewing a code must stay public, got $QR_PREVIEW_ANON"
 
 line "87. Asking for another verification mail right away is throttled (expect 429)"
 RESEND_SOON=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/v1/users/me/verify-email" \
@@ -1158,10 +1218,8 @@ RESEND_SOON=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE_URL/api/v1/
 echo "status: $RESEND_SOON"
 [ "$RESEND_SOON" = "429" ] || fail "expected 429 resending within the throttle window, got $RESEND_SOON"
 
-line "88. Redeeming the mailed link verifies the address, and the gate lifts"
-if [ -z "$MAIL_LOG" ]; then
-  echo "skipped (no MAIL_LOG) - set MAIL_LOG=/path/to/app.log to run the mail flows"
-else
+line "88. Redeeming the mailed link opens the application"
+if true; then
   VERIFY_LINK=$(mail_link_for_purpose EMAIL_VERIFICATION "$VER_EMAIL")
   [ -n "$VERIFY_LINK" ] || fail "no verification link found in $MAIL_LOG for $VER_EMAIL"
   VERIFY_CODE="${VERIFY_LINK##*/}"
@@ -1181,7 +1239,18 @@ else
   echo "again: $V_AGAIN   unknown: $V_BOGUS"
   [ "$V_AGAIN" = "409" ] || fail "expected 409 redeeming a spent link, got $V_AGAIN"
   [ "$V_BOGUS" = "404" ] || fail "expected 404 for an unknown link, got $V_BOGUS"
-  # Now verified, the invitation that was refused goes through.
+  # Everything that was 403 a moment ago now works, with the same token -
+  # nothing about it changed, only what the account is allowed to do.
+  NOW_CAR=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$CARS" \
+    -H "Authorization: Bearer $VER_TOKEN" -H "Content-Type: application/json" \
+    -d "{\"name\":\"Auto confirmado\",\"modelId\":\"$MODEL_GOL\"}")
+  NOW_LOGIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$BASE/login" \
+    -H "Content-Type: application/json" \
+    -d "{\"userEmail\":\"$VER_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
+  echo "now: create car $NOW_CAR   login $NOW_LOGIN"
+  [ "$NOW_CAR" = "201" ]   || fail "a confirmed account should register a car, got $NOW_CAR"
+  [ "$NOW_LOGIN" = "200" ] || fail "a confirmed account should log in, got $NOW_LOGIN"
+
   NOW_ACCEPT=$(curl -sS -X POST "$INVITATIONS/$GATE_INV_ID/accept" -H "Authorization: Bearer $VER_TOKEN")
   print_json "$NOW_ACCEPT"
   [ "$(extract_field "$NOW_ACCEPT" invitationStatus)" = "ACCEPTED" ] \
@@ -1243,5 +1312,163 @@ NO_LEAK=$(curl -sS -X POST "$BASE/forgot-password" -H "Content-Type: application
 LEAK_ME=$(curl -sS "$BASE_URL/api/v1/users/me" -H "Authorization: Bearer $CAR_TOKEN")
 echo "$LEAK_ME" | grep -qi "token" && fail "GET /users/me must not mention a token"
 echo "no token in any response body"
+
+# ---------------------------------------------------------------------------
+# Device tokens, and the offline-sync shape of trips
+# ---------------------------------------------------------------------------
+# The phone's background service cannot share the JWT session: the refresh
+# token is single-use with family-wide theft detection, so two processes
+# refreshing log the user out. These checks cover the credential that replaces
+# it - scoped to one car, non-rotating, revocable on its own.
+DEVICE_TOKENS="$BASE_URL/api/v1/device-tokens"
+SYNC_EMAIL="sync+$(date +%s)@example.com"
+SYNC_REG=$(curl -sS -X POST "$BASE/register" -H "Content-Type: application/json" \
+  -d "{\"userName\":\"Sync\",\"userLastName\":\"Worker\",\"userEmail\":\"$SYNC_EMAIL\",\"userPassword\":\"$PASSWORD\"}")
+SYNC_TOKEN=$(extract_field "$SYNC_REG" accessToken)
+[ -n "$SYNC_TOKEN" ] || fail "could not register a user for the device-token checks"
+verify_email "$SYNC_EMAIL" || fail "could not confirm $SYNC_EMAIL"
+SYNC_CAR=$(extract_field "$(curl -sS -X POST "$CARS" -H "Authorization: Bearer $SYNC_TOKEN" \
+  -H "Content-Type: application/json" -d "{\"name\":\"Auto del celular\",\"modelId\":\"$MODEL_GOL\"}")" id)
+SYNC_CAR2=$(extract_field "$(curl -sS -X POST "$CARS" -H "Authorization: Bearer $SYNC_TOKEN" \
+  -H "Content-Type: application/json" -d "{\"name\":\"Segundo auto\",\"modelId\":\"$MODEL_GOL\"}")" id)
+
+line "92. Mint a device token (expect 201, prefixed, shown once, 90-day idle window)"
+DT_HEADERS=$(mktemp)
+DT_MINT=$(curl -sS -D "$DT_HEADERS" -X POST "$CARS/$SYNC_CAR/device-tokens" \
+  -H "Authorization: Bearer $SYNC_TOKEN" -H "Content-Type: application/json" \
+  -d '{"label":"Pixel de prueba"}')
+print_json "$DT_MINT"
+grep -qi "^HTTP/1.1 201" "$DT_HEADERS" || fail "expected 201 from mint device token"
+rm -f "$DT_HEADERS"
+DEV_TOKEN=$(extract_field "$DT_MINT" token)
+DEV_TOKEN_ID=$(extract_field "$DT_MINT" id)
+case "$DEV_TOKEN" in obdd_*) ;; *) fail "the token should carry the obdd_ prefix: $DEV_TOKEN" ;; esac
+expect_json "$DT_MINT" carId "\"$SYNC_CAR\""
+expect_json "$DT_MINT" label "\"Pixel de prueba\""
+[ -n "$(extract_field "$DT_MINT" idleExpiresAt)" ] || fail "expected an idleExpiresAt"
+
+line "93. The list shows it without the token; revoking twice is 204 then 404"
+DT_LIST=$(curl -sS "$CARS/$SYNC_CAR/device-tokens" -H "Authorization: Bearer $SYNC_TOKEN")
+print_json "$DT_LIST"
+echo "$DT_LIST" | grep -q "\"id\":\"$DEV_TOKEN_ID\"" || fail "the minted token is missing from the list"
+echo "$DT_LIST" | grep -q '"token"' && fail "the list must never carry the token itself"
+
+line "94. The background service can do its four things, on its own car only"
+# Inside the window of the trip created at step 96 (105 to 90 minutes ago),
+# because that is the point: this reading is uploaded while no trip exists, and
+# the route still has to find it.
+DT_SYNC_AT=$(iso_ago 6000)
+DT_ING=$(curl -sS -X POST "$TELEMETRY" -H "Authorization: Device $DEV_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"carId\":\"$SYNC_CAR\",\"readings\":[{\"recordedAt\":\"$DT_SYNC_AT\",\"latitude\":-34.61,\"longitude\":-58.39,\"speed\":55}]}")
+print_json "$DT_ING"
+expect_json "$DT_ING" stored 1
+# No trip is open, so nothing stamps trip_id - which is exactly the case the
+# route query has to survive. Checked at step 97.
+expect_json "$DT_ING" tripId null
+DT_OTHER=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TELEMETRY" \
+  -H "Authorization: Device $DEV_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"carId\":\"$SYNC_CAR2\",\"readings\":[{\"recordedAt\":\"$DT_SYNC_AT\",\"speed\":1}]}")
+echo "another car owned by the same user: $DT_OTHER"
+# Authenticating is not being in scope: the owner may use that car, the token may not.
+[ "$DT_OTHER" = "403" ] || fail "a device token must not reach another car, got $DT_OTHER"
+
+line "95. Everything else is closed to a device token (expect 403), garbage is 401"
+for ep in "users/me" "cars" "groups" "trips" "models" "invitations/pending"; do
+  CODE=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE_URL/api/v1/$ep" -H "Authorization: Device $DEV_TOKEN")
+  [ "$CODE" = "403" ] || fail "GET /$ep should be 403 for a device token, got $CODE"
+done
+DT_MINT_SELF=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$CARS/$SYNC_CAR/device-tokens" \
+  -H "Authorization: Device $DEV_TOKEN" -H "Content-Type: application/json" -d '{"label":"Otro"}')
+DT_GARBAGE=$(curl -sS "$CARS/$SYNC_CAR/trips/active" -H "Authorization: Device obdd_basura")
+echo "mint with a device token: $DT_MINT_SELF"
+# Otherwise a stolen token could issue itself a replacement and survive revocation.
+[ "$DT_MINT_SELF" = "403" ] || fail "a device token must not mint credentials, got $DT_MINT_SELF"
+echo "$DT_GARBAGE" | grep -q '"reason":"token_invalid"' || fail "expected reason=token_invalid for a bogus token"
+echo "$DT_GARBAGE" | grep -q '"status":401' || fail "a bogus device token should be 401, not 403"
+
+line "96. Starting a trip twice with the same clientTripId (expect 201 then 200)"
+CLIENT_TRIP_ID=$(python3 -c 'import uuid;print(uuid.uuid4())' 2>/dev/null || uuidgen | tr 'A-Z' 'a-z')
+TUNNEL_START=$(iso_ago 6300)
+SYNC_START=$(curl -sS -w '\n%{http_code}' -X POST "$TRIPS" -H "Authorization: Device $DEV_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"carId\":\"$SYNC_CAR\",\"startedAt\":\"$TUNNEL_START\",\"clientTripId\":\"$CLIENT_TRIP_ID\"}")
+SYNC_CODE=$(echo "$SYNC_START" | tail -1); SYNC_BODY=$(echo "$SYNC_START" | sed '$d')
+print_json "$SYNC_BODY"
+SYNC_TRIP=$(extract_field "$SYNC_BODY" id)
+RETRY_CODE=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TRIPS" -H "Authorization: Device $DEV_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"carId\":\"$SYNC_CAR\",\"startedAt\":\"$TUNNEL_START\",\"clientTripId\":\"$CLIENT_TRIP_ID\"}")
+echo "first: $SYNC_CODE   retry: $RETRY_CODE"
+[ "$SYNC_CODE" = "201" ] || fail "expected 201 creating the trip, got $SYNC_CODE"
+# The case this exists for: the trip was created and the response was lost.
+# Without the key the retry gets 409 and the phone cannot tell its own trip
+# from one another driver started.
+[ "$RETRY_CODE" = "200" ] || fail "a repeat clientTripId must answer 200, got $RETRY_CODE"
+# The client's clock dated the trip; the server's recorded when it heard.
+expect_json "$SYNC_BODY" startedAt "\"$TUNNEL_START\""
+[ "$(extract_field "$SYNC_BODY" createdAt)" != "$TUNNEL_START" ] \
+  || fail "createdAt must be the server clock, not the client's startedAt"
+
+line "97. Finish with the client's own end time and a decimal distance"
+TUNNEL_END=$(iso_ago 5400)
+SYNC_FIN=$(curl -sS -X POST "$TRIPS/$SYNC_TRIP/finish" -H "Authorization: Device $DEV_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"tripFinalFuel\":50,\"distanceKm\":12.75,\"endedAt\":\"$TUNNEL_END\"}")
+print_json "$SYNC_FIN"
+expect_json "$SYNC_FIN" endedAt "\"$TUNNEL_END\""
+# Kilometres with two decimals. An integer truncated these silently before.
+expect_json "$SYNC_FIN" distanceKm 12.75
+expect_json "$SYNC_FIN" active false
+
+line "98. The route is found even though no reading carried a trip_id"
+ROUTE=$(curl -sS "$TRIPS/$SYNC_TRIP/route" -H "Authorization: Bearer $SYNC_TOKEN")
+print_json "$ROUTE"
+# The reading at step 94 was uploaded with no trip open, so trip_id stayed
+# null and nothing ever re-stamps it. Resolving the route by time window is
+# what makes an offline-synced trip have a route at all.
+echo "$ROUTE" | grep -q '"latitude":-34.61' || fail "the route is missing the reading uploaded before the trip existed"
+
+line "99. A clock the server will not accept (expect 400 each)"
+FUTURE=$(python3 -c 'import datetime;print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))' 2>/dev/null || date -u -v+1H +%Y-%m-%dT%H:%M:%SZ)
+ANCIENT=$(iso_ago 3456000)
+C_FUTURE=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TRIPS" -H "Authorization: Device $DEV_TOKEN" \
+  -H "Content-Type: application/json" -d "{\"carId\":\"$SYNC_CAR\",\"startedAt\":\"$FUTURE\"}")
+C_OLD=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TRIPS" -H "Authorization: Device $DEV_TOKEN" \
+  -H "Content-Type: application/json" -d "{\"carId\":\"$SYNC_CAR\",\"startedAt\":\"$ANCIENT\"}")
+# That trip is already finished, so this is the 409 from step 97's close -
+# the endedAt-before-startedAt 400 is covered by TripServiceTest, which can
+# set up an open trip with a known start.
+C_FINISHED=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TRIPS/$SYNC_TRIP/finish" \
+  -H "Authorization: Device $DEV_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"endedAt\":\"$(iso_ago 99999)\"}")
+C_DECIMALS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TRIPS/$SYNC_TRIP/finish" \
+  -H "Authorization: Device $DEV_TOKEN" -H "Content-Type: application/json" -d '{"distanceKm":1.234}')
+echo "future: $C_FUTURE   40 days old: $C_OLD   already finished: $C_FINISHED   3 decimals: $C_DECIMALS"
+[ "$C_FUTURE" = "400" ]    || fail "a startedAt an hour ahead should be 400, got $C_FUTURE"
+[ "$C_OLD" = "400" ]       || fail "a startedAt 40 days old should be 400, got $C_OLD"
+[ "$C_DECIMALS" = "400" ]  || fail "a third decimal should be refused rather than rounded, got $C_DECIMALS"
+[ "$C_FINISHED" = "409" ]  || fail "finishing an already-finished trip should be 409, got $C_FINISHED"
+
+line "99b. A body that cannot be parsed is 400, not 500"
+BAD_JSON=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TRIPS" -H "Authorization: Device $DEV_TOKEN" \
+  -H "Content-Type: application/json" -d '{"carId": not-json}')
+BAD_UUID=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$TRIPS" -H "Authorization: Device $DEV_TOKEN" \
+  -H "Content-Type: application/json" -d "{\"carId\":\"$SYNC_CAR\",\"clientTripId\":\"not-a-uuid\"}")
+echo "malformed json: $BAD_JSON   malformed uuid: $BAD_UUID"
+[ "$BAD_JSON" = "400" ] || fail "malformed JSON should be 400, got $BAD_JSON"
+[ "$BAD_UUID" = "400" ] || fail "a malformed UUID in the body should be 400, got $BAD_UUID"
+
+line "100. Revoking the token kills it at once (expect 204, then 401 with a reason)"
+REV_DT=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$DEVICE_TOKENS/$DEV_TOKEN_ID" -H "Authorization: Bearer $SYNC_TOKEN")
+AFTER=$(curl -sS "$CARS/$SYNC_CAR/trips/active" -H "Authorization: Device $DEV_TOKEN")
+REV_AGAIN=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$DEVICE_TOKENS/$DEV_TOKEN_ID" -H "Authorization: Bearer $SYNC_TOKEN")
+echo "revoke: $REV_DT   revoke again: $REV_AGAIN"
+[ "$REV_DT" = "204" ] || fail "expected 204 revoking a device token, got $REV_DT"
+[ "$REV_AGAIN" = "404" ] || fail "revoking twice should be 404, got $REV_AGAIN"
+echo "$AFTER" | grep -q '"reason":"token_revoked"' || fail "expected reason=token_revoked after revoking"
+# The user's own session is untouched - that is the whole point of a separate
+# credential.
+STILL=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE_URL/api/v1/users/me" -H "Authorization: Bearer $SYNC_TOKEN")
+[ "$STILL" = "200" ] || fail "revoking a device token must not disturb the user's session, got $STILL"
 
 line "All checks passed"

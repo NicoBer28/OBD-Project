@@ -4,6 +4,8 @@ import com.obd.api.invitation.exception.*;
 import com.obd.api.invitecode.exception.InviteCodeNoLongerValidException;
 import com.obd.api.invitecode.exception.InviteCodeNotFoundException;
 import com.obd.api.trip.exception.TripAlreadyEndedException;
+import com.obd.api.trip.exception.TripEndsBeforeItStartsException;
+import com.obd.api.trip.exception.TripTimeOutOfRangeException;
 import com.obd.api.trip.exception.TripNotFoundException;
 import com.obd.api.auth.token.exception.TokenNoLongerValidException;
 import com.obd.api.auth.token.exception.TokenNotFoundException;
@@ -20,6 +22,7 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.validation.FieldError;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -30,6 +33,8 @@ import com.obd.api.car.exception.CarNotFoundException;
 import com.obd.api.device.exception.DeviceAlreadyPairedException;
 import com.obd.api.device.exception.DeviceNotFoundException;
 import com.obd.api.device.exception.NoDevicePairedException;
+import com.obd.api.devicetoken.exception.DeviceNotAllowedException;
+import com.obd.api.devicetoken.exception.DeviceTokenNotFoundException;
 import com.obd.api.car.exception.LicensePlateAlreadyRegisteredException;
 import com.obd.api.car.exception.ModelNotFoundException;
 import com.obd.api.model.exception.ModelAlreadyExistsException;
@@ -113,6 +118,47 @@ public class GlobalExceptionHandler {
         return p;
     }
 
+    @ExceptionHandler(DeviceTokenNotFoundException.class)
+    public ProblemDetail deviceTokenNotFound(DeviceTokenNotFoundException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+        p.setTitle("Not Found");
+        // Also the answer for a token that is already revoked, or somebody
+        // else's - a token id is never confirmed to a stranger.
+        p.setDetail("No such device token");
+        return p;
+    }
+
+    @ExceptionHandler(DeviceNotAllowedException.class)
+    public ProblemDetail deviceNotAllowed(DeviceNotAllowedException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.FORBIDDEN);
+        p.setTitle("Forbidden");
+        p.setDetail(e.getMessage());
+        // The reason a client switches on: 403 means stop retrying, unlike the
+        // 401 that means "mint a new token".
+        p.setProperty("reason", "device_out_of_scope");
+        return p;
+    }
+
+    @ExceptionHandler(TripEndsBeforeItStartsException.class)
+    public ProblemDetail tripEndsBeforeItStarts(TripEndsBeforeItStartsException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
+        p.setTitle("Bad Request");
+        // The client's own clock produced this, so it is a 400, not a 409.
+        p.setDetail("The trip cannot end before it started");
+        return p;
+    }
+
+    @ExceptionHandler(TripTimeOutOfRangeException.class)
+    public ProblemDetail tripTimeOutOfRange(TripTimeOutOfRangeException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
+        p.setTitle("Validation failed");
+        p.setDetail("%s is %s".formatted(e.getField(), e.getReason()));
+        // Keyed by field, like a bean-validation failure, so a client can
+        // surface it the same way.
+        p.setProperty("errors", java.util.Map.of(e.getField(), e.getReason()));
+        return p;
+    }
+
     @ExceptionHandler(TokenNotFoundException.class)
     public ProblemDetail tokenNotFound(TokenNotFoundException e) {
         var p = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
@@ -151,9 +197,8 @@ public class GlobalExceptionHandler {
     public ProblemDetail emailNotVerified(EmailNotVerifiedException e) {
         var p = ProblemDetail.forStatus(HttpStatus.FORBIDDEN);
         p.setTitle("Forbidden");
-        // 403, not 404: the caller knows who they are, so there is nothing to
-        // hide by pretending the group does not exist.
-        p.setDetail("Verify your email address before joining a group");
+        p.setDetail("Confirm your email address before using the application");
+        p.setProperty("reason", "email_not_verified");
         return p;
     }
 
@@ -284,6 +329,23 @@ public class GlobalExceptionHandler {
         p.setTitle("Validation failed");
         p.setProperty("errors", e.getBindingResult().getFieldErrors().stream()
                 .collect(Collectors.toMap(FieldError::getField, FieldError::getDefaultMessage, (a, b) -> a)));
+        return p;
+    }
+
+    /**
+     * A body Jackson could not read: malformed JSON, a 35-character "UUID", a
+     * string where a number belongs.
+     *
+     * The client's fault, so 400 - without this it fell through to the
+     * catch-all and came back as a 500, which tells a client nothing and looks
+     * like a server bug. The parser's own message is not forwarded: it names
+     * internal types and can quote the payload back.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ProblemDetail unreadableBody(HttpMessageNotReadableException e) {
+        var p = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
+        p.setTitle("Bad Request");
+        p.setDetail("The request body could not be read - check the JSON and the field types");
         return p;
     }
 
