@@ -4,6 +4,7 @@ import com.obd.api.support.PostgresContainerConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 /**
@@ -16,6 +17,7 @@ import org.springframework.test.context.TestPropertySource;
  */
 @SpringBootTest
 @Import(PostgresContainerConfig.class)
+@ActiveProfiles("test")
 @TestPropertySource(properties = {
         "DB_USER=unused",
         "DB_PASSWORD=unused",

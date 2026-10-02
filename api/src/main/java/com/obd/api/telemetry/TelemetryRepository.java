@@ -70,4 +70,37 @@ public interface TelemetryRepository extends JpaRepository<Telemetry, Long> {
      * what the per-trip speed and fuel figures are computed from.
      */
     List<Telemetry> findByTelemetryTripIdOrderByTelemetryRecordedAtAsc(UUID telemetryTripId);
+
+    /**
+     * A trip's route: the car's readings inside the trip's window, oldest
+     * first, and only the ones that actually carry a position.
+     *
+     * By time range rather than by {@code trip_id}, which is set at ingest and
+     * only when a trip was open at the time. A phone that uploads its readings
+     * before it uploads the trip, or that uploads them after the trip was
+     * finished - both normal when syncing offline work - leaves trip_id null
+     * forever, because nothing re-stamps an inserted row. The window is
+     * unambiguous because {@code ux_trips_one_active_per_car} forbids two
+     * overlapping trips on one car, and the range is already indexed:
+     * {@code ux_telemetry_car_recorded_at} is (car_id, recorded_at).
+     *
+     * {@code trip_id} stays as a hint - it is never wrong, only sometimes
+     * absent - but no read that has to be complete may rely on it.
+     *
+     * Both bounds are required. An open trip passes "now" as the upper one,
+     * which costs nothing: ingest refuses readings more than five minutes in
+     * the future, so there is nothing beyond it to find.
+     */
+    @Query("""
+            select t from Telemetry t
+             where t.telemetryCarId = :carId
+               and t.telemetryRecordedAt >= :from
+               and t.telemetryRecordedAt <= :to
+               and t.telemetryLocation.latitude is not null
+               and t.telemetryLocation.longitude is not null
+             order by t.telemetryRecordedAt asc
+            """)
+    List<Telemetry> findRoute(@Param("carId") UUID carId,
+                              @Param("from") Instant from,
+                              @Param("to") Instant to);
 }

@@ -9,6 +9,7 @@ import com.obd.api.device.Device;
 import com.obd.api.device.DeviceRepository;
 import com.obd.api.device.exception.DeviceNotFoundException;
 import com.obd.api.group.*;
+import com.obd.api.devicetoken.DeviceScope;
 import com.obd.api.support.RepositoryTest;
 import com.obd.api.telemetry.dto.TelemetryDTO;
 import com.obd.api.telemetry.dto.TelemetryDTO.Reading;
@@ -39,7 +40,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * of them would test less than this does.
  */
 @RepositoryTest
-@Import({TelemetryService.class, CarAccess.class})
+@Import({TelemetryService.class, CarAccess.class, DeviceScope.class})
 class TelemetryServiceTest {
 
     private static final UUID SEEDED_GOL = UUID.fromString("00000000-0000-4000-8000-000000000001");

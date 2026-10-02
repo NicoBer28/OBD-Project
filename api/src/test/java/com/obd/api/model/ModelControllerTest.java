@@ -2,6 +2,7 @@ package com.obd.api.model;
 
 import com.obd.api.auth.JwtAuthEntryPoint;
 import com.obd.api.auth.JwtAuthFilter;
+import com.obd.api.devicetoken.DeviceAuthFilter;
 import com.obd.api.auth.SecurityConfig;
 import com.obd.api.auth.UserPrincipal;
 import com.obd.api.model.dto.ModelDTO;
@@ -47,7 +48,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(controllers = ModelController.class,
         excludeFilters = @ComponentScan.Filter(
                 type = FilterType.ASSIGNABLE_TYPE,
-                classes = {SecurityConfig.class, JwtAuthFilter.class, JwtAuthEntryPoint.class}))
+                classes = {SecurityConfig.class, JwtAuthFilter.class, JwtAuthEntryPoint.class, DeviceAuthFilter.class}))
 @Import({SliceSecurityConfig.class, ModelControllerTest.MethodSecurity.class})
 class ModelControllerTest {
 

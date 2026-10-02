@@ -1,6 +1,37 @@
-# Caddy obtains and renews the Let's Encrypt certificate for API_DOMAIN on its
-# own. No domain? Use <server-ip>.sslip.io, which resolves to that IP.
+# Caddy obtains and renews the Let's Encrypt certificate for each domain on
+# its own. No domain? Use <server-ip>.sslip.io, which resolves to that IP.
+
+# The API, on its own hostname. What the Flutter app talks to.
 {$API_DOMAIN} {
 	encode gzip
 	reverse_proxy api:8080
+}
+
+# The pages the emailed links open: /verify-email/<token> and
+# /reset-password/<token>.
+#
+# This host also proxies /api to the same API container, on purpose. The
+# pages then call relative URLs, which means no API hostname baked into the
+# HTML and - the real win - no cross-origin request at all, so nothing has to
+# be added to CORS_ORIGINS for them to work.
+{$WEB_DOMAIN} {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+
+	handle {
+		root * /srv/web
+		# The token is a path segment, not a query parameter, so
+		# /verify-email/<token> has to resolve to the page itself rather
+		# than 404 on a file that does not exist.
+		rewrite /verify-email/* /verify-email/index.html
+		rewrite /reset-password/* /reset-password/index.html
+		file_server
+	}
+
+	# Universal links, when the app takes these URLs over: drop
+	# apple-app-site-association and assetlinks.json into deploy/web/.well-known/
+	# and they are served from here with no further configuration.
 }

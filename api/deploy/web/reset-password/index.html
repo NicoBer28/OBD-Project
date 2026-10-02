@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Nueva contraseña · OBIDI</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+    <div class="brand">OBIDI</div>
+
+    <!-- Unlike the verification page, nothing happens on load: a reset is
+         destructive, so it waits for a person to type a password and submit.
+         That also means a mail scanner fetching this URL cannot spend the
+         token. -->
+    <form id="form">
+        <h1>Elegí una contraseña nueva</h1>
+        <p>El enlace sirve una sola vez y vence 30 minutos después de pedirlo.</p>
+
+        <label for="password">Contraseña nueva</label>
+        <input id="password" name="password" type="password" autocomplete="new-password"
+               minlength="8" maxlength="72" required autofocus>
+
+        <label for="repeat">Repetila</label>
+        <input id="repeat" name="repeat" type="password" autocomplete="new-password"
+               minlength="8" maxlength="72" required>
+
+        <p class="hint">Entre 8 y 72 caracteres.</p>
+
+        <button type="submit" id="submit">Guardar</button>
+        <p class="status bad" id="error" role="alert" hidden></p>
+    </form>
+
+    <div id="done" hidden>
+        <h1>Contraseña actualizada</h1>
+        <p class="lead">Ya podés entrar con la nueva.</p>
+        <p>Cerramos las sesiones abiertas en todos los dispositivos, así que vas
+           a tener que iniciar sesión otra vez en cada uno.</p>
+    </div>
+
+    <div id="spent" hidden>
+        <h1>Ese enlace ya no sirve</h1>
+        <p class="lead">Puede que ya lo hayas usado, o que hayan pasado los 30 minutos.</p>
+        <p>Pedí uno nuevo desde la pantalla de inicio de sesión, con
+           «Olvidé mi contraseña».</p>
+    </div>
+
+    <div id="unknown" hidden>
+        <h1>Enlace inválido</h1>
+        <p class="lead">No encontramos ese enlace.</p>
+        <p>Revisá que lo hayas copiado completo, o pedí uno nuevo.</p>
+    </div>
+</main>
+
+<script>
+(function () {
+    "use strict";
+
+    var base = window.OBIDI_API_BASE || "";
+
+    function token() {
+        var fromQuery = new URLSearchParams(location.search).get("token");
+        if (fromQuery) { return fromQuery.trim(); }
+        var parts = location.pathname.split("/").filter(Boolean);
+        var last = parts[parts.length - 1] || "";
+        return last === "reset-password" ? "" : decodeURIComponent(last).trim();
+    }
+
+    var form = document.getElementById("form");
+    var submit = document.getElementById("submit");
+    var error = document.getElementById("error");
+
+    function show(id) {
+        ["form", "done", "spent", "unknown"].forEach(function (name) {
+            document.getElementById(name).hidden = name !== id;
+        });
+    }
+
+    function fail(message) {
+        error.textContent = message;
+        error.hidden = false;
+        submit.disabled = false;
+        submit.textContent = "Guardar";
+    }
+
+    if (!token()) { show("unknown"); }
+
+    form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        error.hidden = true;
+
+        var password = document.getElementById("password").value;
+        var repeat = document.getElementById("repeat").value;
+
+        // Checked here only to save a round trip; the API enforces the same
+        // length rule, and it is the one that counts.
+        if (password.length < 8 || password.length > 72) {
+            fail("La contraseña tiene que tener entre 8 y 72 caracteres.");
+            return;
+        }
+        if (password !== repeat) {
+            fail("Las dos contraseñas no coinciden.");
+            return;
+        }
+
+        submit.disabled = true;
+        submit.textContent = "Guardando…";
+
+        fetch(base + "/api/v1/auth/reset-password", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: token(), newPassword: password })
+        }).then(function (response) {
+            if (response.status === 204 || response.ok) { show("done"); }
+            else if (response.status === 409) { show("spent"); }
+            else if (response.status === 404) { show("unknown"); }
+            else if (response.status === 400) {
+                fail("Esa contraseña no es válida. Probá con otra.");
+            } else {
+                fail("No pudimos guardarla. Probá de nuevo en un momento.");
+            }
+        }).catch(function () {
+            fail("No pudimos conectarnos. El enlace sigue siendo válido: probá de nuevo.");
+        });
+    });
+})();
+</script>
+</body>
+</html>

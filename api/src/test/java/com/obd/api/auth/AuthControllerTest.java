@@ -1,10 +1,16 @@
 package com.obd.api.auth;
 
 import com.obd.api.auth.dto.AuthResponseDTO;
+import com.obd.api.devicetoken.DeviceAuthFilter;
 import com.obd.api.auth.dto.TokenPair;
 import com.obd.api.auth.exception.EmailAlreadyInUseException;
 import com.obd.api.auth.refresh.RefreshCookie;
 import com.obd.api.auth.refresh.RefreshTokenService;
+import com.obd.api.auth.reset.PasswordResetService;
+import com.obd.api.auth.token.TokenKind;
+import com.obd.api.auth.token.exception.TokenNoLongerValidException;
+import com.obd.api.auth.token.exception.TokenNotFoundException;
+import com.obd.api.auth.verification.EmailVerificationService;
 import com.obd.api.support.SliceSecurityConfig;
 import com.obd.api.user.dto.UserDTO;
 import jakarta.servlet.http.HttpServletResponse;
@@ -30,6 +36,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -51,7 +58,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(controllers = AuthController.class,
         excludeFilters = @ComponentScan.Filter(
                 type = FilterType.ASSIGNABLE_TYPE,
-                classes = {SecurityConfig.class, JwtAuthFilter.class, JwtAuthEntryPoint.class}))
+                classes = {SecurityConfig.class, JwtAuthFilter.class, JwtAuthEntryPoint.class, DeviceAuthFilter.class}))
 @Import(SliceSecurityConfig.class)
 class AuthControllerTest {
 
@@ -66,6 +73,10 @@ class AuthControllerTest {
     private RefreshCookie refreshCookie;
     @MockitoBean
     private RefreshTokenService refreshTokenService;
+    @MockitoBean
+    private EmailVerificationService emailVerificationService;
+    @MockitoBean
+    private PasswordResetService passwordResetService;
 
     private static TokenPair tokenPair() {
         return new TokenPair(
@@ -184,6 +195,136 @@ class AuthControllerTest {
                         .cookie(new jakarta.servlet.http.Cookie(RefreshCookie.NAME, "raw-refresh-token")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.accessToken").value("header.payload.signature"));
+    }
+
+    // --- verify-email / forgot-password / reset-password ---------------------
+
+    @Test
+    void verifyEmailRedeemsTheLinkWithoutATokenOfItsOwn() throws Exception {
+        // No Authorization header: the mail may be opened on a laptop while
+        // only the phone is logged in, and the link is itself the proof.
+        mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"token": "tok-123"}
+                                """))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+
+        verify(emailVerificationService).verify("tok-123");
+    }
+
+    @Test
+    void verifyEmailMapsAnUnknownLinkTo404AndASpentOneTo409() throws Exception {
+        willThrow(new TokenNotFoundException(TokenKind.VERIFICATION))
+                .given(emailVerificationService).verify("gone");
+
+        mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"token\": \"gone\"}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("No such verification link"));
+
+        willThrow(new TokenNoLongerValidException(TokenKind.VERIFICATION))
+                .given(emailVerificationService).verify("used");
+
+        mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"token\": \"used\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("That verification link is no longer valid"));
+    }
+
+    @Test
+    void verifyEmailRejectsAnEmptyToken() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"token\": \"\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.token").exists());
+
+        verifyNoInteractions(emailVerificationService);
+    }
+
+    @Test
+    void forgotPasswordAnswers202ForAnyAddress() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"userEmail": "ada@example.com"}
+                                """))
+                .andExpect(status().isAccepted())
+                .andExpect(content().string(""));
+
+        verify(passwordResetService).request("ada@example.com");
+    }
+
+    @Test
+    void forgotPasswordLooksIdenticalForAnAddressWithNoAccount() throws Exception {
+        // The service returns quietly for an unknown address, so the endpoint
+        // cannot be used to ask who has an account here.
+        mockMvc.perform(post("/api/v1/auth/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"userEmail": "nobody@example.com"}
+                                """))
+                .andExpect(status().isAccepted())
+                .andExpect(content().string(""));
+    }
+
+    @Test
+    void forgotPasswordStillValidatesTheAddress() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"userEmail": "not-an-email"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.userEmail").exists());
+
+        verifyNoInteractions(passwordResetService);
+    }
+
+    @Test
+    void resetPasswordSetsItAndClearsTheCookie() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"token": "tok-123", "newPassword": "evenbetter456"}
+                                """))
+                .andExpect(status().isNoContent());
+
+        verify(passwordResetService).reset("tok-123", "evenbetter456");
+        // Every session was revoked, so leaving a dead cookie behind would
+        // only produce a confusing 401 on the next request.
+        verify(refreshCookie).clear(any(HttpServletResponse.class));
+    }
+
+    @Test
+    void resetPasswordRejectsAShortNewPassword() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"token": "tok-123", "newPassword": "short"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.newPassword").exists());
+
+        verifyNoInteractions(passwordResetService);
+    }
+
+    @Test
+    void resetPasswordMapsASpentLinkToConflict() throws Exception {
+        willThrow(new TokenNoLongerValidException(TokenKind.RESET))
+                .given(passwordResetService).reset("used", "evenbetter456");
+
+        mockMvc.perform(post("/api/v1/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"token": "used", "newPassword": "evenbetter456"}
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.detail").value("That password reset link is no longer valid"));
     }
 
     // --- logout --------------------------------------------------------------

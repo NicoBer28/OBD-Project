@@ -19,11 +19,14 @@ public class TripController {
 
     private final TripService tripService;
 
-    // 201: a trip was created. No Location, since GET /trips/{id} does not exist.
     @PostMapping("/trips")
-    @ResponseStatus(HttpStatus.CREATED)
-    public TripDTO.Read start(@AuthenticationPrincipal UserPrincipal principal, @RequestBody @Valid TripDTO.Create request) {
-        return tripService.start(principal.getId(), request);
+    public ResponseEntity<TripDTO.Read> start(@AuthenticationPrincipal UserPrincipal principal,
+                                              @RequestBody @Valid TripDTO.Create request) {
+        TripService.Started started = tripService.start(principal.getId(), request);
+
+        return ResponseEntity
+                .status(started.created() ? HttpStatus.CREATED : HttpStatus.OK)
+                .body(started.trip());
     }
 
     @GetMapping("/trips")
@@ -36,7 +39,6 @@ public class TripController {
         return tripService.getCarTrips(principal.getId(), id);
     }
 
-    /** 200 with the open trip, or 204 when the car is idle - the usual case. */
     @GetMapping("/cars/{id}/trips/active")
     public ResponseEntity<TripDTO.Read> active(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id){
         return tripService.active(principal.getId(), id)
@@ -44,12 +46,16 @@ public class TripController {
                 .orElseGet(() -> ResponseEntity.noContent().build());
     }
 
+    @GetMapping("/trips/{id}/route")
+    public List<TripDTO.RoutePoint> route(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id){
+        return tripService.route(principal.getId(), id);
+    }
+
     @PostMapping("/trips/{id}/finish")
     public TripDTO.Read finish(@AuthenticationPrincipal UserPrincipal principal, @RequestBody @Valid TripDTO.finish trip, @PathVariable UUID id){
         return tripService.finish(principal.getId(), id ,trip);
     }
 
-    /** 204 like the other deletes: there is nothing left to return. */
     @DeleteMapping("/trips/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@AuthenticationPrincipal UserPrincipal principal, @PathVariable UUID id){

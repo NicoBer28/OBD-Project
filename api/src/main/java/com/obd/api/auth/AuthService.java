@@ -4,13 +4,14 @@ import com.obd.api.auth.dto.AuthResponseDTO;
 import com.obd.api.auth.dto.TokenPair;
 import com.obd.api.auth.exception.EmailAlreadyInUseException;
 import com.obd.api.auth.refresh.RefreshTokenService;
+import com.obd.api.auth.verification.EmailVerificationService;
 import com.obd.api.user.User;
 import com.obd.api.user.UserMapper;
 import com.obd.api.user.UserRepository;
 import com.obd.api.user.dto.UserDTO;
+import com.obd.api.user.exception.EmailNotVerifiedException;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
-import org.antlr.v4.runtime.Token;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -31,6 +32,7 @@ public class AuthService {
     private final UserMapper userMapper;
     private final RefreshTokenService refreshTokenService;
     private final AppUserDetailsService userDetailsService;
+    private final EmailVerificationService emailVerificationService;
 
     @Transactional
     public TokenPair register(UserDTO.Create userDto){
@@ -44,13 +46,22 @@ public class AuthService {
         } catch (DataIntegrityViolationException e){
             throw new EmailAlreadyInUseException(user.getUserEmail());
         }
+        // Inside the transaction, so the mail is only sent if the account
+        // really was created; the send itself happens after it commits.
+        emailVerificationService.sendOnRegistration(saved);
+
         return pairFor(UserPrincipal.from(saved), true);
 
     }
 
     public TokenPair login(UserDTO.Login userDto){
         Authentication authentication = authenticationManager.authenticate(new UsernamePasswordAuthenticationToken(userDto.userEmail().trim().toLowerCase(), userDto.userPassword()));
-        return pairFor((UserPrincipal) authentication.getPrincipal(), true);
+        UserPrincipal principal = (UserPrincipal) authentication.getPrincipal();
+
+        if (!principal.isEmailVerified()) {
+            throw new EmailNotVerifiedException(principal.getId());
+        }
+        return pairFor(principal, true);
     }
 
     public TokenPair refresh(String rawRefreshToken) {
@@ -60,6 +71,11 @@ public class AuthService {
         var rotation = refreshTokenService.rotate(rawRefreshToken);
         UserPrincipal principal = userDetailsService.loadById(rotation.userId());
         return new TokenPair(accessResponse(principal), rotation.newRawToken());
+    }
+
+
+    public TokenPair reissue(UUID userId) {
+        return pairFor(userDetailsService.loadById(userId), true);
     }
 
     private AuthResponseDTO issue(UserPrincipal principal){

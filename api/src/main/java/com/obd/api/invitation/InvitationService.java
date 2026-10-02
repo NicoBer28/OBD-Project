@@ -7,6 +7,7 @@ import com.obd.api.group.GroupRole;
 import com.obd.api.invitation.dto.InvitationDTO;
 import com.obd.api.invitation.exception.*;
 import com.obd.api.user.Role;
+import com.obd.api.user.UserAccess;
 import com.obd.api.user.UserRepository;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,7 @@ public class InvitationService {
     private final InvitationRepository invitationRepository;
     private final GroupMemberRepository groupMemberRepository;
     private final GroupAccess groupAccess;
+    private final UserAccess userAccess;
 
     @Transactional
     public InvitationDTO.Read invite(UUID userId, String email, UUID groupID){
@@ -34,6 +36,8 @@ public class InvitationService {
                 .build();
 
        groupAccess.requireAdmin(userId, groupID);
+
+        userAccess.requireVerifiedEmail(userId);
 
         GroupMember groupMember2 = groupMemberRepository.findByGroupIdAndUserEmail(groupID, email.trim().toLowerCase()).orElse(null);
         if(groupMember2 != null)
@@ -55,6 +59,13 @@ public class InvitationService {
 
     @Transactional
     public InvitationDTO.Read accept(UUID userId ,String email ,UUID invitationId){
+
+
+        invitationRepository.findById(invitationId)
+                .filter(i -> i.getInvitationEmail().equals(email))
+                .orElseThrow(() -> new InvitationNotFoundException(invitationId, email));
+
+        userAccess.requireVerifiedEmail(userId);
 
         if(invitationRepository.accept(invitationId, email, Instant.now()) == 0){
             Invitation invitation = invitationRepository.findById(invitationId)

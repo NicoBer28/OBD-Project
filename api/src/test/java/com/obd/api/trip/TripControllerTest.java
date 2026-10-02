@@ -2,6 +2,7 @@ package com.obd.api.trip;
 
 import com.obd.api.auth.JwtAuthEntryPoint;
 import com.obd.api.auth.JwtAuthFilter;
+import com.obd.api.devicetoken.DeviceAuthFilter;
 import com.obd.api.auth.SecurityConfig;
 import com.obd.api.auth.UserPrincipal;
 import com.obd.api.car.exception.CarNotFoundException;
@@ -9,7 +10,9 @@ import com.obd.api.support.SliceSecurityConfig;
 import com.obd.api.trip.dto.TripDTO;
 import com.obd.api.trip.exception.CarAlreadyOnATripException;
 import com.obd.api.trip.exception.TripAlreadyEndedException;
+import com.obd.api.trip.exception.TripEndsBeforeItStartsException;
 import com.obd.api.trip.exception.TripNotFoundException;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -23,6 +26,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -30,6 +34,8 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.verify;
@@ -47,7 +53,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(controllers = TripController.class,
         excludeFilters = @ComponentScan.Filter(
                 type = FilterType.ASSIGNABLE_TYPE,
-                classes = {SecurityConfig.class, JwtAuthFilter.class, JwtAuthEntryPoint.class}))
+                classes = {SecurityConfig.class, JwtAuthFilter.class, JwtAuthEntryPoint.class, DeviceAuthFilter.class}))
 @Import(SliceSecurityConfig.class)
 class TripControllerTest {
 
@@ -72,6 +78,7 @@ class TripControllerTest {
     private static TripDTO.Read started() {
         return new TripDTO.Read(TRIP_ID, CAR_ID, DRIVER_ID,
                 Instant.parse("2026-09-08T12:00:00Z"), null,
+                Instant.parse("2026-09-08T12:00:00Z"), null,
                 70, null, null, null, true);
     }
 
@@ -84,7 +91,8 @@ class TripControllerTest {
 
     @Test
     void startReturns201WithTheTrip() throws Exception {
-        given(tripService.start(eq(DRIVER_ID), any(TripDTO.Create.class))).willReturn(started());
+        given(tripService.start(eq(DRIVER_ID), any(TripDTO.Create.class)))
+                .willReturn(new TripService.Started(started(), true));
 
         mockMvc.perform(post("/api/v1/trips").with(caller())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -102,7 +110,7 @@ class TripControllerTest {
                 .andExpect(jsonPath("$.endedAt").doesNotExist())
                 .andExpect(jsonPath("$.finalFuel").doesNotExist())
                 .andExpect(jsonPath("$.fuelUsed").doesNotExist())
-                .andExpect(jsonPath("$.distance").doesNotExist())
+                .andExpect(jsonPath("$.distanceKm").doesNotExist())
                 .andExpect(jsonPath("$.active").value(true));
     }
 
@@ -174,7 +182,8 @@ class TripControllerTest {
     private static TripDTO.Read finished() {
         return new TripDTO.Read(TRIP_ID, CAR_ID, DRIVER_ID,
                 Instant.parse("2026-09-08T12:00:00Z"), Instant.parse("2026-09-08T13:30:00Z"),
-                70, 52, 18, 140, false);
+                Instant.parse("2026-09-08T12:00:00Z"), null,
+                70, 52, 18, new BigDecimal("140.00"), false);
     }
 
     @Test
@@ -183,34 +192,135 @@ class TripControllerTest {
 
         mockMvc.perform(post("/api/v1/trips/" + TRIP_ID + "/finish").with(caller())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"tripFinalFuel\": 52, \"tripDistance\": 140}"))
+                        .content("{\"tripFinalFuel\": 52, \"distanceKm\": 140}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.active").value(false))
                 .andExpect(jsonPath("$.endedAt").exists())
                 .andExpect(jsonPath("$.finalFuel").value(52))
                 .andExpect(jsonPath("$.fuelUsed").value(18))
-                .andExpect(jsonPath("$.distance").value(140));
+                .andExpect(jsonPath("$.distanceKm").value(140));
     }
 
     @Test
     void finishRejectsNegativeFuelAndZeroDistance() throws Exception {
         mockMvc.perform(post("/api/v1/trips/" + TRIP_ID + "/finish").with(caller())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"tripFinalFuel\": -1, \"tripDistance\": 0}"))
+                        .content("{\"tripFinalFuel\": -1, \"distanceKm\": 0}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.tripFinalFuel").exists())
-                .andExpect(jsonPath("$.errors.tripDistance").exists());
+                .andExpect(jsonPath("$.errors.distanceKm").exists());
     }
 
     @Test
-    void finishIgnoresAnEndTimeInTheBody() throws Exception {
+    void finishPassesAClientSuppliedEndTimeThrough() throws Exception {
         given(tripService.finish(eq(DRIVER_ID), eq(TRIP_ID), any(TripDTO.finish.class))).willReturn(finished());
 
-        // The end time is the server clock; a client cannot backdate a trip.
+        // The phone is the only thing present when a trip ends, so it may say
+        // when - a trip driven through a tunnel and uploaded two hours later
+        // must not be recorded as having ended two hours late. The service
+        // bounds the value; the controller only has to carry it.
         mockMvc.perform(post("/api/v1/trips/" + TRIP_ID + "/finish").with(caller())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"tripFinalFuel\": 52, \"tripDistance\": 140, \"endedAt\": \"2020-01-01T00:00:00Z\"}"))
+                        .content("""
+                                {"tripFinalFuel": 52, "distanceKm": 140.75,
+                                 "endedAt": "2026-09-08T13:30:00Z"}
+                                """))
                 .andExpect(status().isOk());
+
+        var captor = ArgumentCaptor.forClass(TripDTO.finish.class);
+        verify(tripService).finish(eq(DRIVER_ID), eq(TRIP_ID), captor.capture());
+        assertThat(captor.getValue().endedAt()).isEqualTo(Instant.parse("2026-09-08T13:30:00Z"));
+        // Decimals survive, which is the whole reason the type changed.
+        assertThat(captor.getValue().distanceKm()).isEqualByComparingTo("140.75");
+    }
+
+    @Test
+    void finishRejectsAThirdDecimalRatherThanRoundingIt() throws Exception {
+        mockMvc.perform(post("/api/v1/trips/" + TRIP_ID + "/finish").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"tripFinalFuel": 52, "distanceKm": 140.755}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.distanceKm").exists());
+
+        verifyNoInteractions(tripService);
+    }
+
+    @Test
+    void finishMapsAnEndBeforeTheStartToBadRequest() throws Exception {
+        willThrow(new TripEndsBeforeItStartsException(TRIP_ID,
+                Instant.parse("2026-09-08T11:00:00Z"), Instant.parse("2026-09-08T12:00:00Z")))
+                .given(tripService).finish(eq(DRIVER_ID), eq(TRIP_ID), any(TripDTO.finish.class));
+
+        mockMvc.perform(post("/api/v1/trips/" + TRIP_ID + "/finish").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"endedAt": "2026-09-08T11:00:00Z"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("The trip cannot end before it started"));
+    }
+
+    @Test
+    void startAnswers200NotCreatedWhenTheClientRepeatsItsOwnTripId() throws Exception {
+        given(tripService.start(eq(DRIVER_ID), any(TripDTO.Create.class)))
+                .willReturn(new TripService.Started(started(), false));
+
+        // A retry after a lost response. 200 is how the phone tells "this is
+        // the trip I already created" from a genuine second start.
+        mockMvc.perform(post("/api/v1/trips").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"carId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                                 "clientTripId": "11111111-1111-1111-1111-111111111111"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(TRIP_ID.toString()));
+    }
+
+    @Test
+    void startCarriesTheClientsOwnFieldsThrough() throws Exception {
+        given(tripService.start(eq(DRIVER_ID), any(TripDTO.Create.class)))
+                .willReturn(new TripService.Started(started(), true));
+
+        mockMvc.perform(post("/api/v1/trips").with(caller())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"carId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                                 "initialFuel": 70,
+                                 "startedAt": "2026-09-08T12:00:00Z",
+                                 "clientTripId": "11111111-1111-1111-1111-111111111111"}
+                                """))
+                .andExpect(status().isCreated());
+
+        var captor = ArgumentCaptor.forClass(TripDTO.Create.class);
+        verify(tripService).start(eq(DRIVER_ID), captor.capture());
+        assertThat(captor.getValue().startedAt()).isEqualTo(Instant.parse("2026-09-08T12:00:00Z"));
+        assertThat(captor.getValue().clientTripId())
+                .isEqualTo(UUID.fromString("11111111-1111-1111-1111-111111111111"));
+    }
+
+    @Test
+    void routeReturnsThePositionsInOrder() throws Exception {
+        given(tripService.route(DRIVER_ID, TRIP_ID)).willReturn(List.of(
+                new TripDTO.RoutePoint(Instant.parse("2026-09-08T12:00:00Z"), -34.6037, -58.3816, 0),
+                new TripDTO.RoutePoint(Instant.parse("2026-09-08T12:01:00Z"), -34.6040, -58.3820, 42)));
+
+        mockMvc.perform(get("/api/v1/trips/" + TRIP_ID + "/route").with(caller()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].latitude").value(-34.6037))
+                .andExpect(jsonPath("$[1].speed").value(42));
+    }
+
+    @Test
+    void routeMapsAnUnreadableTripToNotFound() throws Exception {
+        willThrow(new TripNotFoundException(TRIP_ID)).given(tripService).route(DRIVER_ID, TRIP_ID);
+
+        mockMvc.perform(get("/api/v1/trips/" + TRIP_ID + "/route").with(caller()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("No such trip"));
     }
 
     @Test
@@ -220,7 +330,7 @@ class TripControllerTest {
 
         mockMvc.perform(post("/api/v1/trips/" + TRIP_ID + "/finish").with(caller())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"tripFinalFuel\": 52, \"tripDistance\": 140}"))
+                        .content("{\"tripFinalFuel\": 52, \"distanceKm\": 140}"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("No such trip"));
     }
@@ -232,7 +342,7 @@ class TripControllerTest {
 
         mockMvc.perform(post("/api/v1/trips/" + TRIP_ID + "/finish").with(caller())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"tripFinalFuel\": 52, \"tripDistance\": 140}"))
+                        .content("{\"tripFinalFuel\": 52, \"distanceKm\": 140}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.detail").value("That trip has already ended"));
     }
@@ -266,7 +376,8 @@ class TripControllerTest {
 
     @Test
     void startTakesTheDriverFromThePrincipalNotTheBody() throws Exception {
-        given(tripService.start(eq(DRIVER_ID), any(TripDTO.Create.class))).willReturn(started());
+        given(tripService.start(eq(DRIVER_ID), any(TripDTO.Create.class)))
+                .willReturn(new TripService.Started(started(), true));
 
         // The stub only matches DRIVER_ID, so naming someone else in the body
         // must not change whose trip this is - and therefore who the fuel is

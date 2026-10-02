@@ -21,9 +21,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Set up SSH
         env:
           SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
@@ -40,19 +37,20 @@ jobs:
             IdentityFile ~/.ssh/id_deploy
           EOF
 
-      # --delete removes files deleted from the repo; excluded paths (the
-      # server's deploy/.env and any build output) are left alone.
-      - name: Sync api/ to the server
+      # The server holds a clone of the repo at ~/OBD-Project. reset --hard
+      # makes it match the pushed commit exactly; the git-ignored deploy/.env
+      # with the secrets is untracked, so it is left alone.
+      - name: Update the server's checkout
         run: |
-          rsync -az --delete \
-            --exclude 'target/' \
-            --exclude '.env*' \
-            --exclude 'graphify-out/' \
-            api/ oracle:~/obd-api/
+          ssh oracle 'cd ~/OBD-Project \
+            && git fetch origin development \
+            && git reset --hard origin/development'
 
+      # If the build fails, compose never replaces the running container, so
+      # the previous version keeps serving.
       - name: Build and restart
         run: |
-          ssh oracle 'cd ~/obd-api/deploy \
+          ssh oracle 'cd ~/OBD-Project/api/deploy \
             && docker compose up -d --build --remove-orphans \
             && docker image prune -f'
 
@@ -63,5 +61,5 @@ jobs:
             sleep 5
           done
           echo "API did not become healthy in 150s" >&2
-          cd ~/obd-api/deploy && docker compose logs --tail 150 api
+          cd ~/OBD-Project/api/deploy && docker compose logs --tail 150 api
           exit 1'

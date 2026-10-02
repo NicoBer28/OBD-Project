@@ -1,26 +1,23 @@
 package com.obd.api.trip.dto;
 
 import com.obd.api.trip.Trip;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
 public class TripDTO {
 
-    /**
-     * Starting a trip takes only the car. The driver comes from the access
-     * token and the start time from the server clock, so neither can be spoofed
-     * or backdated.
-     */
+
     public record Create(
             @NotNull UUID carId,
-            // Optional: when the client does not send a reading, the car's last
-            // reported fuel level is used instead. Null on both means the
-            // expense for this trip is simply unknown.
-            @PositiveOrZero Integer initialFuel
+            @PositiveOrZero Integer initialFuel,
+            Instant startedAt,
+            UUID clientTripId
     ) {}
 
     public record Read(
@@ -29,13 +26,12 @@ public class TripDTO {
             UUID driverId,
             Instant startedAt,
             Instant endedAt,
+            Instant createdAt,
+            UUID clientTripId,
             Integer initialFuel,
             Integer finalFuel,
-            // initialFuel - finalFuel, never stored. Null while the trip is
-            // running, and null afterwards if either reading is missing.
             Integer fuelUsed,
-            Integer distance,
-            // endedAt == null, spelled out so a client does not have to infer it.
+            BigDecimal distanceKm,
             boolean active
     ) {
         public static Read from(Trip trip) {
@@ -45,6 +41,8 @@ public class TripDTO {
                     trip.getTripDriverId(),
                     trip.getTripStartedAt(),
                     trip.getTripEndedAt(),
+                    trip.getTripCreatedAt(),
+                    trip.getTripClientTripId(),
                     trip.getTripInitialFuel(),
                     trip.getTripFinalFuel(),
                     fuelUsed(trip),
@@ -61,6 +59,14 @@ public class TripDTO {
 
     public record finish(
             @PositiveOrZero Integer tripFinalFuel,
-            @Positive Integer tripDistance
+            @Positive @Digits(integer = 6, fraction = 2) BigDecimal distanceKm,
+            Instant endedAt
     ){}
+
+    public record RoutePoint(
+            Instant recordedAt,
+            Double latitude,
+            Double longitude,
+            Integer speed
+    ) {}
 }

@@ -4,6 +4,7 @@ import com.obd.api.car.Car;
 import com.obd.api.car.CarAccess;
 import com.obd.api.car.CarRepository;
 import com.obd.api.car.exception.CarNotFoundException;
+import com.obd.api.devicetoken.DeviceScope;
 import com.obd.api.device.Device;
 import com.obd.api.device.DeviceRepository;
 import com.obd.api.device.DeviceService;
@@ -33,23 +34,15 @@ public class TelemetryService {
     private final TripRepository tripRepository;
     private final DeviceRepository deviceRepository;
     private final CarAccess carAccess;
+    private final DeviceScope deviceScope;
 
-    /**
-     * Stores a batch of readings for one car and brings the car's cached
-     * snapshot up to date.
-     *
-     * The whole batch is one transaction: if any insert fails nothing is kept
-     * and the snapshot does not move, so the client can simply retry the batch.
-     * Retrying is always safe - a reading already present counts as a
-     * duplicate rather than an error.
-     */
+
     @Transactional
     public TelemetryDTO.Ingested ingest(UUID userId, TelemetryDTO.Ingest request) {
         Car car = resolveCar(userId, request);
 
-        // Looked up once per batch, and by car rather than by uploader: the
-        // reading belongs to whoever is driving the car, which need not be
-        // whoever is holding the phone.
+        deviceScope.requireCar(car.getCarId());
+
         Trip openTrip = tripRepository.findByTripCarIdAndTripEndedAtIsNull(car.getCarId())
                 .orElse(null);
 
@@ -85,11 +78,7 @@ public class TelemetryService {
                 newest.recordedAt());
     }
 
-    /**
-     * The car a batch is for: by id, or by the serial of the dongle it came
-     * from. Either way the answer passes through CarAccess, and an unknown or
-     * unreadable serial looks exactly like a nonexistent one.
-     */
+
     private Car resolveCar(UUID userId, TelemetryDTO.Ingest request) {
         if (request.carId() != null) {
             return carAccess.readableBy(userId, request.carId())
@@ -102,16 +91,7 @@ public class TelemetryService {
                 .orElseThrow(() -> new DeviceNotFoundException(serial));
     }
 
-    /**
-     * One page of a car's history after a cursor, oldest first.
-     *
-     * Fetches one row more than the limit: whether that extra row exists is
-     * {@code hasMore}, which spares the client a final empty round trip and
-     * spares us a count query over the largest table in the database.
-     *
-     * No transaction: Telemetry holds raw ids, not lazy associations, so there
-     * is nothing that needs the persistence context kept open.
-     */
+
     public TelemetryDTO.Page history(UUID userId, TelemetryDTO.Query query) {
         Car car = carAccess.readableBy(userId, query.carId())
                 .orElseThrow(() -> new CarNotFoundException(query.carId()));
@@ -130,11 +110,6 @@ public class TelemetryService {
                 hasMore);
     }
 
-    /**
-     * A reading belongs to the open trip only if it was taken after the trip
-     * started. A late-flushed reading from before the driver pressed "start"
-     * is history from when the car was parked, not part of the trip.
-     */
     private static UUID tripIdFor(Reading reading, Trip openTrip) {
         if (openTrip == null || reading.recordedAt().isBefore(openTrip.getTripStartedAt())) {
             return null;
@@ -142,17 +117,7 @@ public class TelemetryService {
         return openTrip.getTripId();
     }
 
-    /**
-     * Collapses the batch into the single reading the snapshot is refreshed
-     * from: each field taken from the newest reading that actually carries it,
-     * stamped with the newest time in the batch.
-     *
-     * Simply taking the newest reading would be wrong in a way that is easy to
-     * miss: if it happens to lack a fuel level but an older reading in the same
-     * batch has one, coalesce in refreshSnapshot would keep the *database's*
-     * old value and discard the batch's - throwing away data we were just
-     * handed.
-     */
+
     static Reading fold(List<Reading> readings) {
         List<Reading> newestFirst = readings.stream()
                 .sorted(Comparator.comparing(Reading::recordedAt).reversed())
