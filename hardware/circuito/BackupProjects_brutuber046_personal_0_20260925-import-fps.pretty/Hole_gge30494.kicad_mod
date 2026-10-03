@@ -1,0 +1,60 @@
+(footprint "Hole_gge30494"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(locked yes)
+	(layer "F.Cu")
+	(property "Reference" "REF**"
+		(at 0 0 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "a5f50981-c95d-4532-8769-1dc5a142a938")
+		(effects
+			(font
+				(size 0.5 0.5)
+			)
+		)
+	)
+	(property "Value" "Hole_gge30494"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "5ff47ce7-f14a-40dd-b9ab-02ddbf3f6495")
+		(effects
+			(font
+				(size 0.5 0.5)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "a08e743c-f050-41b7-9038-50e5e2e6a007")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "ea577c59-e7fb-4a44-aec0-5eb759c4e145")
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+	)
+	(duplicate_pad_numbers_are_jumpers no)
+	(pad "" np_thru_hole circle
+		(at 0 0)
+		(size 0.38 0.38)
+		(drill 0.38)
+		(layers "*.Cu" "*.Mask")
+		(uuid "5a563899-cb51-4f76-a9d9-34f1a134ac53")
+	)
+	(embedded_fonts no)
+)
