@@ -167,8 +167,12 @@ class _InviteSheetState extends State<InviteSheet> {
   }
 
   Future<void> _escanear() async {
-    final result = await ScanQrScreen.show(context);
-    if (result == null || !mounted) return;
+    final raw = await ScanQrScreen.show(context);
+    if (raw == null || !mounted) return;
+
+    final result = QrPayload.parseInvite(raw);
+    if (result == null) return;
+
     setState(() {
       _email.text = result.email;
       _scannedName = result.name;

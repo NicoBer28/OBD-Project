@@ -5,9 +5,11 @@ import 'package:obd_app/core/constants/app_icons.dart';
 import 'package:obd_app/core/theme/app_theme.dart';
 import 'package:obd_app/core/utils/api_mappers.dart';
 import 'package:obd_app/core/utils/api_messages.dart';
+import 'package:obd_app/core/utils/qr_payload.dart';
 import 'package:obd_app/data/api/obd_api.dart';
 import 'package:obd_app/models/models.dart';
 import 'package:obd_app/ui/screens/groups/group_sheets.dart';
+import 'package:obd_app/ui/screens/groups/scan_qr_screen.dart';
 import 'package:obd_app/ui/screens/home/widgets/booking_sheet.dart';
 import 'package:obd_app/ui/screens/home/widgets/home_state_widgets.dart';
 import 'package:obd_app/ui/screens/home/widgets/shared_widgets.dart';
@@ -288,6 +290,34 @@ class _SharedTabState extends State<SharedTab> {
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    IconButton(
+                      tooltip: 'Unirse a un viaje con QR',
+                      onPressed: () async {
+                        final raw = await ScanQrScreen.show(context);
+                        if (raw == null || !context.mounted) return;
+
+                        final tripId = QrPayload.parseTrip(raw);
+                        if (tripId == null) {
+                          _showMessage('Ese código no es de un viaje.');
+                          return;
+                        }
+
+                        try {
+                          await c.joinTrip(tripId);
+                          if (context.mounted) _showMessage('¡Te uniste al viaje!');
+                        } on ObdApiException catch (error) {
+                          if (context.mounted) {
+                            ApiMessages.show(
+                              context,
+                              error,
+                              notFound: 'El viaje ya no existe o no tenés permiso.',
+                              conflict: 'Ya estás en este viaje o no compartís este auto.',
+                            );
+                          }
+                        }
+                      },
+                      icon: const Icon(AppIcons.qr),
+                    ),
                     if (c.groups.length > 1)
                       IconButton(
                         tooltip: 'Cambiar de grupo',

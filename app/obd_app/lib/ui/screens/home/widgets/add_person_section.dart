@@ -157,9 +157,9 @@ class AddPersonSection extends StatelessWidget {
                   padding: const EdgeInsets.all(11),
                   child: Row(
                     children: [
-                      Icon(AppIcons.scan, size: 19, color: t.accent),
+                      Icon(AppIcons.qr, size: 19, color: t.accent),
                       const SizedBox(width: 10),
-                      const Expanded(child: Text('Escanear su código QR')),
+                      const Expanded(child: Text('Mostrar QR para que se unan')),
                     ],
                   ),
                 ),
@@ -169,7 +169,7 @@ class AddPersonSection extends StatelessWidget {
             TextField(
               controller: inviteEmailController,
               keyboardType: TextInputType.emailAddress,
-              decoration: const InputDecoration(labelText: 'Correo', isDense: true),
+              decoration: const InputDecoration(labelText: 'O ingresá su correo', isDense: true),
             ),
             const SizedBox(height: 10),
             TextField(
@@ -184,7 +184,7 @@ class AddPersonSection extends StatelessWidget {
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
-              child: FilledButton(onPressed: busy ? null : onInvite, child: const Text('Sumar')),
+              child: FilledButton(onPressed: busy ? null : onInvite, child: const Text('Sumar por correo')),
             ),
           ],
         );

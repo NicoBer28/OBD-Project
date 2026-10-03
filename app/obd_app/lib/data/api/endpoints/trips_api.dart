@@ -179,6 +179,11 @@ class TripsApi {
     return TripParticipant.fromJson(response.asMap);
   }
 
+  Future<TripParticipant> joinParticipant(String tripId) async {
+    final response = await _client.post('/trips/$tripId/participants/join');
+    return TripParticipant.fromJson(response.asMap);
+  }
+
   /// `POST /api/v1/trips/{tripId}/participants/guests` — "let the owner count
   /// the persons": a participant with no account and no email, just a name.
   ///

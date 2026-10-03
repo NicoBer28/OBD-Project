@@ -13,8 +13,8 @@ import 'package:obd_app/core/utils/qr_payload.dart';
 class ScanQrScreen extends StatefulWidget {
   const ScanQrScreen({super.key});
 
-  static Future<({String email, String? name})?> show(BuildContext context) {
-    return Navigator.of(context).push<({String email, String? name})>(
+  static Future<String?> show(BuildContext context) {
+    return Navigator.of(context).push<String>(
       MaterialPageRoute(
         builder: (_) => const ScanQrScreen(),
         fullscreenDialog: true,
@@ -45,13 +45,17 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
     for (final code in capture.barcodes) {
       final raw = code.rawValue;
       if (raw == null) continue;
-      final parsed = QrPayload.parseInvite(raw);
-      if (parsed == null) {
+
+      final isInvite = QrPayload.parseInvite(raw) != null;
+      final isTrip = QrPayload.parseTrip(raw) != null;
+
+      if (!isInvite && !isTrip) {
         setState(() => _hint = 'Ese código no es de OBD-C.');
         continue;
       }
+
       _done = true;
-      Navigator.of(context).pop(parsed);
+      Navigator.of(context).pop(raw);
       return;
     }
   }
