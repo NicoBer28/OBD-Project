@@ -39,6 +39,7 @@ class ObdCompanionService : CompanionDeviceService() {
 
     // --- BLUETOOTH ---
     private val OBD_SERVICE_UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
+    private val WRITE_CHARACTERISTIC_UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
     private val NOTIFY_CHARACTERISTIC_UUID = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
     private val CCCD_UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
@@ -62,6 +63,13 @@ class ObdCompanionService : CompanionDeviceService() {
         private const val CHUNK_MAX_EDAD_MS = 15_000L    // ...o a los 15 s, lo que pase primero
         private const val RECONEXION_BASE_MS = 1_000L    // espera antes de conectar; se duplica en cada fallo...
         private const val RECONEXION_MAX_MS = 30_000L    // ...hasta este tope
+
+        private const val MTU_POR_DEFECTO = 23           // el de BLE si no se negocia otro
+        private const val MTU_PEDIDO = 517               // el máximo; queda el menor entre este y el del ESP32
+        private const val CABECERA_ATT = 3               // bytes del MTU que no son datos
+        private const val TRAMAS_POR_NOTIFICACION = 5    // el ESP32 junta hasta 5 tramas en cada aviso
+        private const val LECTURA_COMPLETA_MAX_MS = 3_000L   // espera por los datos puntuales (el auto puede no tener alguno)
+        private const val REFRESCO_COMPLETO_MS = 60_000L     // cada cuánto se vuelven a leer
 
         @Volatile private var instancia: ObdCompanionService? = null
 
@@ -296,11 +304,23 @@ class ObdCompanionService : CompanionDeviceService() {
         @Volatile var carId: String? = null
 
         // --- VARIABLES DE ESTADO ACTUAL ---
-        // null = todavía no llegó ese dato. Así no se manda un 0 falso al servidor
-        // (antes la nafta arrancaba en 0 hasta que llegaba el primer paquete 0x02).
-        @Volatile var lastSpeed: Int? = null
-        @Volatile var lastRpm: Int? = null
-        @Volatile var lastFuel: Int? = null
+        // Último valor de cada señal, por su clave. Si una no está es que todavía no llegó:
+        // así no se manda un 0 falso al servidor.
+        private val valores = ConcurrentHashMap<String, Int>()
+        private val nafta: Int? get() = valores[Senales.NAFTA.clave]
+
+        // --- QUÉ SE LE PIDE AL ESP32 ---
+        @Volatile private var perfil = PerfilLectura.para(null)
+        // Datos puntuales que se pidieron y todavía no llegaron. Cuando llegan todos (o se
+        // cumple el tope) se vuelve a pedir solo lo continuo.
+        private val pendientes = ConcurrentHashMap.newKeySet<String>()
+        private val lecturaCompletaRunnable = Runnable { pedirLecturaCompleta() }
+        private val volverAContinuoRunnable = Runnable { volverAContinuo() }
+        // Lo que sigue se toca solo desde el hilo principal.
+        private var mtu = MTU_POR_DEFECTO
+        private var suscripto = false                   // ya llegan notificaciones: se puede escribir
+        private var escrituraEnCurso = false            // Android admite una operación GATT a la vez
+        private var listaPendiente: ByteArray? = null   // la última lista que falta mandar
 
         // --- RECONEXIÓN Y TIEMPO DE GRACIA (el umbral es TripGrace.TIEMPO_DE_GRACIA_MS) ---
         var bluetoothGatt: BluetoothGatt? = null
@@ -318,7 +338,7 @@ class ObdCompanionService : CompanionDeviceService() {
         // TODO: Mejorar lógica de detección de inicio real del auto
         @Volatile var isTripActive = false
 
-        // El BLE manda datos cada ~20 ms, pero el backend guarda UNA lectura por segundo por auto:
+        // El ESP32 manda datos varias veces por segundo, pero el backend guarda UNA lectura por segundo por auto:
         // guardar más solo genera duplicados que el servidor descarta.
         private val bufferLock = Any()
         private val ramBuffer = mutableListOf<JSONObject>()
@@ -339,6 +359,13 @@ class ObdCompanionService : CompanionDeviceService() {
             }
             pendiente?.let { serviceScope.launch { persistirChunk(it) } }
             isTripActive = false
+
+            // Otro auto puede necesitar otros datos: el ESP32 tiene que enterarse.
+            val perfilNuevo = PerfilLectura.para(nuevo)
+            if (perfilNuevo !== perfil) {
+                perfil = perfilNuevo
+                pedirLecturaCompleta()
+            }
 
             ConnectionStatus.avisar(applicationContext, anterior)
             avisarEstado()
@@ -424,14 +451,14 @@ class ObdCompanionService : CompanionDeviceService() {
             val carId = carId ?: return
             val corte = ultimoDatoMs
             if (corte == 0L) return
-            TripGrace.guardarUltimoDato(applicationContext, carId, corte, lastFuel)
+            TripGrace.guardarUltimoDato(applicationContext, carId, corte, nafta)
             TripGrace.programarCierre(applicationContext, carId, corte)
         }
 
         private fun guardarUltimoDato() {
             val carId = carId ?: return
             val ultimo = ultimoDatoMs
-            if (ultimo > 0) TripGrace.guardarUltimoDato(applicationContext, carId, ultimo, lastFuel)
+            if (ultimo > 0) TripGrace.guardarUltimoDato(applicationContext, carId, ultimo, nafta)
         }
 
         fun programarConexion(esperaMs: Long) {
@@ -483,6 +510,87 @@ class ObdCompanionService : CompanionDeviceService() {
             bluetoothGatt?.disconnect()
             bluetoothGatt?.close()
             bluetoothGatt = null
+
+            // Al reconectar se empieza de cero: el ESP32 puede haberse reiniciado y perdido su lista.
+            mainHandler.removeCallbacks(lecturaCompletaRunnable)
+            mainHandler.removeCallbacks(volverAContinuoRunnable)
+            pendientes.clear()
+            mtu = MTU_POR_DEFECTO
+            suscripto = false
+            escrituraEnCurso = false
+            listaPendiente = null
+        }
+
+        // --- LISTA DE PETICIONES ---
+        // El ESP32 no decide qué leer: repite en ronda la lista que se le manda, hasta que le
+        // llegue otra. Alcanza con mandarla cuando cambia.
+
+        /**
+         * Pide todo el perfil (lo continuo y lo puntual) y, cuando llegaron los datos
+         * puntuales, vuelve a pedir solo lo continuo. Corre al conectar y cada
+         * [REFRESCO_COMPLETO_MS]: como el auto se apaga sin avisar, la lectura "del final del
+         * viaje" es la última de estas. De paso le devuelve la lista al ESP32 si la perdió.
+         */
+        private fun pedirLecturaCompleta() {
+            if (!suscripto) return
+            mainHandler.removeCallbacks(lecturaCompletaRunnable)
+            mainHandler.removeCallbacks(volverAContinuoRunnable)
+            mainHandler.postDelayed(lecturaCompletaRunnable, REFRESCO_COMPLETO_MS)
+
+            val perfil = perfil
+            pendientes.clear()
+            if (perfil.puntual.isEmpty()) {
+                escribirLista(perfil.continuo)
+                return
+            }
+            pendientes.addAll(perfil.puntual.map { it.clave })
+            escribirLista(perfil.completo)
+            mainHandler.postDelayed(volverAContinuoRunnable, LECTURA_COMPLETA_MAX_MS)
+        }
+
+        private fun volverAContinuo() {
+            mainHandler.removeCallbacks(volverAContinuoRunnable)
+            if (!suscripto) return
+            if (pendientes.isNotEmpty()) {
+                Log.w("OBD-C", "El auto ($mac) no respondió: $pendientes")
+                pendientes.clear()
+            }
+            escribirLista(perfil.continuo)
+        }
+
+        private fun escribirLista(senales: List<Senal>) {
+            // El ESP32 descarta una lista que le llega partida: tiene que entrar en una sola escritura.
+            val maximo = (mtu - CABECERA_ATT) / ProtocoloEsp.BYTES_POR_TRAMA
+            if (senales.size > maximo) {
+                Log.e("OBD-C", "La lista tiene ${senales.size} peticiones y con MTU $mtu entran $maximo: se recorta.")
+            }
+            val peticiones = senales.take(maximo).map { it.peticion }
+            if (peticiones.isEmpty()) return
+
+            listaPendiente = ProtocoloEsp.codificar(peticiones)
+            enviarListaPendiente()
+        }
+
+        private fun enviarListaPendiente() {
+            if (escrituraEnCurso) return // sale cuando termine la que está en curso
+            val gatt = bluetoothGatt ?: return
+            val lista = listaPendiente ?: return
+            val caracteristica = gatt.getService(OBD_SERVICE_UUID)?.getCharacteristic(WRITE_CHARACTERISTIC_UUID) ?: return
+            listaPendiente = null
+
+            try {
+                caracteristica.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                caracteristica.value = lista
+                escrituraEnCurso = gatt.writeCharacteristic(caracteristica)
+                if (escrituraEnCurso) {
+                    Log.i("OBD-C", "Lista de ${lista.size / ProtocoloEsp.BYTES_POR_TRAMA} peticiones enviada al ESP32 ($mac).")
+                } else {
+                    // Queda la lista anterior; el próximo refresco lo vuelve a intentar.
+                    Log.w("OBD-C", "Android no aceptó la escritura de la lista de peticiones ($mac).")
+                }
+            } catch (e: SecurityException) {
+                Log.e("OBD-C", "🚨 FALTA PERMISO BLUETOOTH_CONNECT: ${e.message}")
+            }
         }
 
         // Escucha cuando el ESP32 acepta la conexión, busca los servicios y se suscribe a las notificaciones.
@@ -496,8 +604,10 @@ class ObdCompanionService : CompanionDeviceService() {
                     if (gatt !== bluetoothGatt) return@post // aviso tardío de una conexión ya descartada
 
                     if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
-                        Log.i("OBD-C", "GATT Conectado ($mac). Buscando servicios OBD...")
-                        gatt.discoverServices()
+                        // El ESP32 manda hasta 5 tramas por aviso (65 bytes) y con el MTU por
+                        // defecto entran 20: hay que agrandarlo antes de empezar.
+                        Log.i("OBD-C", "GATT Conectado ($mac). Negociando MTU...")
+                        if (!gatt.requestMtu(MTU_PEDIDO)) gatt.discoverServices()
                     } else if (status != BluetoothGatt.GATT_SUCCESS || newState == BluetoothProfile.STATE_DISCONNECTED) {
                         // Un microcorte suele llegar como error (status 8 = timeout, 133). Antes
                         // se cerraba la conexión y no se volvía a intentar nunca más.
@@ -508,13 +618,28 @@ class ObdCompanionService : CompanionDeviceService() {
                 }
             }
 
+            // Se ejecuta cuando el ESP32 y el celular acordaron el tamaño de los mensajes
+            override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+                mainHandler.post {
+                    if (gatt !== bluetoothGatt) return@post
+
+                    if (status == BluetoothGatt.GATT_SUCCESS) this@SesionAuto.mtu = mtu
+                    val necesario = TRAMAS_POR_NOTIFICACION * ProtocoloEsp.BYTES_POR_TRAMA + CABECERA_ATT
+                    if (this@SesionAuto.mtu < necesario) {
+                        Log.e("OBD-C", "MTU ${this@SesionAuto.mtu} con $mac (hacen falta $necesario): los avisos del ESP32 van a llegar cortados.")
+                    } else {
+                        Log.i("OBD-C", "MTU ${this@SesionAuto.mtu} con $mac. Buscando servicios OBD...")
+                    }
+                    gatt.discoverServices()
+                }
+            }
+
             // Se ejecuta cuando Android termina de leer los UUIDs del ESP32
             override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                val characteristic = if (status == BluetoothGatt.GATT_SUCCESS) {
-                    gatt.getService(OBD_SERVICE_UUID)?.getCharacteristic(NOTIFY_CHARACTERISTIC_UUID)
-                } else {
-                    null
-                }
+                val servicio = if (status == BluetoothGatt.GATT_SUCCESS) gatt.getService(OBD_SERVICE_UUID) else null
+                // Sin la de escritura no se le puede decir al ESP32 qué leer.
+                val tieneEscritura = servicio?.getCharacteristic(WRITE_CHARACTERISTIC_UUID) != null
+                val characteristic = if (tieneEscritura) servicio?.getCharacteristic(NOTIFY_CHARACTERISTIC_UUID) else null
 
                 if (characteristic != null) {
                     Log.i("OBD-C", "Característica encontrada. Suscribiendo...")
@@ -526,7 +651,7 @@ class ObdCompanionService : CompanionDeviceService() {
                     gatt.writeDescriptor(descriptor)
                 } else {
                     // Conectado pero sin datos no sirve: se empieza de nuevo.
-                    Log.e("OBD-C", "No se encontró la característica de notificación (status=$status)")
+                    Log.e("OBD-C", "No se encontraron las características del ESP32 (status=$status)")
                     mainHandler.post {
                         if (gatt !== bluetoothGatt) return@post
                         alCaerEnlace()
@@ -535,34 +660,63 @@ class ObdCompanionService : CompanionDeviceService() {
                 }
             }
 
-            // Se ejecuta cada 20ms (o cuando el ESP32 mande un dato) - PARA ANDROID 12 O INFERIOR
+            // Se ejecuta cuando el ESP32 confirma la suscripción: recién ahí se le puede escribir
+            override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+                mainHandler.post {
+                    if (gatt !== bluetoothGatt) return@post
+
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        suscripto = true
+                        pedirLecturaCompleta()
+                    } else {
+                        Log.e("OBD-C", "El ESP32 ($mac) rechazó la suscripción (status=$status)")
+                        alCaerEnlace()
+                        reintentarConexion()
+                    }
+                }
+            }
+
+            // Se ejecuta cuando el ESP32 confirma que recibió la lista de peticiones
+            override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+                mainHandler.post {
+                    if (gatt !== bluetoothGatt) return@post
+
+                    escrituraEnCurso = false
+                    if (status != BluetoothGatt.GATT_SUCCESS) {
+                        Log.w("OBD-C", "El ESP32 ($mac) no recibió la lista de peticiones (status=$status)")
+                    }
+                    enviarListaPendiente()
+                }
+            }
+
+            // Se ejecuta cada vez que el ESP32 manda un dato - PARA ANDROID 12 O INFERIOR
             @Deprecated("Usado para compatibilidad con celulares viejos")
             override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
                 recepcionDatos(characteristic.value)
             }
 
-            // Se ejecuta cada 20ms - PARA ANDROID 13 O SUPERIOR
+            // Se ejecuta cada vez que el ESP32 manda un dato - PARA ANDROID 13 O SUPERIOR
             override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
                 recepcionDatos(value)
             }
         }
 
         private fun recepcionDatos(bytes: ByteArray) {
-            if (bytes.isEmpty()) return
+            // El ESP32 reenvía todo lo que pasa por el bus del auto. Solo cuenta como dato lo
+            // que responde a algo pedido: tráfico ajeno no tiene que mantener abierto un viaje.
+            if (!decodificarBytes(bytes)) return
 
             ultimoDatoMs = System.currentTimeMillis()
             if (enlaceCaido) mainHandler.post { alRecuperarEnlace() }
-
-            decodificarBytes(bytes)
 
             // La UI en vivo se actualiza siempre, esté o no vinculado a un auto.
             notificarAFlutter()
 
             val carId = carId ?: return
 
-            // El viaje arranca recién cuando se conoce la nafta (primer paquete 0x02), para no
-            // registrar un nivel inicial de 0 que no es real.
-            val nafta = lastFuel
+            // El viaje arranca recién cuando se conoce la nafta (llega con la primera lectura
+            // completa), para no registrar un nivel inicial de 0 que no es real.
+            val nafta = nafta
             if (!isTripActive && nafta != null) {
                 isTripActive = true
                 serviceScope.launch { iniciarViajeLocal(carId, nafta) }
@@ -571,17 +725,24 @@ class ObdCompanionService : CompanionDeviceService() {
             guardarTelemetriaLocal()
         }
 
-        private fun decodificarBytes(bytes: ByteArray) {
-            val id = bytes[0].toInt() and 0xFF
-            if (id == 0x01 && bytes.size >= 4) {
-                lastSpeed = bytes[1].toInt() and 0xFF
-                val rpmLow = bytes[2].toInt() and 0xFF
-                val rpmHigh = bytes[3].toInt() and 0xFF
-                lastRpm = (rpmHigh shl 8) or rpmLow
-            } else if (id == 0x02 && bytes.size >= 3) {
-                val temp = bytes[1].toInt() and 0xFF
-                lastFuel = bytes[2].toInt() and 0xFF
+        /** Guarda los valores que traen las tramas. @return true si alguna era de una señal del perfil. */
+        private fun decodificarBytes(bytes: ByteArray): Boolean {
+            val senales = perfil.completo
+            var huboDato = false
+
+            for (trama in ProtocoloEsp.decodificar(bytes)) {
+                for (senal in senales) {
+                    val valor = senal.leer(trama) ?: continue
+                    valores[senal.clave] = valor
+                    huboDato = true
+                    // Llegó el último dato puntual que faltaba: se deja de pedirlos.
+                    if (pendientes.remove(senal.clave) && pendientes.isEmpty()) {
+                        mainHandler.post { volverAContinuo() }
+                    }
+                    break
+                }
             }
+            return huboDato
         }
 
         private fun guardarTelemetriaLocal() {
@@ -600,9 +761,7 @@ class ObdCompanionService : CompanionDeviceService() {
 
                 val muestra = JSONObject().apply {
                     put("t", ahora - chunkStartTime)
-                    lastSpeed?.let { put("s", it) }
-                    lastRpm?.let { put("r", it) }
-                    lastFuel?.let { put("f", it) }
+                    for ((clave, valor) in valores) put(clave, valor)
                     val lat = lastLat
                     val lng = lastLng
                     if (lat != null && lng != null) {
@@ -658,9 +817,9 @@ class ObdCompanionService : CompanionDeviceService() {
 
         private fun notificarAFlutter() {
             val evento = TelemetryEvent(
-                speed = lastSpeed?.toLong(),
-                rpm = lastRpm?.toLong(),
-                fuel = lastFuel?.toLong(),
+                speed = valores[Senales.VELOCIDAD.clave]?.toLong(),
+                rpm = valores[Senales.RPM.clave]?.toLong(),
+                fuel = nafta?.toLong(),
                 lat = lastLat,
                 lng = lastLng,
                 carId = carId

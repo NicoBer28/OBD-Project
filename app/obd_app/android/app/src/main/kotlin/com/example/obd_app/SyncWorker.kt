@@ -43,6 +43,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         private const val TAG = "OBD-SYNC"
         private const val MAX_RONDAS_CHUNKS = 20 // 20 x 50 chunks por auto en cada corrida, como mucho
 
+        // Claves de una muestra que ya tienen su lugar en ReadingPayload.
+        private val CLAVES_CON_CAMPO = setOf("t", "la", "lo", "s", "f", "m")
+
         // El worker único y el periódico podrían coincidir: que no corran a la vez.
         private val mutex = Mutex()
     }
@@ -300,11 +303,24 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     longitude = if (tienePosicion) s.getDouble("lo") else null,
                     speed = if (s.has("s")) s.getInt("s") else null,
                     fuelLevel = if (s.has("f")) s.getInt("f") else null,
-                    raw = if (s.has("r")) mapOf("rpm" to s.getInt("r")) else null,
+                    mileage = if (s.has("m")) s.getInt("m") else null,
+                    raw = extras(s),
                 )
             )
         }
         return TelemetryBatchRequest(chunk.carId, readings)
+    }
+
+    // Lo que no tiene campo propio en el servidor viaja en `raw`, con su clave como nombre:
+    // una señal nueva en el perfil de lectura no obliga a tocar este worker.
+    private fun extras(muestra: JSONObject): Map<String, Any>? {
+        val extras = HashMap<String, Any>()
+        for (clave in muestra.keys()) {
+            if (clave in CLAVES_CON_CAMPO) continue
+            // "r": las RPM en los chunks que guardó la versión anterior de la app.
+            extras[if (clave == "r") "rpm" else clave] = muestra.get(clave)
+        }
+        return extras.ifEmpty { null }
     }
 
     // ---------------------------------------------------------------- HELPERS

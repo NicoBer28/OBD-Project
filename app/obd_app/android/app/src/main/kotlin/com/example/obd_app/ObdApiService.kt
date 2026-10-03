@@ -44,6 +44,7 @@ data class ReadingPayload(
     val longitude: Double?,
     val speed: Int?,
     val fuelLevel: Int?,
+    val mileage: Int?,
     val raw: Map<String, Any>? = null
 )
 
