@@ -1,4 +1,6 @@
 #include "obd_can.h"
+#include <stdlib.h>
+#include <time.h>
 
 #if CONFIG_OBD_USE_MCP2515
 #include "mcp2515.h"
@@ -244,4 +246,110 @@ void OBD_TWAI::request_pid(BleCanPacket packet) {
     }
 }
 #endif // CONFIG_OBD_USE_TWAI
+
+#if CONFIG_OBD_USE_DUMMY
+OBD_DUMMY::OBD_DUMMY() {
+    srand(time(NULL));
+}
+
+OBD_DUMMY::~OBD_DUMMY() {}
+
+bool OBD_DUMMY::init() {
+    ESP_LOGI("OBD_DUMMY", "Interfaz Dummy inicializada");
+    return true;
+}
+
+void OBD_DUMMY::process() {
+    uint32_t current_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
+
+    if (!polling_pids.empty() && (current_time - last_request_time > request_interval_ms)) {
+        BleCanPacket next_pid = polling_pids[current_pid_index];
+        simulate_response(next_pid);
+        
+        current_pid_index = (current_pid_index + 1) % polling_pids.size();
+        last_request_time = current_time;
+    }
+}
+
+void OBD_DUMMY::simulate_response(BleCanPacket request) {
+    if (tx_queue == NULL) return;
+
+    uint8_t mode = request.data[1];
+    uint8_t pid = request.data[2];
+
+    BleCanPacket response;
+    response.can_id = 0x7E8; 
+    response.dlc = 8;
+    
+    response.data[1] = mode + 0x40;
+    response.data[2] = pid;
+    
+    for (int i = 3; i < 8; i++) response.data[i] = 0xAA;
+
+    switch (pid) {
+        case 0x04:
+            response.data[0] = 3; 
+            response.data[3] = rand() % 256;
+            break;
+        case 0x05: 
+            response.data[0] = 3;
+            response.data[3] = 40 + (rand() % 100); 
+            break;
+        case 0x0B: 
+            response.data[0] = 3;
+            response.data[3] = 20 + (rand() % 80); 
+            break;
+        case 0x0C: 
+            response.data[0] = 4;
+            {
+                uint16_t rpm_val = 800 * 4 + (rand() % (2000 * 4)); 
+                response.data[3] = (rpm_val >> 8) & 0xFF;
+                response.data[4] = rpm_val & 0xFF;
+            }
+            break;
+        case 0x0D: 
+            response.data[0] = 3;
+            response.data[3] = rand() % 120; 
+            break;
+        case 0x0F: 
+            response.data[0] = 3;
+            response.data[3] = 40 + (rand() % 40); 
+            break;
+        case 0x10: 
+            response.data[0] = 4;
+            {
+                uint16_t maf_val = 500 + (rand() % 4500); 
+                response.data[3] = (maf_val >> 8) & 0xFF;
+                response.data[4] = maf_val & 0xFF;
+            }
+            break;
+        case 0x11: 
+            response.data[0] = 3;
+            response.data[3] = rand() % 256;
+            break;
+        case 0x1F: 
+            response.data[0] = 4;
+            {
+                uint16_t time_sec = xTaskGetTickCount() * portTICK_PERIOD_MS / 1000;
+                response.data[3] = (time_sec >> 8) & 0xFF;
+                response.data[4] = time_sec & 0xFF;
+            }
+            break;
+        case 0x2F: 
+            response.data[0] = 3;
+            response.data[3] = 25 + (rand() % 205); 
+            break;
+        case 0x33: 
+            response.data[0] = 3;
+            response.data[3] = 90 + (rand() % 20); 
+            break;
+        default:
+            response.data[0] = 3; 
+            response.data[3] = rand() % 256;
+            break;
+    }
+
+    xQueueSend(tx_queue, &response, 0);
+}
+#endif // CONFIG_OBD_USE_DUMMY
 

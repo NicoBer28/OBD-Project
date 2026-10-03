@@ -5,6 +5,8 @@ endif()
 
 if(OBD_DRIVER STREQUAL "MCP2515")
     set(main_src "main_mcp.cpp")
+elseif(OBD_DRIVER STREQUAL "DUMMY")
+    set(main_src "main_dummy.cpp")
 else()
     set(main_src "main_twai.cpp")
 endif()
@@ -16,6 +18,8 @@ idf_component_register(SRCS "${main_src}" "obd_can.cpp"
 
 if(OBD_DRIVER STREQUAL "MCP2515")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_OBD_USE_MCP2515=1)
+elseif(OBD_DRIVER STREQUAL "DUMMY")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_OBD_USE_DUMMY=1)
 else()
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_OBD_USE_TWAI=1)
 endif()

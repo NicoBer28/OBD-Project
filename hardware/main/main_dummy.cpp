@@ -1,12 +1,32 @@
+/**
+ * MAIN DUMMY - Emulador de OBD2 por BLE
+ * 
+ * Esta versión simula el comportamiento de un vehículo real y genera datos sintéticos
+ * para los siguientes PIDs (útiles para cálculo de consumo, velocidad, etc):
+ * 
+ * - 0x04: Calculated Engine Load (%)
+ * - 0x05: Engine Coolant Temperature (°C)
+ * - 0x0B: Intake Manifold Absolute Pressure / MAP (kPa)
+ * - 0x0C: Engine RPM (rpm)
+ * - 0x0D: Vehicle Speed (km/h)
+ * - 0x0F: Intake Air Temperature (°C)
+ * - 0x10: Mass Air Flow / MAF (g/s)
+ * - 0x11: Throttle Position (%)
+ * - 0x1F: Run time since engine start (sec)
+ * - 0x2F: Fuel Level Input (%)
+ * - 0x33: Barometric pressure (kPa)
+ * 
+ * Cualquier otro PID consultado devolverá un valor aleatorio genérico (1 byte).
+ */
 #include "NimBLEDevice.h"
-#include "driver/gpio.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
-#include "freertos/semphr.h"
 #include <string>
 #include <vector>
+#include <stdlib.h>
+#include <time.h>
 
 #include "obd_can.h"
 
@@ -19,12 +39,7 @@
 
 static const char *TAG_BLE = "BLE_TASK";
 static const char *TAG_OBD = "OBD_TASK";
-static const char *TAG_SYS = "MAIN_TWAI";
-
-#define CAN_TX_PIN GPIO_NUM_2
-#define CAN_RX_PIN GPIO_NUM_3
-
-// #define CAN_STBY_PIN GPIO_NUM_4
+static const char *TAG_SYS = "MAIN_DUMMY";
 
 // ============================================================================
 // RECURSOS COMPARTIDOS
@@ -35,6 +50,8 @@ NimBLECharacteristic* pTxCharacteristic = nullptr;
 QueueHandle_t ble_tx_queue = NULL;          
 
 OBD_CAN_Interface* obd_interface = nullptr;
+
+// La clase OBD_DUMMY ahora se encuentra en la librería obd_can (obd_can.h y obd_can.cpp)
 
 // ============================================================================
 // AUXILIARES Y CALLBACKS
@@ -85,13 +102,7 @@ static MyRxCallbacks rxCallbacks;
 // ============================================================================
 void init_can() {
     
-#ifdef CAN_STBY_PIN
-    // Control del Transceptor Físico
-    gpio_set_direction(CAN_STBY_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(CAN_STBY_PIN, 0);
-#endif
-
-    obd_interface = new OBD_TWAI(CAN_TX_PIN, CAN_RX_PIN);
+    obd_interface = new OBD_DUMMY();
     obd_interface->set_tx_queue(ble_tx_queue);
 
     // paquetes default
@@ -115,7 +126,7 @@ void init_can() {
     obd_interface->set_polling_pids(pids);
 
     if (obd_interface->init()) {
-        ESP_LOGI(TAG_SYS, "Interfaz OBD (TWAI) inicializada");
+        ESP_LOGI(TAG_SYS, "Interfaz OBD (DUMMY) inicializada");
     } else {
         ESP_LOGE(TAG_SYS, "Error al inicializar la interfaz OBD.");
     }
@@ -179,14 +190,6 @@ void vBLETask(void *pvParameters) {
         // espero a que lleguen a la cola y voy tomando y contando los paquetes
         if (xQueueReceive(ble_tx_queue, &rx_packet, pdMS_TO_TICKS(100)) == pdTRUE) {
             tx_buffer[packet_count++] = rx_packet;
-            
-            
-            printf("CAN RX | ID: 0x%03lX | DLC: %d | Data: ", (unsigned long)rx_packet.can_id, rx_packet.dlc);
-            for (int i = 0; i < rx_packet.dlc; i++) {
-                printf("%02X ", rx_packet.data[i]);
-            }
-            printf("\n");
-
 
             // cuando llegan a 5, los mando juntos
             if (packet_count >= 5) {
@@ -214,7 +217,7 @@ void vBLETask(void *pvParameters) {
 // START
 // ============================================================================
 extern "C" void app_main(void) {
-    ESP_LOGI(TAG_SYS, "Arrancando...");
+    ESP_LOGI(TAG_SYS, "Arrancando DUMMY...");
 
     ble_tx_queue = xQueueCreate(20, sizeof(BleCanPacket)); 
 
@@ -229,5 +232,5 @@ extern "C" void app_main(void) {
     xTaskCreatePinnedToCore(vOBDTask, "OBD_Task", 4096, NULL, 5, NULL, 0);
     xTaskCreatePinnedToCore(vBLETask, "BLE_Task", 4096, NULL, 4, NULL, 0);
 
-    ESP_LOGI(TAG_SYS, "Sistema corriendo.");
+    ESP_LOGI(TAG_SYS, "Sistema corriendo en modo DUMMY.");
 }

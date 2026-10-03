@@ -143,3 +143,26 @@ private:
     void request_pid(BleCanPacket packet);
 };
 #endif // CONFIG_OBD_USE_TWAI
+
+#if CONFIG_OBD_USE_DUMMY
+/**
+ * @brief Implementación Dummy de la interfaz OBD.
+ * Genera datos aleatorios en lugar de consultar hardware real.
+ */
+class OBD_DUMMY : public OBD_CAN_Interface {
+public:
+    OBD_DUMMY();
+    ~OBD_DUMMY();
+
+    bool init() override;
+    void process() override;
+
+    void set_request_interval(uint32_t ms) { request_interval_ms = ms; }
+
+private:
+    uint32_t last_request_time = 0;
+    uint32_t request_interval_ms = 50;
+
+    void simulate_response(BleCanPacket request);
+};
+#endif // CONFIG_OBD_USE_DUMMY
