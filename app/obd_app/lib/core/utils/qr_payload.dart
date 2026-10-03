@@ -26,6 +26,14 @@ abstract final class QrPayload {
     ).toString();
   }
 
+  static String trip(String tripId) {
+    return Uri(
+      scheme: scheme,
+      host: 'trip',
+      queryParameters: {'id': tripId},
+    ).toString();
+  }
+
   /// Devuelve `(email, name)` o null si el texto no es un QR de la app.
   static ({String email, String? name})? parseInvite(String raw) {
     final uri = Uri.tryParse(raw.trim());
@@ -36,5 +44,11 @@ abstract final class QrPayload {
 
     final name = uri.queryParameters['name']?.trim();
     return (email: email, name: name == null || name.isEmpty ? null : name);
+  }
+
+  static String? parseTrip(String raw) {
+    final uri = Uri.tryParse(raw.trim());
+    if (uri == null || uri.scheme != scheme || uri.host != 'trip') return null;
+    return uri.queryParameters['id'];
   }
 }

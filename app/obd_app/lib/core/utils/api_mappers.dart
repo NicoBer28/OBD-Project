@@ -156,7 +156,10 @@ abstract final class ApiMappers {
           route: t.startedAt == null ? 'Viaje' : TripFormat.timeRange(t.startedAt!, t.endedAt),
           distance: t.distance == null ? '—' : TripFormat.km(t.distance!),
           duration: _tripSubtitle(t),
-          drivers: [memberOf(members, t.driverId)],
+          drivers: [
+            memberOf(members, t.driverId),
+            ...t.participants.where((p) => p.userId != null).map((p) => memberOf(members, p.userId!)),
+          ],
           active: t.active,
         ),
     ];

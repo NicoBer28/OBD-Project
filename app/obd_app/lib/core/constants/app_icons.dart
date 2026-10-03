@@ -36,4 +36,9 @@ abstract final class AppIcons {
   static const plate = Icons.pin_outlined;
   static const check = Icons.check_circle_outline_rounded;
   static const swap = Icons.swap_horiz_rounded;
+  static const guest = Icons.person_outline_rounded;
+  static const removePerson = Icons.person_remove_outlined;
+  static const money = Icons.payments_rounded;
+  static const split = Icons.call_split_rounded;
+  static const copy = Icons.copy_rounded;
 }

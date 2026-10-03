@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:obd_app/controllers/home_controller.dart';
 import 'package:obd_app/core/constants/app_icons.dart';
 import 'package:obd_app/core/theme/app_theme.dart';
 import 'package:obd_app/models/models.dart';
 import 'package:obd_app/ui/screens/home/widgets/shared_widgets.dart';
+import 'package:obd_app/ui/screens/home/widgets/trip_people_sheet.dart';
 import 'package:obd_app/ui/widgets/widgets.dart';
 
 /// ---------------------------------------------------------------------------
@@ -106,8 +108,9 @@ class PeriodPicker extends StatelessWidget {
 
 class TripsContent extends StatelessWidget {
   final List<TripData> trips;
+  final HomeController controller;
 
-  const TripsContent({super.key, required this.trips});
+  const TripsContent({super.key, required this.trips, required this.controller});
 
   @override
   Widget build(BuildContext context) {
@@ -136,7 +139,7 @@ class TripsContent extends StatelessWidget {
               : Column(
                   children: [
                     for (var i = 0; i < trips.length; i++) ...[
-                      TripRow(trip: trips[i]),
+                      TripRow(trip: trips[i], onTap: () => _openTrip(context, trips[i].id)),
                       if (i < trips.length - 1) const Divider(height: 18),
                     ],
                   ],
@@ -145,18 +148,31 @@ class TripsContent extends StatelessWidget {
       ],
     );
   }
+
+  // El viaje completo (con driverId, carId, cost) no está en TripData — esa
+  // es la forma que ya usaba el dashboard de antes de haber una API — así que
+  // se busca en controller.carTrips, que sí lo tiene.
+  void _openTrip(BuildContext context, String tripId) {
+    for (final trip in controller.carTrips) {
+      if (trip.id == tripId) {
+        TripPeopleSheet.show(context, controller, trip);
+        return;
+      }
+    }
+  }
 }
 
 class TripRow extends StatelessWidget {
   final TripData trip;
+  final VoidCallback? onTap;
 
-  const TripRow({super.key, required this.trip});
+  const TripRow({super.key, required this.trip, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
 
-    return Row(
+    final row = Row(
       children: [
         SizedBox(
           width: 73,
@@ -184,7 +200,19 @@ class TripRow extends StatelessWidget {
             color: t.text,
           ),
         ),
+        if (onTap != null) ...[
+          const SizedBox(width: 4),
+          Icon(AppIcons.arrow, size: 16, color: t.muted),
+        ],
       ],
+    );
+
+    if (onTap == null) return row;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(padding: const EdgeInsets.symmetric(vertical: 2), child: row),
     );
   }
 }
