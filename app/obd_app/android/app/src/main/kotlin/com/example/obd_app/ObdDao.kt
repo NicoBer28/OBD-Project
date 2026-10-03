@@ -27,13 +27,13 @@ interface ObdDao {
     @Query("SELECT * FROM trips WHERE syncStatus IN ('PENDING_START', 'PENDING_FINISH')")
     suspend fun getUnsyncedTrips(): List<Trip>
 
-    // Viajes que el servidor todavía no conoce (activos o ya cerrados localmente)
-    @Query("SELECT * FROM trips WHERE carId = :carId AND backendId IS NULL AND syncStatus IN ('PENDING_START', 'PENDING_FINISH') ORDER BY startedAt ASC")
-    suspend fun getTripsToStart(carId: String): List<Trip>
+    @Query("SELECT * FROM trips WHERE localId = :localId")
+    suspend fun getTrip(localId: String): Trip?
 
-    // Viajes cerrados localmente que falta cerrar en el servidor
-    @Query("SELECT * FROM trips WHERE carId = :carId AND backendId IS NOT NULL AND syncStatus = 'PENDING_FINISH' ORDER BY startedAt ASC")
-    suspend fun getTripsToFinish(carId: String): List<Trip>
+    // Viajes con algo por hacer en el servidor (iniciarlos, cerrarlos o ambas cosas), del más
+    // viejo al más nuevo: el servidor admite un solo viaje abierto por auto.
+    @Query("SELECT * FROM trips WHERE carId = :carId AND syncStatus IN ('PENDING_START', 'PENDING_FINISH') ORDER BY startedAt ASC")
+    suspend fun getTripsToSync(carId: String): List<Trip>
 
     // UPDATEs puntuales en vez de updateTrip(copy): el servicio y el worker tocan el mismo
     // viaje desde hilos distintos, y reescribir la fila entera con una copia vieja pisaría

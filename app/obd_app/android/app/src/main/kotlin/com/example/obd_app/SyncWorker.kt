@@ -17,23 +17,27 @@ import java.util.Locale
 import java.util.TimeZone
 
 /**
- * Vacía la cola local hacia el backend, auto por auto. Orden para cada auto: iniciar
- * viajes → telemetría → cerrar viajes.
+ * Vacía la cola local hacia el backend, auto por auto, cada uno con su token de dispositivo.
+ * Orden para cada auto: viajes (en orden cronológico) → telemetría.
  *
  * Reglas de error (lo importante es que un dato roto nunca bloquee la cola):
  * - 2xx                → listo, se borra / se marca.
- * - 401                → token vencido. Se corta SIN borrar nada; sube cuando Flutter mande
- *                        un token nuevo (eso vuelve a encolar este worker). Corta la corrida
- *                        entera: el token es del usuario, el mismo para todos sus autos.
+ * - 401, o 403 con `car_not_accessible`
+ *                      → el token de ESE auto ya no sirve. Se marca inválido, se avisa al
+ *                        usuario y se sigue con los otros autos, SIN borrar nada. Al abrir la
+ *                        app, Flutter crea un token nuevo y vuelve a encolar este worker.
  * - red, 408, 429, 5xx → Result.retry() con backoff exponencial.
  * - otro 4xx           → el servidor lo rechaza: se marca FAILED y se sigue con el resto.
  *
- * Reintentar es seguro: la telemetría es idempotente (duplicados = éxito) y los conflictos
- * de viajes (409) se resuelven abajo.
+ * Reintentar es seguro: la telemetría es idempotente (duplicados = éxito) y el inicio de un
+ * viaje también (`clientTripId`: repetirlo devuelve el mismo viaje).
  */
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     private enum class Outcome { OK, RETRY, AUTH, REJECTED }
+
+    /** El resultado de una llamada. [error] es el cuerpo del error, leído una sola vez. */
+    private data class Llamada<T>(val outcome: Outcome, val response: Response<T>?, val error: String = "")
 
     companion object {
         private const val TAG = "OBD-SYNC"
@@ -58,7 +62,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
         val session = NativeSession.read(applicationContext)
         if (session == null) {
-            Log.w(TAG, "Flutter todavía no entregó la sesión. Los datos quedan en cola.")
+            Log.w(TAG, "Flutter todavía no configuró el servidor. Los datos quedan en cola.")
             return@withLock Result.success()
         }
 
@@ -66,74 +70,103 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         var reintentar = false
 
         for (carId in dao.getCarIdsWithPendingWork()) {
-            val auth = authHeaderFor(carId)
-            if (auth == null) {
-                Log.w(TAG, "No hay token para subir. Los datos quedan en cola.")
-                return@withLock Result.success()
+            val credencial = CredentialStore.get(applicationContext, carId)
+            if (credencial == null || credencial.invalid) {
+                Log.w(TAG, "El auto $carId no tiene un token válido. Sus datos quedan en cola hasta abrir la app.")
+                continue
             }
+            val auth = "Device ${credencial.token}"
 
             Log.i(TAG, "🔄 Iniciando sincronización del auto $carId...")
 
-            val inicio = iniciarViajes(api, auth, dao, carId, session.userId)
-            if (inicio == Outcome.AUTH) return@withLock tokenVencido()
+            val viajes = sincronizarViajes(api, auth, dao, carId, session.userId)
+            if (viajes == Outcome.AUTH) {
+                credencialRechazada(credencial)
+                continue
+            }
 
-            // La telemetría no depende de los viajes: se sube aunque el inicio haya fallado.
+            // La telemetría no depende de los viajes: se sube aunque alguno haya fallado.
             val telemetria = subirTelemetria(api, auth, dao, carId)
-            if (telemetria == Outcome.AUTH) return@withLock tokenVencido()
+            if (telemetria == Outcome.AUTH) {
+                credencialRechazada(credencial)
+                continue
+            }
 
-            val cierre = cerrarViajes(api, auth, dao, carId)
-            if (cierre == Outcome.AUTH) return@withLock tokenVencido()
-
-            if (Outcome.RETRY in listOf(inicio, telemetria, cierre)) reintentar = true
+            if (Outcome.RETRY in listOf(viajes, telemetria)) reintentar = true
         }
 
         if (reintentar) Result.retry() else Result.success()
     }
 
-    // Con qué credencial se suben los datos de [carId]. Hoy es el JWT del usuario, que sirve
-    // para todos sus autos. FASE 2: pasa a ser el token de dispositivo de ese auto ("Device …").
-    private fun authHeaderFor(carId: String): String? {
-        val token = NativeSession.read(applicationContext)?.accessToken ?: return null
-        return "Bearer $token"
+    // El servidor rechazó el token de ese auto. Los otros autos siguen subiendo.
+    private fun credencialRechazada(credencial: DeviceCredential) {
+        Log.w(TAG, "El token del auto ${credencial.carId} fue rechazado. Sus datos quedan en cola hasta abrir la app.")
+        CredentialStore.markInvalid(applicationContext, credencial.carId)
+        SyncAlerts.mostrarReactivacion(applicationContext, credencial.carId, credencial.carName)
     }
 
-    // Se devuelve success para no reintentar en loop con un token que no sirve. Cuando
-    // Flutter mande uno nuevo, MainActivity vuelve a encolar este worker.
-    private fun tokenVencido(): Result {
-        Log.w(TAG, "Token vencido o rechazado (401). Los datos quedan en cola hasta tener uno nuevo.")
-        return Result.success()
-    }
+    // ---------------------------------------------------------------- VIAJES
 
-    // ---------------------------------------------------------------- VIAJES: INICIO
-
-    private suspend fun iniciarViajes(
+    /**
+     * Cada viaje se inicia y, si ya terminó, se cierra antes de pasar al siguiente: el
+     * servidor admite un solo viaje abierto por auto, así que con dos en cola el segundo
+     * chocaría (409) con el primero si este no se cerró antes.
+     */
+    private suspend fun sincronizarViajes(
         api: ObdApiService, auth: String, dao: ObdDao, carId: String, myUserId: String?
     ): Outcome {
-        for (viaje in dao.getTripsToStart(carId)) {
-            val (outcome, response) = llamar {
-                api.startTrip(auth, StartTripRequest(viaje.carId, viaje.initialFuel))
+        for (pendiente in dao.getTripsToSync(carId)) {
+            if (pendiente.backendId == null) {
+                val inicio = iniciarViaje(api, auth, dao, pendiente, myUserId)
+                if (inicio != Outcome.OK) return inicio
             }
 
-            when {
-                outcome == Outcome.OK -> {
-                    val backendId = response?.body()?.id ?: return Outcome.RETRY
-                    dao.markTripStarted(viaje.localId, backendId)
-                    Log.i(TAG, "✅ Viaje iniciado en el servidor. ID: $backendId")
-                }
-                // 409 = el auto ya tiene un viaje abierto. Puede ser nuestro (la respuesta de
-                // un intento anterior se perdió, o se inició a mano desde la app) o de otro.
-                response?.code() == 409 -> {
-                    val r = adoptarViajeActivo(api, auth, dao, viaje, myUserId)
-                    if (r == Outcome.AUTH || r == Outcome.RETRY) return r
-                }
-                outcome == Outcome.AUTH || outcome == Outcome.RETRY -> return outcome
-                else -> {
-                    Log.e(TAG, "Servidor rechazó el viaje ${viaje.localId}: ${response?.code()} ${errorBody(response)}")
-                    dao.setTripSyncStatus(viaje.localId, "FAILED")
-                }
-            }
+            // Se relee: el servicio pudo haberlo cerrado mientras tanto.
+            val viaje = dao.getTrip(pendiente.localId) ?: continue
+            val backendId = viaje.backendId ?: continue // el servidor lo rechazó (FAILED)
+
+            // Sigue abierto en el servidor: los siguientes no se pueden iniciar todavía.
+            if (viaje.syncStatus != "PENDING_FINISH") return Outcome.OK
+
+            val cierre = cerrarViaje(api, auth, dao, viaje, backendId)
+            if (cierre != Outcome.OK) return cierre
         }
         return Outcome.OK
+    }
+
+    /** OK también cuando el servidor lo rechazó (queda FAILED y se sigue con el resto). */
+    private suspend fun iniciarViaje(
+        api: ObdApiService, auth: String, dao: ObdDao, viaje: Trip, myUserId: String?
+    ): Outcome {
+        val (outcome, response, error) = llamar {
+            api.startTrip(
+                auth,
+                StartTripRequest(
+                    carId = viaje.carId,
+                    initialFuel = viaje.initialFuel,
+                    clientTripId = viaje.localId,
+                    startedAt = isoFormatter.format(Date(viaje.startedAt)),
+                )
+            )
+        }
+
+        return when {
+            outcome == Outcome.OK -> {
+                val backendId = response?.body()?.id ?: return Outcome.RETRY
+                dao.markTripStarted(viaje.localId, backendId)
+                Log.i(TAG, "✅ Viaje iniciado en el servidor. ID: $backendId")
+                Outcome.OK
+            }
+            // 409 = el auto tiene OTRO viaje abierto (un reintento del mismo devuelve 200).
+            response?.code() == 409 -> adoptarViajeActivo(api, auth, dao, viaje, myUserId)
+            outcome == Outcome.AUTH || outcome == Outcome.RETRY -> outcome
+            else -> {
+                // Ej.: 400 porque startedAt tiene más de 30 días.
+                Log.e(TAG, "Servidor rechazó el viaje ${viaje.localId}: ${response?.code()} $error")
+                dao.setTripSyncStatus(viaje.localId, "FAILED")
+                Outcome.OK
+            }
+        }
     }
 
     private suspend fun adoptarViajeActivo(
@@ -150,15 +183,58 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             ?: return Outcome.RETRY // 204: el viaje se cerró entre medio; se reintenta el inicio
 
         val activoId = activo.id
-        if (activoId != null && myUserId != null && activo.driverId == myUserId) {
-            dao.markTripStarted(viaje.localId, activoId)
-            Log.i(TAG, "✅ Viaje ya abierto por este usuario: se adopta $activoId")
-        } else {
-            // TODO (Fase 2, backend): con clientTripId este caso deja de ser ambiguo.
-            Log.w(TAG, "El auto está en viaje con otro conductor. Viaje local ${viaje.localId} → FAILED")
-            dao.setTripSyncStatus(viaje.localId, "FAILED")
+        val clientTripId = activo.clientTripId
+        val esOtroViajeLocal = clientTripId != null && clientTripId != viaje.localId && dao.getTrip(clientTripId) != null
+
+        when {
+            // Un viaje anterior de este celular quedó abierto en el servidor: hay que esperar
+            // a que se cierre, no adoptarlo (serían dos viajes distintos).
+            esOtroViajeLocal -> {
+                Log.w(TAG, "El auto sigue con el viaje local $clientTripId abierto en el servidor. Se reintenta ${viaje.localId}.")
+                return Outcome.RETRY
+            }
+            // Iniciado por este usuario desde la app (sin clientTripId) o desde otro celular.
+            activoId != null && myUserId != null && activo.driverId == myUserId -> {
+                dao.markTripStarted(viaje.localId, activoId)
+                Log.i(TAG, "✅ Viaje ya abierto por este usuario: se adopta $activoId")
+            }
+            else -> {
+                Log.w(TAG, "El auto está en viaje con otro conductor. Viaje local ${viaje.localId} → FAILED")
+                dao.setTripSyncStatus(viaje.localId, "FAILED")
+            }
         }
         return Outcome.OK
+    }
+
+    /** OK también cuando el servidor lo rechazó (queda FAILED). */
+    private suspend fun cerrarViaje(
+        api: ObdApiService, auth: String, dao: ObdDao, viaje: Trip, backendId: String
+    ): Outcome {
+        val (outcome, response, error) = llamar {
+            api.finishTrip(
+                auth,
+                backendId,
+                FinishTripRequest(
+                    tripFinalFuel = viaje.finalFuel,
+                    endedAt = viaje.endedAt?.let { isoFormatter.format(Date(it)) },
+                )
+            )
+        }
+
+        return when {
+            // 409 = ya estaba cerrado (un intento anterior llegó pero la respuesta no)
+            outcome == Outcome.OK || response?.code() == 409 -> {
+                dao.setTripSyncStatus(viaje.localId, "COMPLETED")
+                Log.i(TAG, "✅ Viaje $backendId cerrado en el servidor.")
+                Outcome.OK
+            }
+            outcome == Outcome.AUTH || outcome == Outcome.RETRY -> outcome
+            else -> {
+                Log.e(TAG, "Servidor rechazó el cierre de $backendId: ${response?.code()} $error")
+                dao.setTripSyncStatus(viaje.localId, "FAILED")
+                Outcome.OK
+            }
+        }
     }
 
     // ---------------------------------------------------------------- TELEMETRÍA
@@ -182,7 +258,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     continue
                 }
 
-                val (outcome, response) = llamar { api.uploadTelemetry(auth, request) }
+                val (outcome, response, error) = llamar { api.uploadTelemetry(auth, request) }
                 when (outcome) {
                     Outcome.OK -> dao.deleteChunks(listOf(chunk.id))
                     Outcome.AUTH -> return Outcome.AUTH
@@ -191,7 +267,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                         return Outcome.RETRY
                     }
                     Outcome.REJECTED -> {
-                        Log.e(TAG, "Servidor rechazó chunk ${chunk.id}: ${response?.code()} ${errorBody(response)}")
+                        Log.e(TAG, "Servidor rechazó chunk ${chunk.id}: ${response?.code()} $error")
                         dao.markChunkFailed(chunk.id)
                     }
                 }
@@ -231,54 +307,46 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         return TelemetryBatchRequest(chunk.carId, readings)
     }
 
-    // ---------------------------------------------------------------- VIAJES: FIN
-
-    private suspend fun cerrarViajes(api: ObdApiService, auth: String, dao: ObdDao, carId: String): Outcome {
-        for (viaje in dao.getTripsToFinish(carId)) {
-            val backendId = viaje.backendId ?: continue
-            val (outcome, response) = llamar {
-                api.finishTrip(auth, backendId, FinishTripRequest(tripFinalFuel = viaje.finalFuel))
-            }
-
-            when {
-                // 409 = ya estaba cerrado (un intento anterior llegó pero la respuesta no)
-                outcome == Outcome.OK || response?.code() == 409 -> {
-                    dao.setTripSyncStatus(viaje.localId, "COMPLETED")
-                    Log.i(TAG, "✅ Viaje $backendId cerrado en el servidor.")
-                }
-                outcome == Outcome.AUTH || outcome == Outcome.RETRY -> return outcome
-                else -> {
-                    Log.e(TAG, "Servidor rechazó el cierre de $backendId: ${response?.code()} ${errorBody(response)}")
-                    dao.setTripSyncStatus(viaje.localId, "FAILED")
-                }
-            }
-        }
-        return Outcome.OK
-    }
-
     // ---------------------------------------------------------------- HELPERS
 
-    private suspend fun <T> llamar(block: suspend () -> Response<T>): Pair<Outcome, Response<T>?> =
+    private suspend fun <T> llamar(block: suspend () -> Response<T>): Llamada<T> =
         try {
             val response = block()
-            clasificar(response.code()) to response
+            // El cuerpo del error se puede leer una sola vez: se guarda para clasificar y loguear.
+            val error = if (response.isSuccessful) "" else errorBody(response)
+            Llamada(clasificar(response.code(), error), response, error)
         } catch (e: CancellationException) {
             throw e
         } catch (e: IOException) {
             Log.w(TAG, "Error de red: ${e.message}")
-            Outcome.RETRY to null
+            Llamada(Outcome.RETRY, null)
         } catch (e: Exception) {
             Log.e(TAG, "Error inesperado: ${e.message}")
-            Outcome.RETRY to null
+            Llamada(Outcome.RETRY, null)
         }
 
-    private fun clasificar(code: Int): Outcome = when {
+    private fun clasificar(code: Int, error: String): Outcome = when {
         code in 200..299 -> Outcome.OK
         code == 401 -> Outcome.AUTH
+        code == 403 -> {
+            val razon = razon(error)
+            // El usuario perdió acceso al auto: no es un dato roto, es el token. Al abrir la
+            // app la reconciliación decide (token nuevo, o desvincular si ya no tiene acceso).
+            if (razon == "car_not_accessible") {
+                Outcome.AUTH
+            } else {
+                Log.e(TAG, "403 ($razon): el token no alcanza a ese auto o endpoint. Es un bug del cliente.")
+                Outcome.REJECTED
+            }
+        }
         code == 408 || code == 429 || code >= 500 -> Outcome.RETRY
         else -> Outcome.REJECTED
     }
 
-    private fun errorBody(response: Response<*>?): String =
-        try { response?.errorBody()?.string()?.take(300) ?: "" } catch (e: Exception) { "" }
+    // El `reason` del ProblemDetail del backend (ej. "car_not_accessible", "token_revoked").
+    private fun razon(error: String): String? =
+        try { JSONObject(error).optString("reason").ifEmpty { null } } catch (e: JSONException) { null }
+
+    private fun errorBody(response: Response<*>): String =
+        try { response.errorBody()?.string()?.take(300) ?: "" } catch (e: Exception) { "" }
 }

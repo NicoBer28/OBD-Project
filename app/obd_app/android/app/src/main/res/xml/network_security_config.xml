@@ -1,12 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  TEMPORAL: el servidor de desarrollo todavía no tiene HTTPS, y Android 9+ bloquea HTTP sin
-  cifrar. Esto lo habilita SOLO para estos hosts. Borrar este archivo (y el atributo
-  networkSecurityConfig del manifest) cuando el backend tenga HTTPS.
+  Android 9+ bloquea HTTP sin cifrar. Los servidores (dev y producción) usan HTTPS; esto lo
+  habilita SOLO para probar con el emulador contra un backend en la PC.
 -->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">165.1.123.207</domain>
         <!-- emulador de Android apuntando a la PC -->
         <domain includeSubdomains="false">10.0.2.2</domain>
     </domain-config>

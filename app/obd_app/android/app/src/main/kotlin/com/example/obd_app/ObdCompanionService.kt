@@ -122,6 +122,16 @@ class ObdCompanionService : CompanionDeviceService() {
         // El auto sale de la MAC. Se busca antes de conectar para que ningún dato quede sin dueño.
         serviceScope.launch {
             val carId = dao.getAssociationByMac(mac)?.carId
+
+            // Se graba igual; sube cuando, al abrir la app, Flutter cree un token nuevo.
+            if (carId != null) {
+                val credencial = CredentialStore.get(applicationContext, carId)
+                if (credencial == null || credencial.invalid) {
+                    Log.w("OBD-C", "El auto $carId no tiene un token válido: se graba, pero no sube hasta abrir la app.")
+                    SyncAlerts.mostrarReactivacion(applicationContext, carId, credencial?.carName)
+                }
+            }
+
             withContext(Dispatchers.Main) {
                 sesion.asignarAuto(carId)
                 sesion.avisarEstado() // detectado: todavía conectando

@@ -38,7 +38,8 @@ class ApiConfig {
 
   static const String _defaultBaseUrl = String.fromEnvironment(
     'OBD_API_BASE_URL',
-    defaultValue: 'http://165.1.123.207:25565/',
+    // Servidor de desarrollo. Con https: en http responde 308 y un POST no lo sigue.
+    defaultValue: 'https://dev-api.obidi.com.ar',
   );
 
   /// What the app uses unless a test passes something else.

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Backup automático (Android 11 y anteriores). Los tokens de dispositivo no deben viajar a
+  otro teléfono, y además allá no se podrían descifrar (la clave vive en el Keystore de este).
+  Ver data_extraction_rules.xml para Android 12+.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="obd_device_credentials.xml" />
+    <exclude domain="sharedpref" path="obd_native_session.xml" />
+</full-backup-content>

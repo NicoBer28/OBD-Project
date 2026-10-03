@@ -61,6 +61,50 @@ class EstadoSincronizacion {
   );
 }
 
+/// El token de dispositivo de un auto, según lo que tiene guardado el nativo.
+class EstadoCredencial {
+  final String carId;
+
+  /// El ESP32 vinculado a ese auto. Null = el token quedó sin vinculación (por ejemplo, el
+  /// ESP32 se reasignó a otro auto) y hay que revocarlo.
+  final String? mac;
+
+  /// Null = el auto está vinculado pero todavía no tiene token.
+  final String? tokenId;
+
+  /// False si no hay token o si el servidor lo rechazó.
+  final bool valid;
+
+  /// Cuándo vence si no se usa (el `idleExpiresAt` que dio el servidor al crearlo).
+  final DateTime? expiresAt;
+
+  /// Marca y modelo de este celular, para el `label` de un token nuevo.
+  final String deviceLabel;
+
+  const EstadoCredencial({
+    required this.carId,
+    this.mac,
+    this.tokenId,
+    this.valid = false,
+    this.expiresAt,
+    this.deviceLabel = '',
+  });
+
+  bool get vinculado => mac != null;
+
+  factory EstadoCredencial.fromMap(Map<Object?, Object?> map) {
+    final expiresAt = map['expiresAt'];
+    return EstadoCredencial(
+      carId: map['carId'] as String,
+      mac: map['mac'] as String?,
+      tokenId: map['tokenId'] as String?,
+      valid: map['valid'] as bool? ?? false,
+      expiresAt: expiresAt is int ? DateTime.fromMillisecondsSinceEpoch(expiresAt) : null,
+      deviceLabel: map['deviceLabel'] as String? ?? '',
+    );
+  }
+}
+
 /// En qué está la conexión con el ESP32 de un auto.
 class ConexionAuto {
   final EstadoConexion estado;
@@ -132,16 +176,43 @@ class NativeBleBridge {
     }
   }
 
-  /// TEMPORAL (Fase 1), se elimina en la Fase 2: el JWT de 15 minutos de la sesión, para que
-  /// el nativo pueda subir con la app cerrada. El nativo nunca lo renueva; si vence, guarda
-  /// los datos y los sube cuando se le mande uno nuevo. Null = deja de subir.
-  static Future<void> setSessionToken(String? accessToken) async {
+  /// Le entrega al nativo el token de dispositivo de [carId], recién creado. El nativo lo
+  /// guarda cifrado y sube enseguida lo que estaba en cola para ese auto. Lanza
+  /// [PlatformException] si no se pudo guardar.
+  static Future<void> guardarCredencial({
+    required String carId,
+    String? carName,
+    required String tokenId,
+    required String token,
+    DateTime? expiresAt,
+  }) async {
     try {
-      await platform.invokeMethod('setSessionToken', {'accessToken': accessToken});
-    } on PlatformException catch (e) {
-      debugPrint('No se pudo entregar el token al nativo: ${e.message}');
+      await platform.invokeMethod('guardarCredencial', {
+        'carId': carId,
+        'carName': carName,
+        'tokenId': tokenId,
+        'token': token,
+        'expiresAt': expiresAt?.millisecondsSinceEpoch,
+      });
     } on MissingPluginException {
       // iOS todavía no implementa el canal.
+    }
+  }
+
+  /// Qué token tiene cada auto vinculado en este celular, más los tokens que quedaron sin
+  /// vinculación (con `mac` null) y hay que revocar.
+  static Future<List<EstadoCredencial>> estadoCredenciales() async {
+    try {
+      final result = await platform.invokeListMethod<Object?>('estadoCredenciales');
+      return [
+        for (final item in result ?? const <Object?>[])
+          if (item is Map<Object?, Object?>) EstadoCredencial.fromMap(item),
+      ];
+    } on PlatformException catch (e) {
+      debugPrint('No se pudo leer el estado de las credenciales: ${e.message}');
+      return const [];
+    } on MissingPluginException {
+      return const [];
     }
   }
 
@@ -201,7 +272,7 @@ class NativeBleBridge {
     }
   }
 
-  /// Logout: se desvinculan todos los autos y el nativo deja de poder subir. Con
+  /// Logout: se desvinculan todos los autos, se borran sus tokens y el nativo deja de subir. Con
   /// [descartarPendientes] también se borra lo que estaba guardado sin subir.
   static Future<void> cerrarSesion({required bool descartarPendientes}) async {
     try {

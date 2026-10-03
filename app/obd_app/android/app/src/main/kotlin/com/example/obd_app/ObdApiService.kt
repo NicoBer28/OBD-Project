@@ -12,7 +12,9 @@ import retrofit2.http.Path
 
 data class StartTripRequest(
     val carId: String,
-    val initialFuel: Int? // null = el servidor usa el último nivel de nafta conocido del auto
+    val initialFuel: Int?,    // null = el servidor usa el último nivel de nafta conocido del auto
+    val clientTripId: String?, // UUID local: repetir el inicio devuelve 200 con el mismo viaje
+    val startedAt: String?,    // ISO-8601 UTC. Como mucho 30 días atrás (si no, 400)
 )
 
 /** TripDTO.Read. Todo nullable: Gson no respeta la nulabilidad de Kotlin. */
@@ -21,12 +23,14 @@ data class TripResponse(
     val carId: String?,
     val driverId: String?,
     val active: Boolean?,
-    val startedAt: String?
+    val startedAt: String?,
+    val clientTripId: String?,
 )
 
 data class FinishTripRequest(
-    val tripFinalFuel: Int?,      // null = gasto desconocido (no cero)
-    val tripDistance: Double? = null // opcional, > 0. Null hasta calcular la distancia real
+    val tripFinalFuel: Int?,          // null = gasto desconocido (no cero)
+    val distanceKm: Double? = null,   // opcional, > 0. El servidor no la calcula
+    val endedAt: String? = null,      // ISO-8601 UTC. No puede ser anterior al inicio (si no, 400)
 )
 
 data class TelemetryBatchRequest(
@@ -44,7 +48,7 @@ data class ReadingPayload(
 )
 
 // --- INTERFAZ RETROFIT ---
-// token = valor completo del header, ej. "Bearer eyJ..." (en la Fase 2: "Device obdd_...").
+// token = valor completo del header: "Device obdd_..." (el token de dispositivo de ese auto).
 
 interface ObdApiService {
 

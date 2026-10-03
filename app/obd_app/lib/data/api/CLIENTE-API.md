@@ -325,6 +325,49 @@ Errores: `pair` tira `isConflict` si el serial está pareado a **otro** auto
 deliberado). `resolve` tira `isNotFound` igual para un serial inexistente que
 para uno de un auto que no podés ver.
 
+### `api.deviceTokens` — tokens de dispositivo
+
+| Método | Endpoint |
+|---|---|
+| `create(carId, label: ...)` | `POST /cars/{carId}/device-tokens` |
+| `revoke(tokenId)` | `DELETE /device-tokens/{tokenId}` |
+| `forCar(carId)` | `GET /cars/{carId}/device-tokens` |
+
+La credencial con la que el servicio nativo sube los datos **con la app cerrada**.
+El access token no sirve para eso: dura 15 minutos y solo Dart puede renovarlo
+(el refresh token es de un solo uso; si lo renovaran dos procesos, se cerraría
+la sesión). Un token de dispositivo:
+
+- vale para **un solo auto** y solo para `POST /telemetry`, `POST /trips`,
+  `POST /trips/{id}/finish` y `GET /cars/{carId}/trips/active`;
+- se manda como `Authorization: Device obdd_…` y actúa como el usuario que lo creó;
+- no rota: vive hasta que se revoca, o hasta **90 días sin uso**
+  (`idleExpiresAt` se corre con cada subida).
+
+```dart
+final creado = await api.deviceTokens.create(
+  auto.id,
+  label: 'samsung SM-A546E', // requerido; se recorta a 60 caracteres
+);
+creado.token; // "obdd_…" — la única vez que viaja: va directo al nativo
+```
+
+Las tres llamadas usan la sesión del usuario (bearer), así que solo funcionan
+con la app abierta. `revoke` de un token ya revocado da `404`: si solo querés
+que no exista, tomalo como hecho. `forCar` lista los vivos, sin el secreto.
+
+Qué contesta el servidor cuando el nativo usa un token que ya no sirve:
+
+| Estado | `reason` | Qué pasó |
+|---|---|---|
+| `401` | `token_invalid` / `token_revoked` | no existe, se revocó o venció por desuso |
+| `403` | `car_not_accessible` | el usuario perdió acceso al auto |
+| `403` | `device_out_of_scope` | se usó con otro auto: un bug del cliente |
+
+Lo orquesta `DeviceLinkService` (`lib/data/device_link_service.dart`): crea el
+token al vincular un ESP32, lo reemplaza al abrir la app si el nativo lo marcó
+inválido (`reconciliar()`) y revoca todos antes del logout.
+
 ### `api.groups` — grupos ("familias")
 
 | Método | Endpoint |

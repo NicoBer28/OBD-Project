@@ -4,25 +4,18 @@ import android.content.Context
 
 /**
  * Lo que Flutter le entrega al código nativo para poder subir datos sin la app abierta.
+ * Solo datos no secretos: el token de cada auto vive cifrado en [CredentialStore].
  *
- * El auto ya no viaja acá: sale de la MAC del ESP32 (tabla `associations`).
- *
- * TEMPORAL (Fase 1): guarda el access token de la sesión de Flutter, que dura 15 minutos.
- * El nativo NUNCA lo refresca: el refresh token es de un solo uso y solo lo maneja Dart.
- * Si el token vence, el SyncWorker deja todo en la cola local hasta que Flutter mande
- * uno nuevo (cada vez que la app se abre o renueva la sesión).
- *
- * En la Fase 2 el access token se reemplaza por el token de dispositivo del backend.
+ * El auto ya no viaja acá: sale de la MAC del ESP32 (tabla `associations`). [userId] sirve
+ * para decidir si se adopta un viaje que el servidor ya tenía abierto (ver SyncWorker).
  */
 data class NativeSession(
     val baseUrl: String,
-    val accessToken: String?,
     val userId: String?,
 ) {
     companion object {
         private const val PREFS = "obd_native_session"
         private const val KEY_BASE_URL = "baseUrl"
-        private const val KEY_ACCESS_TOKEN = "accessToken"
         private const val KEY_USER_ID = "userId"
 
         private fun prefs(context: Context) =
@@ -34,7 +27,6 @@ data class NativeSession(
             val baseUrl = p.getString(KEY_BASE_URL, null) ?: return null
             return NativeSession(
                 baseUrl = baseUrl,
-                accessToken = p.getString(KEY_ACCESS_TOKEN, null),
                 userId = p.getString(KEY_USER_ID, null),
             )
         }
@@ -46,15 +38,9 @@ data class NativeSession(
                 .apply()
         }
 
-        /** TEMPORAL (Fase 1): se elimina en la Fase 2. Null = el nativo deja de subir. */
-        fun saveAccessToken(context: Context, token: String?) {
-            prefs(context).edit().putString(KEY_ACCESS_TOKEN, token).apply()
-        }
-
-        /** Logout: se olvidan las credenciales pero se conserva la URL del servidor. */
+        /** Logout: se olvida el usuario pero se conserva la URL del servidor. */
         fun clearCredentials(context: Context) {
             prefs(context).edit()
-                .remove(KEY_ACCESS_TOKEN)
                 .remove(KEY_USER_ID)
                 .apply()
         }

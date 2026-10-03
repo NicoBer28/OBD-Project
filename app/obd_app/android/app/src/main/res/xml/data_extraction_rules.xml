@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Backup en la nube y transferencia entre dispositivos (Android 12+). Mismo motivo que
+  backup_rules.xml: los tokens de dispositivo no salen de este teléfono.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="obd_device_credentials.xml" />
+        <exclude domain="sharedpref" path="obd_native_session.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="obd_device_credentials.xml" />
+        <exclude domain="sharedpref" path="obd_native_session.xml" />
+    </device-transfer>
+</data-extraction-rules>

@@ -106,6 +106,8 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
         _startKeepWarm();
         // Lo que pasó con la app en segundo plano (auto encendido, apagado…) pudo no llegar.
         DeviceLinkService.instance.cargar();
+        // Un token rechazado con la app cerrada se reemplaza ahora, y lo pendiente sube.
+        DeviceLinkService.instance.reconciliar();
       },
       onPause: _stopKeepWarm,
     );
@@ -115,32 +117,13 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
     _solicitarPermisos();
     _home.load();
     DeviceLinkService.instance.cargar();
-    DeviceLinkService.instance.sincronizarSesion();
+    DeviceLinkService.instance.reconciliar();
   }
 
   void _startKeepWarm() {
     ObdApi.instance.warmUp();
-    _renovarTokenSiVence();
     _keepWarm?.cancel();
-    _keepWarm = Timer.periodic(_keepWarmEvery, (_) {
-      ObdApi.instance.warmUp();
-      _renovarTokenSiVence();
-    });
-  }
-
-  /// Con la app abierta, renueva el access token antes de que venza para que el nativo
-  /// siempre tenga uno válido. Pasa por `refreshSession` (single-flight), así que nunca
-  /// hay dos refresh en paralelo. Al renovarse, la sesión notifica y se reenvía al nativo.
-  /// TEMPORAL (Fase 1): se elimina con el token de dispositivo de la Fase 2.
-  Future<void> _renovarTokenSiVence() async {
-    final expiresAt = _session.expiresAt;
-    if (expiresAt == null || _session.refreshToken == null) return;
-    if (expiresAt.difference(DateTime.now()) > const Duration(minutes: 3)) return;
-    try {
-      await ObdApi.instance.auth.refresh();
-    } catch (error) {
-      debugPrint('No se pudo renovar el token: $error');
-    }
+    _keepWarm = Timer.periodic(_keepWarmEvery, (_) => ObdApi.instance.warmUp());
   }
 
   void _stopKeepWarm() {
@@ -175,9 +158,8 @@ class _MainScreenState extends State<MainScreen> implements ObdFlutterApi {
   }
 
   void _onSessionChanged() {
-    // Token renovado: el nativo necesita el nuevo. Sesión caída: deja de subir, pero NO se
-    // desvincula nada (sigue grabando; eso solo lo borra el logout manual).
-    DeviceLinkService.instance.sincronizarSesion();
+    // Si la sesión se cae sola, al nativo no se le avisa nada: sube con los tokens de
+    // dispositivo, que siguen valiendo. Solo el logout manual los revoca y desvincula.
     if (_session.isAuthenticated) return;
 
     if (!mounted) return;

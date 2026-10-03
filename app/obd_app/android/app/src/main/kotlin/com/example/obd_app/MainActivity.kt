@@ -274,21 +274,75 @@ class MainActivity: FlutterActivity() {
                         result.error("ARGUMENTO", "Falta baseUrl", null)
                         return@setMethodCallHandler
                     }
-                    NativeSession.saveConfig(this, baseUrl, call.argument<String>("userId"))
+                    val userId = call.argument<String>("userId")
+                    val anterior = NativeSession.read(this)?.userId
+                    NativeSession.saveConfig(this, baseUrl, userId)
                     responderEnIO(result) {
+                        // Entró otro usuario sin un logout explícito: los tokens son del anterior
+                        // y sus datos no deben subir con ellos. La reconciliación crea los nuevos.
+                        if (anterior != null && userId != null && anterior != userId) {
+                            Log.w("OBD-C", "Cambió el usuario: se descartan los tokens del anterior.")
+                            CredentialStore.clear(this)
+                        }
                         reconciliarAsociaciones()
                         null
                     }
                 }
 
-                // TEMPORAL (Fase 1), se elimina en la Fase 2: el access token de la sesión de
-                // Flutter, para que el SyncWorker pueda subir con la app cerrada.
-                "setSessionToken" -> {
-                    val token = call.argument<String>("accessToken")
-                    NativeSession.saveAccessToken(this, token)
-                    // Token nuevo: subir ya lo que haya quedado en cola (aunque hubiera un backoff largo).
-                    if (token != null) SyncScheduler.requestSync(this, replace = true)
-                    result.success(null)
+                // El token de dispositivo de un auto, recién creado por Flutter.
+                "guardarCredencial" -> {
+                    val carId = call.argument<String>("carId")
+                    val tokenId = call.argument<String>("tokenId")
+                    val token = call.argument<String>("token")
+                    if (carId.isNullOrBlank() || tokenId.isNullOrBlank() || token.isNullOrBlank()) {
+                        result.error("ARGUMENTO", "Faltan carId, tokenId o token", null)
+                        return@setMethodCallHandler
+                    }
+                    val credencial = DeviceCredential(
+                        carId = carId,
+                        carName = call.argument<String>("carName"),
+                        tokenId = tokenId,
+                        token = token,
+                        expiresAtMillis = call.argument<Number>("expiresAt")?.toLong(),
+                    )
+                    responderEnIO(result) {
+                        CredentialStore.put(this, credencial)
+                        SyncAlerts.cancelar(this, carId)
+                        // Token nuevo: subir ya lo que haya quedado en cola (aunque hubiera un backoff largo).
+                        SyncScheduler.requestSync(this, replace = true)
+                        null
+                    }
+                }
+
+                // Por cada auto vinculado, si tiene token y si sirve. También los tokens que
+                // quedaron sin vinculación (mac null), para que Flutter los revoque.
+                // deviceLabel: el nombre del celular, para crear tokens nuevos.
+                "estadoCredenciales" -> responderEnIO(result) {
+                    val credenciales = CredentialStore.getAll(this)
+                    val asociaciones = dao.getAssociations()
+                    val vinculados = asociaciones.map { it.carId }.toSet()
+                    val deviceLabel = "${Build.MANUFACTURER} ${Build.MODEL}"
+
+                    asociaciones.map { a ->
+                        val c = credenciales[a.carId]
+                        mapOf(
+                            "carId" to a.carId,
+                            "mac" to a.mac,
+                            "tokenId" to c?.tokenId,
+                            "valid" to (c != null && !c.invalid),
+                            "expiresAt" to c?.expiresAtMillis,
+                            "deviceLabel" to deviceLabel,
+                        )
+                    } + credenciales.values.filter { it.carId !in vinculados }.map { c ->
+                        mapOf(
+                            "carId" to c.carId,
+                            "mac" to null,
+                            "tokenId" to c.tokenId,
+                            "valid" to !c.invalid,
+                            "expiresAt" to c.expiresAtMillis,
+                            "deviceLabel" to deviceLabel,
+                        )
+                    }
                 }
 
                 "obtenerAsociaciones" -> responderEnIO(result) {
@@ -325,6 +379,8 @@ class MainActivity: FlutterActivity() {
                     }
                     responderEnIO(result) {
                         desvincular(dao.getAssociationsByCar(carId))
+                        CredentialStore.remove(this, carId)
+                        SyncAlerts.cancelar(this, carId)
                         null
                     }
                 }
@@ -334,6 +390,8 @@ class MainActivity: FlutterActivity() {
                     val descartarPendientes = call.argument<Boolean>("descartarPendientes") ?: false
                     responderEnIO(result) {
                         desvincular(dao.getAssociations())
+                        for (carId in CredentialStore.getAll(this).keys) SyncAlerts.cancelar(this, carId)
+                        CredentialStore.clear(this)
                         NativeSession.clearCredentials(this)
                         if (descartarPendientes) {
                             dao.deleteAllChunks()

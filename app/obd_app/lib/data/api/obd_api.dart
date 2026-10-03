@@ -3,6 +3,7 @@ import 'package:obd_app/data/api/api_client.dart';
 import 'package:obd_app/data/api/api_config.dart';
 import 'package:obd_app/data/api/endpoints/auth_api.dart';
 import 'package:obd_app/data/api/endpoints/cars_api.dart';
+import 'package:obd_app/data/api/endpoints/device_tokens_api.dart';
 import 'package:obd_app/data/api/endpoints/devices_api.dart';
 import 'package:obd_app/data/api/endpoints/groups_api.dart';
 import 'package:obd_app/data/api/endpoints/invitations_api.dart';
@@ -18,6 +19,7 @@ export 'package:obd_app/data/api/api_config.dart';
 export 'package:obd_app/data/api/api_exception.dart';
 export 'package:obd_app/data/api/endpoints/auth_api.dart';
 export 'package:obd_app/data/api/endpoints/cars_api.dart';
+export 'package:obd_app/data/api/endpoints/device_tokens_api.dart';
 export 'package:obd_app/data/api/endpoints/devices_api.dart';
 export 'package:obd_app/data/api/endpoints/groups_api.dart';
 export 'package:obd_app/data/api/endpoints/invitations_api.dart';
@@ -57,6 +59,7 @@ class ObdApi {
       cars = CarsApi(client),
       models = ModelsApi(client),
       devices = DevicesApi(client),
+      deviceTokens = DeviceTokensApi(client),
       groups = GroupsApi(client),
       invitations = InvitationsApi(client),
       trips = TripsApi(client),
@@ -85,6 +88,9 @@ class ObdApi {
 
   /// Dongle pairing: pair · forCar · unpair · resolve
   final DevicesApi devices;
+
+  /// The background service's per-car credential: create · revoke · forCar
+  final DeviceTokensApi deviceTokens;
 
   /// create · list · members
   final GroupsApi groups;

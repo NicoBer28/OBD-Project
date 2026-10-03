@@ -6,6 +6,7 @@ library;
 
 export 'auth_models.dart';
 export 'car_models.dart';
+export 'device_token_models.dart';
 export 'group_models.dart';
 export 'telemetry_models.dart';
 export 'trip_models.dart';
